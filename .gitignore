@@ -1,0 +1,13 @@
+node_modules/
+dist/
+docs-site/build/
+docs-site/.docusaurus/
+target/
+.DS_Store
+*.dgw/
+*.vcf.gz
+*.vcf.gz.csi
+*.vcf.gz.tbi
+!.fixtures/**/*.vcf.gz
+!.fixtures/**/*.vcf.gz.tbi
+*.log

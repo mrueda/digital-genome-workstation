@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##source=DGW-synthetic-demonstration
+##reference=hs37d5
+##contig=<ID=7,length=159138663,assembly=b37>
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: Allele|Annotation|Annotation_Impact|Gene_Name|Gene_ID|Feature_Type|Feature_ID|Transcript_BioType|Rank|HGVS.c|HGVS.p|cDNA.pos / cDNA.length|CDS.pos / CDS.length|AA.pos / AA.length|Distance|ERRORS / WARNINGS / INFO">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##DGWSynthetic=true
+##DGWNotice=The genotype is fictional and contains no patient data
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	DGW_DEMO
+7	140453136	rs113488022	A	T	.	PASS	ANN=T|missense_variant|MODERATE|BRAF|BRAF|transcript|NM_001374258.1|protein_coding|16/20|c.1919T>A|p.Val640Glu|2145/9807|1919/2424|640/807||,T|missense_variant|MODERATE|BRAF|BRAF|transcript|NM_001354609.2|protein_coding|15/19|c.1799T>A|p.Val600Glu|2025/9687|1799/2304|600/767||,T|missense_variant|MODERATE|BRAF|BRAF|transcript|NM_001374244.1|protein_coding|16/19|c.1919T>A|p.Val640Glu|2145/6579|1919/2421|640/806||,T|missense_variant|MODERATE|BRAF|BRAF|transcript|NM_004333.6|protein_coding|15/18|c.1799T>A|p.Val600Glu|2025/6459|1799/2301|600/766||,T|non_coding_transcript_exon_variant|MODIFIER|BRAF|BRAF|transcript|NR_148928.2|pseudogene|15/18|n.2898T>A||||||	GT	0/1

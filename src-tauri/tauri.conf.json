@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Digital Genome Workstation",
+  "version": "0.1.0",
+  "identifier": "org.mrueda.dgw",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Digital Genome Workstation",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1080,
+        "minHeight": 700,
+        "resizable": true
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../fixtures/dgw-cluster.synthetic.vcf": "fixtures/dgw-cluster.synthetic.vcf",
+      "../fixtures/braf-v600e.synthetic.vcf": "fixtures/braf-v600e.synthetic.vcf"
+    },
+    "shortDescription": "Edit genome variants without changing the source VCF",
+    "longDescription": "Desktop research software for editing phased human variants and evaluating predicted consequences on your computer.",
+    "category": "Science",
+    "copyright": "Copyright © 2026 Manuel Rueda",
+    "license": "Apache-2.0"
+  }
+}

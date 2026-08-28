@@ -1,0 +1,42 @@
+:root {
+  --ifm-color-primary: #18794e;
+  --ifm-color-primary-dark: #156d46;
+  --ifm-color-primary-darker: #146742;
+  --ifm-color-primary-darkest: #105536;
+  --ifm-color-primary-light: #1b8556;
+  --ifm-color-primary-lighter: #1c8b5a;
+  --ifm-color-primary-lightest: #209d65;
+  --ifm-code-font-size: 93%;
+  --ifm-font-family-base: Inter, "Segoe UI", system-ui, sans-serif;
+  --ifm-font-family-monospace: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(24,121,78,.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #7fe0ad;
+  --ifm-color-primary-dark: #60d79a;
+  --ifm-color-primary-darker: #51d392;
+  --ifm-color-primary-darkest: #2bc579;
+  --ifm-color-primary-light: #9ee9c0;
+  --ifm-color-primary-lighter: #adecc8;
+  --ifm-color-primary-lightest: #daf7e7;
+  --ifm-background-color: #08110f;
+  --ifm-background-surface-color: #0c1714;
+  --ifm-navbar-background-color: #09130f;
+  --ifm-footer-background-color: #07100e;
+  --ifm-toc-border-color: #20342c;
+  --ifm-color-emphasis-300: #294238;
+  --docusaurus-highlighted-code-line-bg: rgba(127,224,173,.08);
+}
+
+.navbar { border-bottom: 1px solid rgba(96,125,112,.2); box-shadow: none; }
+.navbar__logo img { border-radius: 8px; }
+.footer { border-top: 1px solid #20342c; }
+.theme-doc-markdown h1, .theme-doc-markdown h2 { letter-spacing: -.025em; }
+.theme-doc-markdown table { display: table; width: 100%; }
+.theme-doc-markdown code { border-color: rgba(127,224,173,.16); }
+.button--primary { --ifm-button-background-color: #7fe0ad; --ifm-button-border-color: #7fe0ad; color: #07100e; }
+.button--primary:hover { color: #07100e; }
+.button--secondary { border-color: #48695b; color: #dce9e3; }
+.admonition research-note { border-color: #f4bd68; }
+

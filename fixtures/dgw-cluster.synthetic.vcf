@@ -1,0 +1,16 @@
+##fileformat=VCFv4.2
+##source=DGW-synthetic-cluster-demonstration
+##reference=hs37d5
+##contig=<ID=7,length=159138663,assembly=b37>
+##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: Allele|Annotation|Annotation_Impact|Gene_Name|Gene_ID|Feature_Type|Feature_ID|Transcript_BioType|Rank|HGVS.c|HGVS.p|cDNA.pos / cDNA.length|CDS.pos / CDS.length|AA.pos / AA.length|Distance|ERRORS / WARNINGS / INFO">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##DGWSynthetic=true
+##DGWNotice=All genotypes are fictional and contain no patient data
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	DGW_DEMO
+7	140453110	DGW_SYNTH_1	G	A	.	PASS	ANN=A|sequence_variant|MODIFIER||||||||||||||	GT	0|1
+7	140453118	DGW_SYNTH_2	C	T	.	PASS	ANN=T|sequence_variant|MODIFIER||||||||||||||	GT	1|0
+7	140453126	DGW_SYNTH_3	T	C	.	PASS	ANN=C|sequence_variant|MODIFIER||||||||||||||	GT	0/1
+7	140453136	rs113488022	A	T	.	PASS	ANN=T|missense_variant|MODERATE|BRAF|BRAF|transcript|NM_004333.6|protein_coding|15/18|c.1799T>A|p.Val600Glu|2025/6459|1799/2301|600/766||	GT	0/1
+7	140453146	DGW_SYNTH_4	G	A	.	PASS	ANN=A|sequence_variant|MODIFIER||||||||||||||	GT	1|1
+7	140453157	DGW_SYNTH_5	C	G	.	PASS	ANN=G|sequence_variant|MODIFIER||||||||||||||	GT	1|0
+7	140453164	DGW_SYNTH_6	T	G	.	PASS	ANN=G|sequence_variant|MODIFIER||||||||||||||	GT	0|1

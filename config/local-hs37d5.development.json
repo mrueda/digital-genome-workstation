@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "local-hs37d5-hg19",
+  "assembly": "b37",
+  "contigStyle": "no_chr_prefix",
+  "referencePath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz",
+  "referenceFaiPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.fai",
+  "referenceGziPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.gzi",
+  "javaPath": "/usr/bin/java",
+  "snpeffJarPath": "/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.jar",
+  "snpeffConfigPath": "/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.config",
+  "snpeffGenome": "hg19",
+  "snpeffVersion": "5.0e",
+  "bcftoolsPath": "/media/mrueda/2TBS/NGSutils/bcftools-1.21-103_arm64/bcftools",
+  "bgzipPath": "/usr/local/bin/bgzip",
+  "tabixPath": "/usr/local/bin/tabix",
+  "dbnsfp": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz.tbi",
+    "release": "dbNSFP 4.1a",
+    "licenseLabel": "user-supplied"
+  },
+  "clinvar": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi",
+    "release": "ClinVar 20250312",
+    "licenseLabel": "user-supplied"
+  },
+  "cosmic": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz.tbi",
+    "release": "COSMIC local snapshot",
+    "licenseLabel": "user-supplied; not redistributed"
+  }
+}
+
