@@ -12,16 +12,22 @@ describe("user settings", () => {
       uiScale: 1.5,
       showVariantBrowser: false,
       showEvidenceInspector: true,
-      showMasterMeter: false,
+      showDeviceRack: false,
+      showTrackMonitor: false,
       reduceMotion: true
     }))).toEqual({
       uiScale: 1.5,
       showVariantBrowser: false,
       showEvidenceInspector: true,
-      showMasterMeter: false,
+      showDeviceRack: false,
+      showTrackMonitor: false,
       reduceMotion: true
     });
 
     expect(parseUserSettings(JSON.stringify({ uiScale: 7, defaultWorkspace: "allele" }))).toMatchObject({ uiScale: 1.1 });
+  });
+
+  it("migrates the former Mixer visibility preference", () => {
+    expect(parseUserSettings(JSON.stringify({ showMasterMeter: false })).showTrackMonitor).toBe(false);
   });
 });

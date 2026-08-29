@@ -7,7 +7,7 @@ const guideLinks = [
   {
     label: 'Start',
     title: 'Load one genome',
-    text: 'Register a b37 resource stack, inspect an annotated VCF, and select one sample as the source track.',
+    text: 'Register a b37 resource stack, inspect a normalized VCF, and select one sample as the source track.',
     to: '/docs/usage/quickstart',
   },
   {
@@ -36,7 +36,7 @@ export default function Home() {
   return (
     <Layout
       title="Digital Genome Workstation"
-      description="Edit human genome variants without changing the source VCF">
+      description="Edit genome variants without changing the source VCF">
       <main className={styles.page}>
         <section className={styles.hero}>
           <div className={styles.heroInner}>

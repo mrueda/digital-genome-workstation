@@ -231,26 +231,25 @@ fn parse_gt(format_keys: &[String], sample_values: &[String]) -> Result<(bool, b
     Ok((alleles[0] == "1", alleles[1] == "1", false))
 }
 
-pub fn extract_selected_sample(
+pub fn stream_selected_sample<F>(
     path: impl AsRef<Path>,
     assembly: &str,
     sample: &str,
-) -> Result<(Vec<String>, Vec<RootVariant>, Vec<String>)> {
+    mut on_variant: F,
+) -> Result<(Vec<String>, Vec<String>)>
+where
+    F: FnMut(&RootVariant) -> Result<()>,
+{
     let mut reader = reader_for(path.as_ref())?;
     let mut line = String::new();
     let mut headers = Vec::new();
     let mut sample_index = None;
-    let mut variants = Vec::new();
     let mut previous_sort_key: Option<((u16, String), u64)> = None;
-    let mut has_ann = false;
     let mut skipped_unsupported = 0_u64;
     let mut skipped_examples = Vec::new();
 
     while reader.read_line(&mut line)? > 0 {
         let trimmed = line.trim_end_matches(['\n', '\r']);
-        if trimmed.starts_with("##INFO=<ID=ANN,") {
-            has_ann = true;
-        }
         if trimmed.starts_with("##") {
             headers.push(trimmed.to_owned());
         } else if trimmed.starts_with("#CHROM") {
@@ -312,28 +311,28 @@ pub fn extract_selected_sample(
                 line.clear();
                 continue;
             }
-            variants.push(RootVariant {
+            let variant = RootVariant {
                 key,
                 id: (fields[2] != ".").then(|| fields[2].to_owned()),
                 quality: (fields[5] != ".").then(|| fields[5].to_owned()),
                 filter: fields[6].to_owned(),
-                info: parse_info(fields[7]),
+                // Imported INFO is provenance, not live DGW evidence. It may
+                // describe only the source ALT and must never be reused after
+                // an allele edit. The frozen selected-sample VCF remains the
+                // lossless copy of the original record.
+                info: BTreeMap::new(),
                 format_keys,
                 sample_values,
                 haplotype1_alt,
                 haplotype2_alt,
                 unphased_alt,
                 source_line: trimmed.to_owned(),
-            });
+            };
+            on_variant(&variant)?;
         }
         line.clear();
     }
 
-    if !has_ann {
-        return Err(DgwError::InvalidVcf(
-            "annotated v1 input must declare the SnpEff ANN INFO field".into(),
-        ));
-    }
     if sample_index.is_none() {
         return Err(DgwError::InvalidVcf("VCF has no #CHROM header".into()));
     }
@@ -346,6 +345,19 @@ pub fn extract_selected_sample(
             skipped_examples.join(", ")
         )]
     };
+    Ok((headers, warnings))
+}
+
+pub fn extract_selected_sample(
+    path: impl AsRef<Path>,
+    assembly: &str,
+    sample: &str,
+) -> Result<(Vec<String>, Vec<RootVariant>, Vec<String>)> {
+    let mut variants = Vec::new();
+    let (headers, warnings) = stream_selected_sample(path, assembly, sample, |variant| {
+        variants.push(variant.clone());
+        Ok(())
+    })?;
     Ok((headers, variants, warnings))
 }
 
@@ -356,25 +368,17 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
             bundle.schema_version
         )));
     }
-    if bundle.assembly != "b37" || bundle.snpeff_genome != "hg19" {
+    if bundle.assembly != "b37" {
         return Err(DgwError::InvalidResource(
-            "v1 requires assembly b37 with the SnpEff hg19 database".into(),
+            "v1 currently requires assembly b37".into(),
         ));
     }
     let required_files = [
         (&bundle.reference_path, "reference FASTA"),
         (&bundle.reference_fai_path, "reference FAI"),
-        (&bundle.java_path, "Java executable"),
-        (&bundle.snpeff_jar_path, "SnpEff JAR"),
         (&bundle.bcftools_path, "bcftools executable"),
         (&bundle.bgzip_path, "bgzip executable"),
         (&bundle.tabix_path, "tabix executable"),
-        (&bundle.dbnsfp.path, "dbNSFP resource"),
-        (&bundle.dbnsfp.index_path, "dbNSFP index"),
-        (&bundle.clinvar.path, "ClinVar resource"),
-        (&bundle.clinvar.index_path, "ClinVar index"),
-        (&bundle.cosmic.path, "COSMIC resource"),
-        (&bundle.cosmic.index_path, "COSMIC index"),
     ];
     for (path, label) in required_files {
         if !path.is_file() {
@@ -386,7 +390,38 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
     }
 
     let mut warnings = Vec::new();
+    let snpeff_ready = bundle.java_path.is_file()
+        && bundle.snpeff_jar_path.is_file()
+        && !bundle.snpeff_genome.trim().is_empty();
+    if !snpeff_ready {
+        warnings.push(
+            "SnpEff resources are incomplete; its device will remain unavailable until configured"
+                .into(),
+        );
+    } else if bundle.snpeff_genome != "hg19" {
+        warnings.push(format!(
+            "SnpEff genome '{}' is configured for a b37 project; verify that this database uses the same assembly",
+            bundle.snpeff_genome
+        ));
+    }
+    if bundle
+        .snpeff_config_path
+        .as_ref()
+        .is_some_and(|path| !path.is_file())
+    {
+        warnings.push(
+            "The configured SnpEff config file is missing; the SnpEff device will remain unavailable"
+                .into(),
+        );
+    }
     for resource in [&bundle.dbnsfp, &bundle.clinvar, &bundle.cosmic] {
+        if !resource.path.is_file() || !resource.index_path.is_file() {
+            warnings.push(format!(
+                "{} resources are incomplete; that evidence device will remain unavailable",
+                resource.release
+            ));
+            continue;
+        }
         let data_time = resource.path.metadata()?.modified().ok();
         let index_time = resource.index_path.metadata()?.modified().ok();
         if data_time
@@ -441,6 +476,39 @@ mod tests {
         assert!(warnings.is_empty());
         assert!(!variants[0].haplotype1_alt);
         assert!(variants[0].haplotype2_alt);
+        assert!(variants[0].info.is_empty());
+    }
+
+    #[test]
+    fn accepts_unannotated_input_and_ignores_imported_info() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "##fileformat=VCFv4.2").unwrap();
+        writeln!(
+            file,
+            "##INFO=<ID=CLNSIG,Number=.,Type=String,Description=\"Imported classification\">"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tDEMO"
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "1\t100\trsTest\tA\tT\t42\tPASS\tCLNSIG=Pathogenic\tGT\t0/1"
+        )
+        .unwrap();
+
+        let inspection = inspect_vcf(file.path(), "b37").unwrap();
+        assert!(!inspection.has_ann);
+
+        let (_, variants, warnings) = extract_selected_sample(file.path(), "b37", "DEMO").unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].id.as_deref(), Some("rsTest"));
+        assert_eq!(variants[0].quality.as_deref(), Some("42"));
+        assert!(variants[0].unphased_alt);
+        assert!(variants[0].info.is_empty());
     }
 
     #[test]

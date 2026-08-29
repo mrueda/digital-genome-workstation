@@ -299,3 +299,69 @@ pub struct ProjectSnapshot {
     pub variant_count: u64,
     pub warnings: Vec<String>,
 }
+
+/// A bounded page from one genome track. Large projects must never require the
+/// complete source VCF to cross the Tauri boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantPage {
+    pub track_id: String,
+    pub offset: u64,
+    pub limit: u32,
+    pub total: u64,
+    pub variants: Vec<EffectiveVariant>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantDensityBin {
+    pub contig: String,
+    pub start: u64,
+    pub end: u64,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantDensity {
+    pub track_id: String,
+    pub context: FocusContext,
+    pub total: u64,
+    pub bins: Vec<VariantDensityBin>,
+}
+
+/// Server-resolved selection. Explicit selections are ideal for small manual
+/// gestures; interval/all-track selections stay compact even for very large
+/// projects. Exclusions are exact normalized allele keys.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum VariantSelection {
+    Explicit {
+        track_id: String,
+        variants: Vec<VariantKey>,
+    },
+    Interval {
+        track_id: String,
+        contig: String,
+        start: u64,
+        end: u64,
+        #[serde(default)]
+        exclusions: Vec<VariantKey>,
+    },
+    AllTrack {
+        track_id: String,
+        #[serde(default)]
+        exclusions: Vec<VariantKey>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionResolution {
+    pub track_id: String,
+    pub total: u64,
+    pub limit: u32,
+    pub variants: Vec<VariantKey>,
+    pub truncated: bool,
+}

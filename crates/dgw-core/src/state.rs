@@ -100,7 +100,11 @@ pub fn effective_variants(
                     origin: VariantOrigin::Observed,
                     edit_ids: Vec::new(),
                     source_key: Some(variant.key.clone()),
-                    source_info: variant.info.clone(),
+                    // Imported INFO describes the frozen source record. Live
+                    // device evidence is allele-specific and is evaluated
+                    // independently, so source annotations are never part of
+                    // the editable state projection.
+                    source_info: BTreeMap::new(),
                 },
             )
         })
@@ -143,11 +147,6 @@ pub fn effective_variants(
                     source.origin = VariantOrigin::Edited;
                 }
 
-                let source_info = source_key
-                    .as_ref()
-                    .and_then(|source| variants.get(source))
-                    .map(|source| source.source_info.clone())
-                    .unwrap_or_default();
                 let variant = variants
                     .entry(key.clone())
                     .or_insert_with(|| EffectiveVariant {
@@ -162,8 +161,12 @@ pub fn effective_variants(
                         },
                         edit_ids: Vec::new(),
                         source_key: source_key.clone(),
-                        source_info,
+                        source_info: BTreeMap::new(),
                     });
+                // A replacement allele must never inherit annotations from
+                // the source ALT, including when it resolves to an existing
+                // state entry.
+                variant.source_info.clear();
                 set_haplotype(variant, operation.haplotype, true);
                 variant.edit_ids.push(operation.id.clone());
                 if source_key.is_some() {
@@ -441,5 +444,33 @@ mod tests {
             source_key: None,
         };
         assert!(validate_edit_shape(&long).is_err());
+    }
+
+    #[test]
+    fn imported_annotations_do_not_enter_state_or_follow_replacement_alleles() {
+        let mut root = root_variant();
+        root.info
+            .insert("ANN".into(), "T|missense_variant|HIGH|SOURCE_ONLY".into());
+        root.info.insert("CLNSIG".into(), "Pathogenic".into());
+
+        let observed = effective_variants(&[root.clone()], &[], &[]).unwrap();
+        assert_eq!(observed.len(), 1);
+        assert!(observed[0].source_info.is_empty());
+
+        let replacement = EditOperation {
+            id: "replace-alt".into(),
+            parent_state_id: "root".into(),
+            haplotype: Haplotype::Two,
+            edit: EditKind::SetAllele {
+                key: key(3, "G", "C"),
+                source_key: Some(root.key.clone()),
+            },
+            note: None,
+            created_at: Utc::now(),
+        };
+        let edited = effective_variants(&[root], &[replacement], &[]).unwrap();
+        assert_eq!(edited.len(), 1);
+        assert_eq!(edited[0].key.alternate, "C");
+        assert!(edited[0].source_info.is_empty());
     }
 }

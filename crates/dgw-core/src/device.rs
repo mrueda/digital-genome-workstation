@@ -524,16 +524,16 @@ pub fn genome_optimizer_device_manifest() -> DeviceManifest {
     )
 }
 
-pub fn allele_randomizer_device_manifest() -> DeviceManifest {
+pub fn mutation_generator_device_manifest() -> DeviceManifest {
     built_in_manifest(
-        "org.dgw.builtin.allele-randomizer",
-        "Allele Randomizer",
-        "Replace selected SNV alleles using a deterministic seed and amount control.",
+        "org.dgw.builtin.mutation-generator",
+        "Mutation Generator",
+        "Generate mutation proposals for selected alleles using a chosen mode.",
         DeviceKind::Editing,
         FOCUSED_TRACK_INPUT_SCHEMA_ID,
         EDIT_PROPOSALS_OUTPUT_SCHEMA_ID,
         Vec::new(),
-        vec!["Randomization is not a biological prediction. Version 1 changes canonical SNVs only, preserves their chromosome-copy placement, and requires each result to be evaluated independently."],
+        vec!["The available Randomizer mode is not a biological prediction. Version 1 changes canonical SNVs only, preserves their chromosome-copy placement, and requires each result to be evaluated independently."],
     )
 }
 
@@ -543,11 +543,22 @@ pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
         dbnsfp_device_manifest(),
         clinvar_device_manifest(),
         cosmic_device_manifest(),
-        allele_randomizer_device_manifest(),
+        mutation_generator_device_manifest(),
         genome_optimizer_device_manifest(),
     ]
 }
 
+/// Returns one built-in manifest by its stable device identifier.
+///
+/// Keeping this lookup beside the catalog gives cache callers a single source
+/// of truth for the device version that produced an evidence result.
+pub fn built_in_device_manifest(device_id: &str) -> Option<DeviceManifest> {
+    built_in_device_manifests()
+        .into_iter()
+        .find(|manifest| manifest.id == device_id)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn built_in_manifest(
     id: &str,
     name: &str,
@@ -616,7 +627,11 @@ fn resource_requirement(
     DeviceResourceRequirement {
         id: id.into(),
         kind,
-        required: true,
+        // Evidence resources are optional at the workstation level. A built-in
+        // device remains present in the rack when its binding is absent and
+        // reports ResourceUnavailable when invoked. External devices can still
+        // declare hard requirements in their own manifests.
+        required: false,
         assembly_specific: true,
         description: description.into(),
     }
@@ -887,6 +902,15 @@ mod tests {
             .all(|manifest| manifest.kind == DeviceKind::Editing));
         assert_eq!(manifests[4].kind, DeviceKind::Editing);
         assert!(manifests[4].resource_requirements.is_empty());
+        assert!(manifests[..4].iter().all(|manifest| manifest
+            .resource_requirements
+            .iter()
+            .all(|resource| !resource.required)));
+        assert_eq!(
+            built_in_device_manifest("org.dgw.builtin.clinvar").map(|manifest| manifest.name),
+            Some("ClinVar".into())
+        );
+        assert!(built_in_device_manifest("org.example.missing").is_none());
     }
 
     #[test]
@@ -1048,7 +1072,11 @@ mod tests {
         let manifest = clinvar_device_manifest();
         let mut request = request_for(&manifest);
         request.resource_bindings.clear();
-        assert!(validate_device_request(&manifest, &request)
+        validate_device_request(&manifest, &request).unwrap();
+
+        let mut required_manifest = manifest.clone();
+        required_manifest.resource_requirements[0].required = true;
+        assert!(validate_device_request(&required_manifest, &request)
             .unwrap_err()
             .to_string()
             .contains("missing required resource"));

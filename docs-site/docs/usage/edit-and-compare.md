@@ -2,13 +2,15 @@
 
 The main object in DGW is a genome track, not a history version. A track represents one complete diploid scenario for the selected sample. Chromosome copy A and chromosome copy B are the two homologous chromosomes inside the track; they are not independent tracks or forward/reverse DNA strands. A/B does not imply paternal/maternal origin.
 
-The imported genome is the read-only source track. Duplicate it to create an experimental track, then rename, select, compare, or archive that track without affecting the source. A duplicate initially shares the same internal state and takes little additional storage. The UI action labelled **Delete** archives the track so its scientific ancestry remains in the project.
+The imported genome is the read-only source track. Duplicate it to create an experimental track, then rename, select, compare, minimize, or archive that track without affecting the source. Use the **−** control to fold a track into a thin overview and **+** to expand it; allele and edit markers remain clickable, and the choice is remembered locally. A duplicate initially shares the same internal state and takes little additional storage. The UI action labelled **Delete** archives the track so its scientific ancestry remains in the project.
+
+The left **Variants** browser is a stable catalog of alleles imported from the source VCF. It does not add or remove rows when the selected working track restores an ALT to REF or introduces an edit. The backend returns 200-row pages and the browser renders only the rows currently on screen. Track-specific effective alleles and mutation blocks appear in the track lanes instead.
 
 ## Persistent edit blocks
 
 Changes appear as blocks anchored to the focused reference coordinates. They remain visible and individually selectable until you remove them or consolidate the track.
 
-Input-VCF alleles exist before any mutation and appear as clickable lollipops: a stem, diamond head, and `REF→ALT` label anchored to the genomic ruler. Selecting a lollipop opens that allele in the lower editor. Mutation blocks are a separate rectangular layer above the track, so observed/effective alleles are never confused with operations the user added. At broad zoom levels DGW hides lollipop text but retains the clickable heads to avoid label collisions.
+Input-VCF alleles exist before any mutation and appear as clickable lollipops: a stem, diamond head, and `REF→ALT` label anchored to the genomic ruler. Selecting a lollipop opens that allele in the lower editor. Mutation blocks are a separate rectangular layer above the track, so observed/effective alleles are never confused with operations the user added. A detailed track response contains at most 500 marks. Broader or denser views use 256 density bins; open a bin or narrow the region to recover individual lollipops.
 
 ### Horizontal navigation
 
@@ -27,7 +29,7 @@ Use the **Height −/+** controls to make all tracks shorter or taller. Expanded
 
 For an unphased heterozygous `0/1` call, the homolog carrying ALT is unknown. DGW therefore locks the editor to **Chromosome copy unknown**: **Change ALT** follows and replaces that existing unknown-copy ALT, preserving `0/1`, while **Use reference** removes it. A variant-only VCF export omits the restored position rather than writing an invented phased call. Chromosome copy A or B can be targeted only when the selected ALT is already phased onto that copy; DGW does not infer phase or parental origin.
 
-REF is checked and the operation is normalized with the registered reference before it becomes an edit block. DGW rejects same-copy overlaps except an explicit replacement of its source allele.
+REF is checked and the operation is normalized with the registered reference before it becomes an edit block. REF means the registered reference allele; it is not a classification of health, safety, ancestry, frequency, or clinical significance. DGW rejects same-copy overlaps except an explicit replacement of its source allele.
 
 The arrangement follows DAW selection behavior. Selecting a track opens its device chain in the lower pane. Selecting one of its allele marks or mutation blocks opens the allele editor in that same lower pane while leaving the tracks visible. Mutation coordinates and REF are locked to the selected input-VCF allele.
 
@@ -39,21 +41,29 @@ Selecting a block focuses its exact allele change and its evidence. Several bloc
 
 ## Device rack
 
-Every selected track has an ordered device rack below the tracks. Devices run left-to-right, preserving the full horizontal width of the genomic timeline above. The rack contains SnpEff, dbNSFP, ClinVar, and COSMIC; these devices inspect one selected allele. Each can run independently, and its bypass switch excludes that result from the current track view without changing the genome.
+Every selected track has a Device Rack below the tracks. It contains compact full panels for only the devices applied to that Genome Track, arranged horizontally in their applied order. Status, operational controls, results, and actions remain visible; resource metadata, explanations, scientific limitations, and long previews fold under **Details**. Scroll sideways to reach later devices; there is no separate Device Inspector. Drag the horizontal divider to give more room to either the tracks or rack, and double-click it to restore the default split. Hide or restore the complete rack with **View → Device Rack**.
+
+Choose **Create → Add Device** in the application menu, or **+ Add device** in the rack, to open the separate full-size Device Browser. The browser, not the rack, groups everything available into **Edit**, **Evidence**, and **Analyze**. Mutation Generator belongs to Edit; SnpEff, dbNSFP, ClinVar, and COSMIC to Evidence; and Genome Optimizer to Analyze. There is no separate Score group: applying an explicit objective to a track is an analysis.
+
+**File → New Project** starts from the **DGW Starter** project template, which pre-applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, and Genome Optimizer. The Edit and Analyze devices are inert until the user explicitly previews/applies or runs them. **File → New from Template** also offers an **Empty** project. Templates belong to project creation and never appear in the Device Browser. Duplicating a Genome Track copies its applied chain. Device installation, application, objective inclusion, and bypass are distinct states.
 
 Editable tracks also have the Genome Optimizer. It groups the edit IDs it generated for the duration of the application session. It can enable or bypass those blocks together without deleting them or later work. This makes the comparison explicit: the same track with the editing device active versus the same track with those generated blocks bypassed.
 
-Editable tracks also contain an **Allele Randomizer**. Select one or more visible VCF lollipops—or use **Select all**—then set **Amount** and **Seed**. Preview shows the planned ALT substitutions without changing the project. Apply writes one ordinary reversible block per affected chromosome-copy placement. The same seed, amount, selection, and starting alleles produce the same plan. Version 1 accepts canonical A/C/G/T SNVs only, excludes REF and the current ALT from the replacement choices, preserves phased or unphased placement, and leaves indels unchanged. It does not estimate biological plausibility or a combined consequence.
+Editable tracks also contain a **Mutation Generator**. Its first available mode is **Randomizer**. Select one or more VCF lollipops, use **Select visible** for the displayed interval, or use **Select all in track** for every chromosome; then set **Amount** and **Seed**. Choose **Uniform**, **Transitions only**, **Transversions only**, or **Ti/Tv mixture**; the mixture adds a transition-probability control. Substitution classes are defined relative to the VCF REF. Preview shows the planned ALT substitutions and transition/transversion counts without changing the project. Apply writes one ordinary reversible block per affected chromosome-copy placement. The same seed, amount, pattern, transition probability, selection, and starting alleles produce the same plan. Version 1 accepts canonical A/C/G/T SNVs only, excludes REF and the current ALT from replacement choices, preserves phased or unphased placement, and leaves indels unchanged. One run accepts at most 1,000 selected positions. Larger symbolic selections remain selected, but the device reports the limit instead of truncating them. If a strict or sampled class has no new eligible ALT, DGW explicitly excludes that position rather than silently using another class. It does not estimate biological plausibility or a combined consequence. Future strategies, such as rule- or signature-based generation, belong as modes in the same device.
 
 Manual restore and ALT-replacement operations also become persistent blocks on the selected track. The experimental **Genome Optimizer** generates the same ordinary edit-operation type; its output can be selected, evaluated, and bypassed like a manual edit. See [Optimizer behavior](#optimizer-behavior).
 
-## Track Meter
+## Track Monitor and Track Meter
 
-The Master Meter is fixed at the far right of the lower workspace as the selected track's source-relative output. It remains visible while the devices scroll and while the allele editor is open. Hide or restore it with **View → Master Meter**; that preference persists on the computer. The source allele is `0`; after an edit has been evaluated, the meter shows the change in its strongest SnpEff molecular-impact category. `HIGH = 1`, `MODERATE = 0.67`, `LOW = 0.33`, and `MODIFIER = 0.1`. Multiple active edit contributions are added only as a transparent visual summary.
+The selected track's source-relative Track Meter lives in a dedicated **Track Monitor** at the far right of the complete workspace, outside the Device Rack. Hide or restore it with **View → Track Monitor**; that preference persists on the computer. DGW does not call this area a mixer because genome tracks are compared, not mixed. The source allele is `0`; after an edit has been evaluated, the meter shows the change in its strongest SnpEff molecular-impact category. `HIGH = 1`, `MODERATE = 0.67`, `LOW = 0.33`, and `MODIFIER = 0.1`. Multiple active edit contributions are added only as a transparent visual summary.
 
 A positive value enters the red area above zero, a negative value enters the green area, and zero means no change in this particular signal. The decibel-style display is a DAW analogy only. Red does not mean disease, pathogenicity, clinical risk, or biological harm, and green does not mean safe or healthy.
 
 The meter reports how many active edits have actually been evaluated and shows coverage separately for SnpEff, dbNSFP, ClinVar, and COSMIC. It does not treat missing evaluation or absent database evidence as a beneficial result. ClinVar, dbNSFP, and COSMIC exact matches are shown as coverage/evidence counts; they are not silently mixed into the SnpEff impact number. Bypassing an edit removes its contribution, and bypassing SnpEff disables the aggregate impact readout.
+
+Applying a manual mutation, Mutation Generator plan, or Genome Optimizer result automatically starts Track Profiler, which runs every applied, active Evidence device across every active mutation block. The mutation count changes immediately; live signals appear as their required evaluations finish. **Analyze track** remains available as a manual refresh or retry. Progress appears in the Track Meter, completed rows become available immediately, and one failed mutation does not discard successful results for the others. Normalized alleles repeated by several blocks are evaluated once per run and reused. Consolidation is never required for evaluation. This is a convenient track-wide operation over independent allele requests, not a joint-effect calculation.
+
+After a Genome Optimizer run, Track Monitor also identifies the applied device mode and direction, shows its objective before→after and delta, and reports positions scanned, candidate ALTs evaluated, and active/generated edit counts. This device-run strip is distinct from the vertical SnpEff meter: the former explains what the optimizer selected, while the latter measures only the mutation blocks actually active on the track relative to source.
 
 Each allele is still evaluated independently. The meter does not model interactions among edits, combined transcript or protein consequences, penetrance, or disease burden. Meter evaluation snapshots currently last for the application session; persisted, reproducible meter provenance remains future work.
 
@@ -63,7 +73,17 @@ Bypassing one edit block previews the track without that operation. Bypassing th
 
 Individual bypass choices persist with the track. Device-to-edit grouping does not yet persist, so after reopening the project the blocks remain individually bypassable but are no longer remembered as one optimizer run.
 
-Analysis/evidence-card bypass is separate from edit-block bypass and currently does not persist. It only controls which device outputs participate in the current workspace view.
+Evidence-card bypass is separate from edit-block bypass and currently does not persist. Formula inclusion is separate again: an applied, active device can run and display results while the selected objective labels it **Not in objective**. Bypassing an included scoring device gives it an effective weight of `0` without deleting its source data or configured weight. Removing an included device from the rack also gives it an effective weight of `0`, but is shown as **Not in rack**, not bypassed. Enabling or adding it restores the configured contribution. None of these control changes rewrites existing genome edits; an affected Genome Optimizer result becomes pending until the user generates a new bounded proposal.
+
+A device absent from a model is excluded, not automatically bypassed. This is the safe default for future devices: installing or enabling one must not silently alter existing results. Conservative uses no Evidence device. Saturation uses live SnpEff impact, with ClinVar as a fixed candidate guard; dbNSFP and COSMIC remain visible evidence rather than ranking terms.
+
+## Undo and redo workstation actions
+
+DGW keeps a session-only workstation action history, separate from scientific ancestry. Use **Edit > Undo** and **Edit > Redo** in the application menu. **Ctrl/Command+Z** and **Ctrl/Command+Shift+Z** provide the standard shortcuts. The menu names the next action when one is available.
+
+Supported actions include variant selection—including lollipop clicks, marquee selection, Select visible, Select all in track, and Clear—track rename, manual mutations, and Mutation Generator or Genome Optimizer edit batches. An applied generated batch is one Undo action regardless of its block count. Undo bypasses its immutable edit blocks; Redo enables them again, preserving scientific ancestry. Actions share one chronological history: if a track rename follows a marquee selection, the first Undo restores the old track name and the next Undo restores the earlier selection. Undoing a selection does not create a genome state or enter the scientific audit trail. Consolidation establishes a new visual baseline and clears obsolete edit-batch Undo entries for that track.
+
+Mutation operations, device-run groups, bypass changes, track creation/deletion, and consolidation need their own reversible command implementations before they can join this same history safely. Navigation and zoom remain outside it.
 
 ## Compare tracks
 
@@ -81,24 +101,23 @@ Duplicating a consolidated track carries its private baseline exclusions forward
 
 ## Optimizer behavior
 
-The Genome Optimizer is an implemented experimental bounded prototype, not a general genome-design engine. It never creates an allele absent from the immutable source VCF.
+The Genome Optimizer is an implemented experimental bounded prototype. Both modes operate on an explicit selection, which may span chromosomes. **Conservative** mode is source-bounded. **Saturation scan** can create a different A/C/G/T ALT, but only at a selected SNV position already present in the imported VCF.
 
-Its two objectives are:
+Conservative's objective is **Distance from reference (ALT copies)**: one model unit per active non-reference allele copy in the explicit selection. It uses no annotation, Evidence device, or health interpretation. Source membership comes from normalized allele identity in the immutable VCF rather than imported INFO.
 
-- **Alternate-allele burden**: one model unit per active alternate-allele copy in the focused region. The faders do not affect this objective.
-- **Predicted-impact burden**: an additive per-copy score consisting of `Impact weight × impact signal + ClinVar weight × ClinVar signal + Source weight × exact-source signal`.
+Saturation uses the live SnpEff impact signal: `HIGH = 1`, `MODERATE = 0.67`, `LOW = 0.33`, and `MODIFIER = 0.1`. Imported `ANN`, `CLNSIG`, and other INFO fields contribute nothing.
 
-The imported impact signal is `HIGH = 1`, `MODERATE = 0.67`, `LOW = 0.33`, and `MODIFIER = 0.1`. Recognized ClinVar source classifications contribute `Pathogenic = 1`, `Likely pathogenic = 0.75`, uncertain/conflicting = `0.25`, and benign/likely benign = `0`; missing or unrecognized classifications contribute `0`. Exact membership in the original source contributes a source signal of `1`.
-
-Direction has a deliberately concrete meaning:
+Direction has a deliberately concrete meaning in Conservative mode:
 
 - **Minimize** proposes `Use reference` for eligible active exact-source allele copies with a positive score.
 - **Maximize** proposes reintroducing an exact original-source allele only when that allele is absent from the current track and doing so increases the score. It may replace an edited derivative that points back to that source allele. It does not invent a damaging allele or rewrite an ambiguous partially present genotype.
 
-Candidates are ranked by score improvement and limited by **Maximum edits**. Overlaps, ambiguous replacements, zero-benefit changes, and other unsafe cases are reported as exclusions rather than guessed.
+Conservative candidates are ranked by score improvement and limited by **Maximum edits**. Saturation uses **Maximum positions**, capped at the number of selected variants. A homozygous winning position may create two internal mutation blocks, but it consumes one position from this limit and both copies change atomically. Results report positions changed and mutation blocks separately. Overlaps, ambiguous replacements, zero-benefit changes, and other unsafe cases are reported as exclusions rather than guessed.
+
+In Saturation mode, select one or more lollipops first. Explicit selection may span chromosomes even though the track canvas displays one interval at a time. DGW runs SnpEff for all three non-REF bases at each selected canonical SNV and chooses the lowest- or highest-impact eligible ALT. The evaluator accepts at most 100 selected positions per run. All three candidates must have a recognized `HIGH`, `MODERATE`, `LOW`, or `MODIFIER` result or the position is excluded. Exact ClinVar Pathogenic/Likely pathogenic candidates are ineligible under the fixed guard; no exact match remains unknown. dbNSFP and COSMIC matches appear as evidence context, but a missing match does not reduce the score. Current phase/copy placement is preserved, and two-copy genotypes are never split merely to satisfy the position limit.
 
 The displayed before/after score is the sum of independently scored allele copies. Interactions among nearby variants, phase-dependent combined consequences, penetrance, and whole-genome effects are not modeled. Candidate tracks keep every proposed allele as a selectable edit block for separate evidence review.
 
-Terms such as **minimize** and **maximize** always apply to the displayed technical score. They do not mean minimize or maximize disease, health, or biological fitness. DGW will not claim a disease-free result.
+Terms such as **minimize** and **maximize** always apply to the displayed technical score. They are not claims about the person's overall biology or clinical state.
 
 The current project schema does not persist device settings, generated-edit grouping, proposal score components, exclusions, or the complete optimizer request/plan. The resulting edit operations and a short objective/direction note do persist in immutable ancestry. Formal optimizer-run provenance is required before this prototype can support reproducible model comparisons.

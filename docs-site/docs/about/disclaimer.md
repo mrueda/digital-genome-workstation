@@ -6,9 +6,9 @@ Predicted consequences depend on the selected transcript models, tool versions, 
 
 Several changes may appear together on one genome track, but DGW currently evaluates them one allele at a time. Their combined transcript, protein, health, or disease consequence is not known from those independent annotations.
 
-The experimental Genome Optimizer uses only exact alleles from the immutable source VCF. Alternate-allele burden is a count; predicted-impact burden is an additive sum of imported impact, recognized ClinVar classification, and exact-source-membership signals. Neither score models interactions, phase-dependent compound effects, penetrance, environment, or the rest of the genome.
+The experimental Genome Optimizer is bounded to selected input-VCF loci. Conservative uses REF and exact alleles from the immutable source. Its **Distance from reference (ALT copies)** objective counts non-reference allele copies and uses no annotations. Saturation may evaluate the three non-REF SNV bases with live SnpEff and fixed ClinVar candidate screening. Neither model covers interactions, phase-dependent compound effects, penetrance, environment, or the rest of the genome.
 
-**Minimize** and **Maximize** refer only to the selected technical score. Maximize can only reintroduce a missing original-source allele; it is not disease maximization. No result may be described as perfect, healthy, safe, disease-free, or biologically optimal.
+**Minimize** and **Maximize** refer only to the selected technical score. No result may be described as perfect, healthy, safe, or biologically optimal. REF itself is not a benign or healthy classification.
 
 Device settings and the complete optimizer plan are not yet persisted. Generated edits remain in immutable state ancestry, but the project package alone cannot currently reproduce the displayed optimizer run.
 

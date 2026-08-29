@@ -6,7 +6,8 @@ export interface UserSettings {
   uiScale: UiScale;
   showVariantBrowser: boolean;
   showEvidenceInspector: boolean;
-  showMasterMeter: boolean;
+  showDeviceRack: boolean;
+  showTrackMonitor: boolean;
   reduceMotion: boolean;
 }
 
@@ -14,7 +15,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   uiScale: 1.1,
   showVariantBrowser: true,
   showEvidenceInspector: true,
-  showMasterMeter: true,
+  showDeviceRack: true,
+  showTrackMonitor: true,
   reduceMotion: false
 };
 
@@ -23,7 +25,7 @@ export const USER_SETTINGS_STORAGE_KEY = "dgw.user-settings.v2";
 export function parseUserSettings(value: string | null): UserSettings {
   if (!value) return { ...DEFAULT_USER_SETTINGS };
   try {
-    const candidate = JSON.parse(value) as Partial<UserSettings>;
+    const candidate = JSON.parse(value) as Partial<UserSettings> & { showMasterMeter?: unknown };
     return {
       uiScale: UI_SCALES.includes(candidate.uiScale as UiScale)
         ? candidate.uiScale as UiScale
@@ -34,9 +36,14 @@ export function parseUserSettings(value: string | null): UserSettings {
       showEvidenceInspector: typeof candidate.showEvidenceInspector === "boolean"
         ? candidate.showEvidenceInspector
         : DEFAULT_USER_SETTINGS.showEvidenceInspector,
-      showMasterMeter: typeof candidate.showMasterMeter === "boolean"
-        ? candidate.showMasterMeter
-        : DEFAULT_USER_SETTINGS.showMasterMeter,
+      showDeviceRack: typeof candidate.showDeviceRack === "boolean"
+        ? candidate.showDeviceRack
+        : DEFAULT_USER_SETTINGS.showDeviceRack,
+      showTrackMonitor: typeof candidate.showTrackMonitor === "boolean"
+        ? candidate.showTrackMonitor
+        : typeof candidate.showMasterMeter === "boolean"
+          ? candidate.showMasterMeter
+          : DEFAULT_USER_SETTINGS.showTrackMonitor,
       reduceMotion: typeof candidate.reduceMotion === "boolean"
         ? candidate.reduceMotion
         : DEFAULT_USER_SETTINGS.reduceMotion

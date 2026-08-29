@@ -34,16 +34,20 @@ The track arrangement always remains visible. Selecting a track shows its device
 
 ## 3. Try the biological demonstration
 
-Click **Load example**. DGW opens its bundled `dgw-cluster.synthetic.vcf`, selects `DGW_DEMO`, and suggests a new `.dgw` project location. Its seven fictional variants occupy a 55-base span, so the initial timeline shows several clickable allele lollipops at once. The genotypes contain no patient data. During development, you can also browse to the fixture yourself.
+Click **Open example**. DGW creates and enters a project from its bundled `dgw-cluster.synthetic.vcf` in one step, using the fictional `DGW_DEMO` sample and a new `.dgw` project location. It contains ten fictional variants across chromosomes 7 and 17. The initial chromosome 7 region has seven variants in a 55-base span, so the timeline shows several clickable allele lollipops at once; use the Source Variants navigator to jump across the explicit chromosome boundary to chromosome 17. Positions shown by DGW follow the VCF convention and are 1-based. The genotypes contain no patient data. During development, you can also browse to the fixture yourself.
 
-Click any lollipop to open that input-VCF allele in the lower editor. The BRAF V600E lollipop at `7:140453136 A→T` retains its recognizable annotation and is the best choice for **Run all active devices**. With the registered resource stack, SnpEff, dbNSFP, ClinVar, and COSMIC should report their per-allele results. The other nearby alleles are synthetic visual-workflow examples and may have no exact database match.
+From an open project, **File → New from Template** creates and enters a separate project using the same imported source genome and selected sample. It does not copy experimental edits. From the setup screen, a template only chooses the initial Device Rack; you must then choose a VCF or open the example.
+
+DGW saves project changes immediately in the active `.dgw` package rather than using a separate Save command. Open **File** to see the complete package path and autosave status. The original input VCF is never modified.
+
+Click any lollipop to open that input-VCF allele in the lower editor. The BRAF V600E lollipop at `7:140453136 A→T` is the best exact-resource demonstration. The default **DGW Starter** template applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, and Genome Optimizer. Selecting the allele automatically runs the available, active Evidence devices; imported INFO annotations are ignored. **Refresh active Evidence devices** remains available. Mutation Generator and Genome Optimizer do nothing until explicitly previewed/applied or run. The other nearby alleles are synthetic visual-workflow examples and may have no exact database match.
 
 Duplicate the source genome track and name the duplicate `BRAF restore`. Click its BRAF allele mark to open the allele editor below the tracks. Choose **Use reference**, keep the chromosome copy unknown, and save the mutation. The restore remains visible as an edit block. Bypass it to compare the experimental track with its unchanged source, then enable it again.
 
 You can perform the same bounded change through the experimental Genome Optimizer:
 
 1. Start from a duplicate in which the BRAF source allele is active.
-2. Select **Alternate-allele burden**, **Minimize**, and a maximum of one edit.
+2. Keep **Conservative** mode, select **Distance from reference (ALT copies)**, **Minimize**, and a maximum of one edit.
 3. Choose **Generate edits**. The optimizer should add one reversible `T→A` restore block.
 4. Bypass and re-enable the device to compare the same track without and with that block.
 5. With the restore enabled, choose **Consolidate**. The block disappears into the new visual baseline, but its immutable ancestry remains.

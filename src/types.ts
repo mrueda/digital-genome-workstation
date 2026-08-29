@@ -42,7 +42,6 @@ export interface VcfInspection {
   fileFormat?: string;
   samples: string[];
   contigs: string[];
-  hasAnn: boolean;
   recordCount: number;
   supportedRecordCount: number;
   skippedUnsupportedRecordCount: number;
@@ -124,10 +123,48 @@ export interface GenomeTrackLane {
   variants: EffectiveVariant[];
 }
 
+export interface VariantPage {
+  trackId: string;
+  offset: number;
+  limit: number;
+  total: number;
+  variants: EffectiveVariant[];
+  hasMore: boolean;
+}
+
+export interface VariantDensityBin {
+  contig: string;
+  start: number;
+  end: number;
+  count: number;
+}
+
+export interface VariantDensity {
+  trackId: string;
+  context: FocusContext;
+  total: number;
+  bins: VariantDensityBin[];
+}
+
+export type VariantSelection =
+  | { kind: "explicit"; trackId: string; variants: VariantKey[] }
+  | { kind: "interval"; trackId: string; contig: string; start: number; end: number; exclusions: VariantKey[] }
+  | { kind: "allTrack"; trackId: string; exclusions: VariantKey[] };
+
+export interface SelectionResolution {
+  trackId: string;
+  total: number;
+  limit: number;
+  variants: VariantKey[];
+  truncated: boolean;
+}
+
 export type OptimizerObjectiveId = "alternateAlleleBurden" | "predictedImpactBurden";
 export type OptimizerDirection = "minimize" | "maximize";
+export type OptimizerMode = "conservative" | "saturation";
 
 export interface OptimizerRequest {
+  mode: OptimizerMode;
   objective: OptimizerObjectiveId;
   direction: OptimizerDirection;
   maxEdits: number;
@@ -136,6 +173,8 @@ export interface OptimizerRequest {
     clinvar: number;
     sourceEvidence: number;
   };
+  selectedVariants: VariantKey[];
+  evidenceDeviceIds: string[];
 }
 
 export interface OptimizerProposal {
@@ -148,6 +187,27 @@ export interface OptimizerProposal {
   rationale: string;
 }
 
+export interface OptimizerCandidateComparison {
+  sourceVariant: VariantKey;
+  candidateVariant: VariantKey;
+  current: boolean;
+  selected: boolean;
+  comparable: boolean;
+  evidence: {
+    impactSignal: number;
+    impactLabel?: string;
+    clinvarSignal: number;
+    clinvarClassification?: string;
+    sourceEvidenceSignal: number;
+  };
+  scoreComponents: {
+    objectiveScore: number;
+  };
+  evidenceStatuses: Record<string, string>;
+  exactEvidenceSources: string[];
+  note?: string;
+}
+
 export interface OptimizerPlan {
   request: OptimizerRequest;
   focus: FocusContext;
@@ -156,6 +216,7 @@ export interface OptimizerPlan {
   scoreAfter: number;
   consideredVariants: number;
   eligibleCandidates: number;
+  candidateComparisons: OptimizerCandidateComparison[];
   noOpReason?: string;
   scoreDescription: string;
   limitation: string;
@@ -172,6 +233,8 @@ export interface RandomizerRequest {
   selectedVariants: VariantKey[];
   amount: number;
   seed: number;
+  substitutionPattern: "uniform" | "transitionOnly" | "transversionOnly" | "tiTvMix";
+  transitionProbability: number;
 }
 
 export interface RandomizerProposal {
@@ -192,6 +255,8 @@ export interface RandomizerPlan {
   exclusions: RandomizerExclusion[];
   selectedPositions: number;
   randomizedPositions: number;
+  transitionPositions: number;
+  transversionPositions: number;
   generatedEdits: number;
   noOpReason?: string;
   limitation: string;
@@ -222,6 +287,11 @@ export interface ProjectSnapshot {
   variants: EffectiveVariant[];
   variantCount: number;
   warnings: string[];
+}
+
+export interface CreatedProject {
+  projectPath: string;
+  snapshot: ProjectSnapshot;
 }
 
 export interface FocusView {

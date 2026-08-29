@@ -4,10 +4,13 @@ use crate::state::{
     effective_variants, materialize_haplotype, materialize_haplotype_masking_unphased,
     validate_edit_shape, validate_no_overlap,
 };
-use crate::vcf::{extract_selected_sample, fingerprint_file, validate_resource_bundle};
+use crate::vcf::{fingerprint_file, stream_selected_sample, validate_resource_bundle};
 use chrono::Utc;
 use flate2::read::MultiGzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +24,9 @@ const MANIFEST_FILE: &str = "manifest.json";
 const DATABASE_FILE: &str = "project.sqlite";
 const SOURCE_TRACK_NAME: &str = "Source genome";
 const WORKING_TRACK_NAME: &str = "Working track";
+pub const MAX_TRACK_REGION_VARIANTS: usize = 500;
+pub const VARIANT_PAGE_SIZE: u32 = 200;
+pub const VARIANT_DENSITY_BINS: u32 = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +51,66 @@ struct StoredGenomeTrack {
     track: GenomeTrack,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     baseline_bypassed_edit_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceSidecar<'a> {
+    schema_version: u32,
+    project_id: &'a str,
+    state_id: &'a str,
+    generated_at: chrono::DateTime<Utc>,
+    resource_bundle: EvidenceResourceIdentity<'a>,
+    coverage: EvidenceCoverage,
+    evaluations: CachedEvaluationEntries<'a>,
+    limitation: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceResourceIdentity<'a> {
+    id: &'a str,
+    assembly: &'a str,
+    fingerprint: &'a str,
+    snpeff_version: &'a str,
+    dbnsfp_release: &'a str,
+    clinvar_release: &'a str,
+    cosmic_release: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvidenceCoverage {
+    cached_exact_allele_entries: usize,
+    scope: &'static str,
+}
+
+struct CachedEvaluationEntries<'a> {
+    connection: &'a Connection,
+    count: usize,
+}
+
+impl Serialize for CachedEvaluationEntries<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut statement = self
+            .connection
+            .prepare("SELECT payload FROM evaluations ORDER BY created_at, cache_key")
+            .map_err(serde::ser::Error::custom)?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(serde::ser::Error::custom)?;
+        let mut sequence = serializer.serialize_seq(Some(self.count))?;
+        for row in rows {
+            let payload = row.map_err(serde::ser::Error::custom)?;
+            let evaluation: EvaluationResult =
+                serde_json::from_str(&payload).map_err(serde::ser::Error::custom)?;
+            sequence.serialize_element(&evaluation)?;
+        }
+        sequence.end()
+    }
 }
 
 impl Project {
@@ -73,17 +139,11 @@ impl Project {
     }
 
     fn create_in_place(request: CreateProjectRequest) -> Result<Self> {
-        let mut warnings = validate_resource_bundle(&request.resource_bundle)?;
+        let warnings = validate_resource_bundle(&request.resource_bundle)?;
         fs::create_dir_all(request.project_path.join("artifacts"))?;
         fs::create_dir_all(request.project_path.join("exports"))?;
 
         let source_vcf = fingerprint_file(&request.source_vcf_path)?;
-        let (headers, variants, import_warnings) = extract_selected_sample(
-            &request.source_vcf_path,
-            &request.resource_bundle.assembly,
-            &request.selected_sample,
-        )?;
-        warnings.extend(import_warnings);
         let resource_bundle_fingerprint = bundle_fingerprint(&request.resource_bundle)?;
         let root_state_id = hash_text(&format!(
             "root|{}|{}|{}",
@@ -108,8 +168,8 @@ impl Project {
             root: request.project_path,
             manifest,
         };
-        project.initialize_database(&root_state_id, &variants, &warnings)?;
-        project.write_selected_vcf(&headers, &variants)?;
+        project.initialize_database(&root_state_id, &[], &warnings)?;
+        project.import_selected_sample_stream(&request.source_vcf_path)?;
         project.write_manifest()?;
         Ok(project)
     }
@@ -144,8 +204,64 @@ impl Project {
     fn connection(&self) -> Result<Connection> {
         let mut connection = Connection::open(self.root.join(DATABASE_FILE))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        self.ensure_variant_schema(&mut connection)?;
         self.ensure_track_schema(&mut connection)?;
         Ok(connection)
+    }
+
+    /// Keep the public project format at v1 while adding queryable columns to
+    /// older SQLite databases. The payload remains the compatibility record;
+    /// these columns are an internal, idempotent projection used for bounded
+    /// region/page access.
+    fn ensure_variant_schema(&self, connection: &mut Connection) -> Result<()> {
+        let has_root_table: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'root_variants')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_root_table {
+            return Ok(());
+        }
+
+        let mut columns = BTreeSet::new();
+        {
+            let mut statement = connection.prepare("PRAGMA table_info(root_variants)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            for row in rows {
+                columns.insert(row?);
+            }
+        }
+        for (name, sql_type) in [
+            ("assembly", "TEXT"),
+            ("contig", "TEXT"),
+            ("position", "INTEGER"),
+            ("end_position", "INTEGER"),
+            ("reference", "TEXT"),
+            ("alternate", "TEXT"),
+        ] {
+            if !columns.contains(name) {
+                connection.execute(
+                    &format!("ALTER TABLE root_variants ADD COLUMN {name} {sql_type}"),
+                    [],
+                )?;
+            }
+        }
+        connection.execute_batch(
+            "UPDATE root_variants
+                SET assembly = json_extract(payload, '$.key.assembly'),
+                    contig = json_extract(payload, '$.key.contig'),
+                    position = json_extract(payload, '$.key.position'),
+                    end_position = json_extract(payload, '$.key.position')
+                        + length(json_extract(payload, '$.key.reference')) - 1,
+                    reference = json_extract(payload, '$.key.reference'),
+                    alternate = json_extract(payload, '$.key.alternate')
+              WHERE contig IS NULL OR position IS NULL OR end_position IS NULL;
+             CREATE INDEX IF NOT EXISTS root_variants_region_idx
+                ON root_variants(contig, position, end_position);
+             CREATE INDEX IF NOT EXISTS root_variants_locus_idx
+                ON root_variants(assembly, contig, position, reference, alternate);",
+        )?;
+        Ok(())
     }
 
     fn ensure_track_schema(&self, connection: &mut Connection) -> Result<()> {
@@ -247,7 +363,13 @@ impl Project {
             "PRAGMA journal_mode=WAL;
              CREATE TABLE IF NOT EXISTS root_variants (
                stable_key TEXT PRIMARY KEY,
-               payload TEXT NOT NULL
+               payload TEXT NOT NULL,
+               assembly TEXT NOT NULL,
+               contig TEXT NOT NULL,
+               position INTEGER NOT NULL,
+               end_position INTEGER NOT NULL,
+               reference TEXT NOT NULL,
+               alternate TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS states (
                id TEXT PRIMARY KEY,
@@ -272,13 +394,28 @@ impl Project {
              CREATE TABLE IF NOT EXISTS warnings (
                message TEXT PRIMARY KEY
              );
-             CREATE INDEX IF NOT EXISTS states_parent_idx ON states(parent_id);",
+             CREATE INDEX IF NOT EXISTS states_parent_idx ON states(parent_id);
+             CREATE INDEX IF NOT EXISTS root_variants_region_idx
+               ON root_variants(contig, position, end_position);
+             CREATE INDEX IF NOT EXISTS root_variants_locus_idx
+               ON root_variants(assembly, contig, position, reference, alternate);",
         )?;
         let transaction = connection.transaction()?;
         for variant in variants {
             transaction.execute(
-                "INSERT INTO root_variants(stable_key, payload) VALUES (?1, ?2)",
-                params![variant.key.stable_key(), serde_json::to_string(variant)?],
+                "INSERT INTO root_variants(
+                    stable_key, payload, assembly, contig, position, end_position, reference, alternate
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    variant.key.stable_key(),
+                    serde_json::to_string(variant)?,
+                    variant.key.assembly,
+                    variant.key.contig,
+                    variant.key.position,
+                    variant.key.end(),
+                    variant.key.reference,
+                    variant.key.alternate,
+                ],
             )?;
         }
         let root_state = GenomeState {
@@ -339,8 +476,94 @@ impl Project {
         Ok(())
     }
 
-    fn write_selected_vcf(&self, headers: &[String], variants: &[RootVariant]) -> Result<()> {
+    fn import_selected_sample_stream(&self, source_path: &Path) -> Result<()> {
         let plain_path = self.root.join("artifacts/root.selected.vcf");
+        let body_path = self.root.join("artifacts/root.selected.body.tmp");
+        let mut body = File::create(&body_path)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let mut insert = transaction.prepare(
+            "INSERT INTO root_variants(
+                stable_key, payload, assembly, contig, position, end_position, reference, alternate
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        let mut first_key: Option<VariantKey> = None;
+        let mut cluster_end = 0_u64;
+        let (headers, import_warnings) = stream_selected_sample(
+            source_path,
+            &self.manifest.assembly,
+            &self.manifest.selected_sample,
+            |variant| {
+                let fields: Vec<&str> = variant.source_line.split('\t').collect();
+                if fields.len() < 9 {
+                    return Err(DgwError::InvalidVcf(format!(
+                        "selected record has fewer than nine VCF columns at {}",
+                        variant.key.display()
+                    )));
+                }
+                writeln!(
+                    body,
+                    "{}\t{}",
+                    fields[..9].join("\t"),
+                    variant.sample_values.join(":")
+                )?;
+
+                if first_key.is_none() {
+                    first_key = Some(variant.key.clone());
+                    cluster_end = variant.key.end();
+                } else if first_key.as_ref().is_some_and(|first| {
+                    variant.key.contig == first.contig
+                        && variant.key.position <= first.position.saturating_add(200)
+                }) {
+                    cluster_end = cluster_end.max(variant.key.end());
+                }
+
+                // The frozen BGZF artifact is the sole raw INFO/source-record
+                // copy. SQLite stores only the fields needed by the editor.
+                let mut stored = variant.clone();
+                stored.info.clear();
+                stored.format_keys.clear();
+                stored.sample_values.clear();
+                stored.source_line.clear();
+                insert.execute(params![
+                    stored.key.stable_key(),
+                    serde_json::to_string(&stored)?,
+                    &stored.key.assembly,
+                    &stored.key.contig,
+                    stored.key.position,
+                    stored.key.end(),
+                    &stored.key.reference,
+                    &stored.key.alternate,
+                ])?;
+                Ok(())
+            },
+        )?;
+        drop(insert);
+        drop(body);
+
+        let workspace_payload: String = transaction.query_row(
+            "SELECT payload FROM workspace WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut workspace: WorkspaceSnapshot = serde_json::from_str(&workspace_payload)?;
+        workspace.focus = first_key.as_ref().map(|first| FocusContext {
+            contig: first.contig.clone(),
+            start: first.position.saturating_sub(20).max(1),
+            end: cluster_end.saturating_add(20),
+        });
+        transaction.execute(
+            "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+            [serde_json::to_string(&workspace)?],
+        )?;
+        for warning in import_warnings {
+            transaction.execute(
+                "INSERT OR IGNORE INTO warnings(message) VALUES (?1)",
+                [warning],
+            )?;
+        }
+        transaction.commit()?;
+
         // Freeze only the selected sample, never the original multi-sample payload.
         let mut selected = File::create(&plain_path)?;
         for header in headers {
@@ -357,12 +580,9 @@ impl Project {
             "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{}",
             self.manifest.selected_sample
         )?;
-        for variant in variants {
-            let fields: Vec<&str> = variant.source_line.split('\t').collect();
-            let sample = variant.sample_values.join(":");
-            writeln!(selected, "{}\t{}", fields[..9].join("\t"), sample)?;
-        }
+        std::io::copy(&mut File::open(&body_path)?, &mut selected)?;
         drop(selected);
+        fs::remove_file(&body_path)?;
 
         self.validate_selected_vcf(&plain_path)?;
 
@@ -407,34 +627,27 @@ impl Project {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        let keys = |path: &Path| -> Result<Vec<(String, String, String, String)>> {
-            let file = BufReader::new(File::open(path)?);
-            let mut result = Vec::new();
-            for line in file.lines() {
-                let line = line?;
-                if line.starts_with('#') || line.is_empty() {
-                    continue;
-                }
-                let fields: Vec<&str> = line.split('\t').collect();
-                if fields.len() >= 5 {
-                    result.push((
-                        fields[0].into(),
-                        fields[1].into(),
-                        fields[3].into(),
-                        fields[4].into(),
-                    ));
-                }
+        let mut original = BufReader::new(File::open(plain_path)?);
+        let mut normalized = BufReader::new(File::open(&normalized_path)?);
+        let mut original_line = String::new();
+        let mut normalized_line = String::new();
+        let mut mismatch = None;
+        loop {
+            let original_key = next_vcf_key(&mut original, &mut original_line)?;
+            let normalized_key = next_vcf_key(&mut normalized, &mut normalized_line)?;
+            if original_key != normalized_key {
+                mismatch = original_key.or(normalized_key);
+                break;
             }
-            Ok(result)
-        };
-        let original_keys = keys(plain_path)?;
-        let normalized_keys = keys(&normalized_path)?;
+            if original_key.is_none() {
+                break;
+            }
+        }
         fs::remove_file(&normalized_path)?;
-        if original_keys != normalized_keys {
-            return Err(DgwError::InvalidVcf(
-                "selected sample contains alleles that are not left-aligned/minimal; normalize the source before importing"
-                    .into(),
-            ));
+        if let Some((contig, position, reference, alternate)) = mismatch {
+            return Err(DgwError::InvalidVcf(format!(
+                "selected sample contains an allele that is not left-aligned/minimal near {contig}:{position} {reference}>{alternate}; normalize the source before importing"
+            )));
         }
         Ok(())
     }
@@ -449,6 +662,117 @@ impl Project {
             variants.push(serde_json::from_str(&row?)?);
         }
         variants.sort_by(|left: &RootVariant, right: &RootVariant| left.key.cmp(&right.key));
+        Ok(variants)
+    }
+
+    fn root_variant_count(&self) -> Result<u64> {
+        let connection = self.connection()?;
+        let count: i64 =
+            connection.query_row("SELECT COUNT(*) FROM root_variants", [], |row| row.get(0))?;
+        Ok(count.max(0) as u64)
+    }
+
+    fn root_variant_count_in_context(&self, context: &FocusContext) -> Result<u64> {
+        let connection = self.connection()?;
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM root_variants
+              WHERE contig = ?1 AND position <= ?2 AND end_position >= ?3",
+            params![&context.contig, context.end, context.start],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as u64)
+    }
+
+    fn root_variants_in_context(
+        &self,
+        context: &FocusContext,
+        limit: Option<usize>,
+        offset: u64,
+    ) -> Result<Vec<RootVariant>> {
+        let connection = self.connection()?;
+        let sql = if limit.is_some() {
+            "SELECT payload FROM root_variants
+              WHERE contig = ?1 AND position <= ?2 AND end_position >= ?3
+              ORDER BY position, reference, alternate LIMIT ?4 OFFSET ?5"
+        } else {
+            "SELECT payload FROM root_variants
+              WHERE contig = ?1 AND position <= ?2 AND end_position >= ?3
+              ORDER BY position, reference, alternate"
+        };
+        let mut statement = connection.prepare(sql)?;
+        let mut variants = Vec::new();
+        if let Some(limit) = limit {
+            let rows = statement.query_map(
+                params![
+                    context.contig,
+                    context.end,
+                    context.start,
+                    limit as u64,
+                    offset
+                ],
+                |row| row.get::<_, String>(0),
+            )?;
+            for row in rows {
+                variants.push(serde_json::from_str(&row?)?);
+            }
+        } else {
+            let rows = statement
+                .query_map(params![context.contig, context.end, context.start], |row| {
+                    row.get::<_, String>(0)
+                })?;
+            for row in rows {
+                variants.push(serde_json::from_str(&row?)?);
+            }
+        }
+        Ok(variants)
+    }
+
+    fn root_variants_at_loci(&self, keys: &[VariantKey]) -> Result<Vec<RootVariant>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM root_variants
+              WHERE assembly = ?1 AND contig = ?2 AND position = ?3
+                AND NOT (end_position < ?4 OR position > ?5)
+              ORDER BY reference, alternate",
+        )?;
+        let mut seen = BTreeSet::new();
+        let mut variants = Vec::new();
+        for key in keys {
+            let rows = statement.query_map(
+                params![
+                    key.assembly,
+                    key.contig,
+                    key.position,
+                    key.position,
+                    key.end()
+                ],
+                |row| row.get::<_, String>(0),
+            )?;
+            for row in rows {
+                let variant: RootVariant = serde_json::from_str(&row?)?;
+                if seen.insert(variant.key.stable_key()) {
+                    variants.push(variant);
+                }
+            }
+        }
+        variants.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(variants)
+    }
+
+    fn root_variant_page(&self, offset: u64, limit: u32) -> Result<Vec<RootVariant>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM root_variants
+              ORDER BY contig, position, reference, alternate LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(params![limit, offset], |row| row.get::<_, String>(0))?;
+        let mut variants = Vec::new();
+        for row in rows {
+            variants.push(serde_json::from_str(&row?)?);
+        }
         Ok(variants)
     }
 
@@ -751,6 +1075,256 @@ impl Project {
         self.effective_variants(&stored.track.head_state_id, &bypassed_edit_ids)
     }
 
+    fn effective_variants_in_context(
+        &self,
+        state_id: &str,
+        bypassed_edit_ids: &[String],
+        context: &FocusContext,
+    ) -> Result<Vec<EffectiveVariant>> {
+        let roots = self.root_variants_in_context(context, None, 0)?;
+        let operations: Vec<EditOperation> = self
+            .edits_to_state(state_id)?
+            .into_iter()
+            .filter(|operation| edit_overlaps_context(&operation.edit, context))
+            .collect();
+        let mut variants = effective_variants(&roots, &operations, bypassed_edit_ids)?;
+        variants.retain(|variant| variant_overlaps_context(&variant.key, context));
+        Ok(variants)
+    }
+
+    pub fn effective_variants_for_track_in_context(
+        &self,
+        track_id: &str,
+        context: &FocusContext,
+    ) -> Result<Vec<EffectiveVariant>> {
+        let stored = self.stored_track(track_id)?;
+        self.effective_variants_in_context(
+            &stored.track.head_state_id,
+            &effective_bypassed_edit_ids(&stored),
+            context,
+        )
+    }
+
+    fn effective_variants_at_loci(
+        &self,
+        state_id: &str,
+        bypassed_edit_ids: &[String],
+        keys: &[VariantKey],
+    ) -> Result<Vec<EffectiveVariant>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let roots = self.root_variants_at_loci(keys)?;
+        let operations: Vec<EditOperation> = self
+            .edits_to_state(state_id)?
+            .into_iter()
+            .filter(|operation| {
+                keys.iter()
+                    .any(|key| edit_overlaps_key(&operation.edit, key))
+            })
+            .collect();
+        let mut variants = effective_variants(&roots, &operations, bypassed_edit_ids)?;
+        variants.retain(|variant| keys.iter().any(|key| same_locus(&variant.key, key)));
+        Ok(variants)
+    }
+
+    pub fn effective_variants_for_track_at_loci(
+        &self,
+        track_id: &str,
+        keys: &[VariantKey],
+    ) -> Result<Vec<EffectiveVariant>> {
+        let stored = self.stored_track(track_id)?;
+        self.effective_variants_at_loci(
+            &stored.track.head_state_id,
+            &effective_bypassed_edit_ids(&stored),
+            keys,
+        )
+    }
+
+    pub fn source_variants_at_loci(&self, keys: &[VariantKey]) -> Result<Vec<EffectiveVariant>> {
+        self.effective_variants_at_loci(&self.manifest.root_state_id, &[], keys)
+    }
+
+    pub fn variant_page(&self, track_id: &str, offset: u64, limit: u32) -> Result<VariantPage> {
+        let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
+        let roots = self.root_variant_page(offset, limit)?;
+        let keys: Vec<VariantKey> = roots.iter().map(|variant| variant.key.clone()).collect();
+        let variants = self.effective_variants_for_track_at_loci(track_id, &keys)?;
+        let total = self.root_variant_count()?;
+        Ok(VariantPage {
+            track_id: track_id.into(),
+            offset,
+            limit,
+            total,
+            has_more: offset.saturating_add(u64::from(limit)) < total,
+            variants,
+        })
+    }
+
+    pub fn variant_density(&self, track_id: &str, context: FocusContext) -> Result<VariantDensity> {
+        self.track(track_id)?;
+        if context.start == 0 || context.end < context.start {
+            return Err(DgwError::Project(
+                "density context must be a valid 1-based inclusive interval".into(),
+            ));
+        }
+        let span = context.end - context.start + 1;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT MIN(?4 - 1, ((position - ?2) * ?4) / ?5) AS bin, COUNT(*)
+               FROM root_variants
+              WHERE contig = ?1 AND position BETWEEN ?2 AND ?3
+              GROUP BY bin ORDER BY bin",
+        )?;
+        let rows = statement.query_map(
+            params![
+                context.contig,
+                context.start,
+                context.end,
+                VARIANT_DENSITY_BINS,
+                span
+            ],
+            |row| Ok((row.get::<_, u32>(0)?, row.get::<_, u64>(1)?)),
+        )?;
+        let mut counts = vec![0_u64; VARIANT_DENSITY_BINS as usize];
+        for row in rows {
+            let (index, count) = row?;
+            if let Some(bin) = counts.get_mut(index as usize) {
+                *bin = count;
+            }
+        }
+        let mut bins = Vec::with_capacity(VARIANT_DENSITY_BINS as usize);
+        for (index, count) in counts.into_iter().enumerate() {
+            let start = context.start + span * index as u64 / u64::from(VARIANT_DENSITY_BINS);
+            let end = if index + 1 == VARIANT_DENSITY_BINS as usize {
+                context.end
+            } else {
+                context.start + span * (index as u64 + 1) / u64::from(VARIANT_DENSITY_BINS) - 1
+            };
+            bins.push(VariantDensityBin {
+                contig: context.contig.clone(),
+                start,
+                end: end.max(start),
+                count,
+            });
+        }
+        let total = bins.iter().map(|bin| bin.count).sum();
+        Ok(VariantDensity {
+            track_id: track_id.into(),
+            context,
+            total,
+            bins,
+        })
+    }
+
+    pub fn resolve_selection(
+        &self,
+        selection: &VariantSelection,
+        limit: u32,
+    ) -> Result<SelectionResolution> {
+        let limit = limit.max(1);
+        let (track_id, exclusions, candidates, total_hint) = match selection {
+            VariantSelection::Explicit { track_id, variants } => {
+                let effective = self.effective_variants_for_track_at_loci(track_id, variants)?;
+                let requested: BTreeSet<String> =
+                    variants.iter().map(VariantKey::stable_key).collect();
+                let candidates: Vec<VariantKey> = effective
+                    .into_iter()
+                    .filter(|variant| requested.contains(&variant.key.stable_key()))
+                    .map(|variant| variant.key)
+                    .collect();
+                let total = candidates.len() as u64;
+                (track_id.clone(), Vec::new(), candidates, total)
+            }
+            VariantSelection::Interval {
+                track_id,
+                contig,
+                start,
+                end,
+                exclusions,
+            } => {
+                let context = FocusContext {
+                    contig: contig.clone(),
+                    start: *start,
+                    end: *end,
+                };
+                if context.start == 0 || context.end < context.start {
+                    return Err(DgwError::Project(
+                        "selection interval must be a valid 1-based inclusive interval".into(),
+                    ));
+                }
+                let roots = self.root_variants_in_context(
+                    &context,
+                    Some(limit as usize + exclusions.len() + 1),
+                    0,
+                )?;
+                let keys: Vec<VariantKey> = roots.into_iter().map(|variant| variant.key).collect();
+                let candidates = self
+                    .effective_variants_for_track_at_loci(track_id, &keys)?
+                    .into_iter()
+                    .map(|variant| variant.key)
+                    .collect();
+                (
+                    track_id.clone(),
+                    exclusions.clone(),
+                    candidates,
+                    self.root_variant_count_in_context(&context)?,
+                )
+            }
+            VariantSelection::AllTrack {
+                track_id,
+                exclusions,
+            } => {
+                self.track(track_id)?;
+                let mut candidates = Vec::new();
+                let mut offset = 0_u64;
+                while candidates.len() <= limit as usize {
+                    let page = self.variant_page(track_id, offset, VARIANT_PAGE_SIZE)?;
+                    if page.variants.is_empty() {
+                        if page.has_more {
+                            offset = offset.saturating_add(u64::from(VARIANT_PAGE_SIZE));
+                            continue;
+                        }
+                        break;
+                    }
+                    candidates.extend(page.variants.into_iter().map(|variant| variant.key));
+                    if !page.has_more {
+                        break;
+                    }
+                    offset = offset.saturating_add(u64::from(VARIANT_PAGE_SIZE));
+                }
+                (
+                    track_id.clone(),
+                    exclusions.clone(),
+                    candidates,
+                    self.root_variant_count()?,
+                )
+            }
+        };
+        let excluded: BTreeSet<String> = exclusions.iter().map(VariantKey::stable_key).collect();
+        let mut seen = BTreeSet::new();
+        let mut variants: Vec<VariantKey> = candidates
+            .into_iter()
+            .filter(|key| !excluded.contains(&key.stable_key()))
+            .filter(|key| seen.insert(key.stable_key()))
+            .collect();
+        variants.sort();
+        let total = if total_hint == 0 {
+            variants.len() as u64
+        } else {
+            total_hint.saturating_sub(exclusions.len() as u64)
+        };
+        let truncated = variants.len() > limit as usize || total > u64::from(limit);
+        variants.truncate(limit as usize);
+        Ok(SelectionResolution {
+            track_id,
+            total,
+            limit,
+            variants,
+            truncated,
+        })
+    }
+
     pub fn apply_edit_to_track(
         &self,
         track_id: &str,
@@ -760,6 +1334,114 @@ impl Project {
     ) -> Result<GenomeState> {
         let stored = self.stored_track(track_id)?;
         self.apply_edit_to_track_from(stored, haplotype, edit, note, None)
+    }
+
+    /// Validate and persist a generated edit batch as one SQLite transaction.
+    /// Either every state/edit row is committed, or the track is unchanged.
+    pub fn apply_edits_to_track(
+        &self,
+        track_id: &str,
+        edits: &[(Haplotype, EditKind, Option<String>)],
+    ) -> Result<Vec<GenomeState>> {
+        if edits.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stored = self.stored_track(track_id)?;
+        if stored.track.read_only {
+            return Err(DgwError::Project(
+                "the source genome track is read-only; duplicate it before making changes".into(),
+            ));
+        }
+        let mut effective_bypasses = stored.baseline_bypassed_edit_ids.clone();
+        append_unique(&mut effective_bypasses, &stored.track.bypassed_edit_ids);
+
+        let mut locus_keys = Vec::new();
+        for (_, edit, _) in edits {
+            validate_edit_shape(edit)?;
+            locus_keys.extend(edit_keys(edit).into_iter().cloned());
+        }
+        let roots = self.root_variants_at_loci(&locus_keys)?;
+        let mut operations: Vec<EditOperation> = self
+            .edits_to_state(&stored.track.head_state_id)?
+            .into_iter()
+            .filter(|operation| {
+                locus_keys
+                    .iter()
+                    .any(|key| edit_overlaps_key(&operation.edit, key))
+            })
+            .collect();
+        let mut parent_state_id = stored.track.head_state_id.clone();
+        let mut states = Vec::with_capacity(edits.len());
+        let mut new_operations = Vec::with_capacity(edits.len());
+
+        for (haplotype, edit, note) in edits {
+            let current = effective_variants(&roots, &operations, &effective_bypasses)?;
+            validate_no_overlap(&current, *haplotype, edit)?;
+            let operation = EditOperation {
+                id: Uuid::new_v4().to_string(),
+                parent_state_id: parent_state_id.clone(),
+                haplotype: *haplotype,
+                edit: edit.clone(),
+                note: note.clone(),
+                created_at: Utc::now(),
+            };
+            operations.push(operation.clone());
+            effective_variants(&roots, &operations, &effective_bypasses)?;
+            let state_id = hash_text(&format!(
+                "{}|{}",
+                operation.parent_state_id,
+                serde_json::to_string(&operation)?
+            ));
+            let state = GenomeState {
+                id: state_id.clone(),
+                parent_id: Some(operation.parent_state_id.clone()),
+                edit_id: Some(operation.id.clone()),
+                label: None,
+                created_at: operation.created_at,
+            };
+            parent_state_id = state_id;
+            states.push(state);
+            new_operations.push(operation);
+        }
+
+        let mut workspace = self.workspace()?;
+        let is_active = workspace.active_track_id == stored.track.id;
+        stored.track.head_state_id = parent_state_id;
+        stored.track.updated_at = states
+            .last()
+            .map(|state| state.created_at)
+            .unwrap_or_else(Utc::now);
+        if is_active {
+            workspace.current_state_id = stored.track.head_state_id.clone();
+            workspace.bypassed_edit_ids = stored.track.bypassed_edit_ids.clone();
+        }
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for (state, operation) in states.iter().zip(new_operations.iter()) {
+            transaction.execute(
+                "INSERT INTO states(id, parent_id, edit_id, payload) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    state.id,
+                    state.parent_id,
+                    operation.id,
+                    serde_json::to_string(state)?
+                ],
+            )?;
+            transaction.execute(
+                "INSERT INTO edits(id, state_id, payload) VALUES (?1, ?2, ?3)",
+                params![operation.id, state.id, serde_json::to_string(operation)?],
+            )?;
+        }
+        update_stored_track(&transaction, &stored)?;
+        if is_active {
+            transaction.execute(
+                "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+                [serde_json::to_string(&workspace)?],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(states)
     }
 
     pub fn apply_edit(
@@ -800,8 +1482,12 @@ impl Project {
         let mut effective_bypasses = stored.baseline_bypassed_edit_ids.clone();
         append_unique(&mut effective_bypasses, &visible_bypassed_edit_ids);
         validate_edit_shape(&edit)?;
-        let effective =
-            self.effective_variants(&stored.track.head_state_id, &effective_bypasses)?;
+        let edit_context = context_for_edit(&edit)?;
+        let effective = self.effective_variants_in_context(
+            &stored.track.head_state_id,
+            &effective_bypasses,
+            &edit_context,
+        )?;
         validate_no_overlap(&effective, haplotype, &edit)?;
         let operation_id = Uuid::new_v4().to_string();
         let operation = EditOperation {
@@ -812,10 +1498,14 @@ impl Project {
             note,
             created_at: Utc::now(),
         };
-        let mut candidate_operations = self.edits_to_state(&stored.track.head_state_id)?;
+        let mut candidate_operations: Vec<EditOperation> = self
+            .edits_to_state(&stored.track.head_state_id)?
+            .into_iter()
+            .filter(|candidate| edit_overlaps_context(&candidate.edit, &edit_context))
+            .collect();
         candidate_operations.push(operation.clone());
         effective_variants(
-            &self.root_variants()?,
+            &self.root_variants_in_context(&edit_context, None, 0)?,
             &candidate_operations,
             &effective_bypasses,
         )?;
@@ -919,6 +1609,27 @@ impl Project {
         self.set_track_bypassed_edit_ids(track_id, &edit_ids)
     }
 
+    pub fn toggle_track_edits_bypass(
+        &self,
+        track_id: &str,
+        changed_edit_ids: &[String],
+        bypassed: bool,
+    ) -> Result<GenomeTrack> {
+        let track = self.track(track_id)?;
+        let changed: BTreeSet<&str> = changed_edit_ids.iter().map(String::as_str).collect();
+        let mut edit_ids = track.bypassed_edit_ids.clone();
+        if bypassed {
+            for edit_id in changed_edit_ids {
+                if !edit_ids.contains(edit_id) {
+                    edit_ids.push(edit_id.clone());
+                }
+            }
+        } else {
+            edit_ids.retain(|edit_id| !changed.contains(edit_id.as_str()));
+        }
+        self.set_track_bypassed_edit_ids(track_id, &edit_ids)
+    }
+
     /// Consolidates all currently visible edit blocks into the track baseline.
     ///
     /// State and edit rows are never removed. Bypassed edits are retained as
@@ -988,22 +1699,24 @@ impl Project {
         let workspace = self.workspace()?;
         let active_stored = self.stored_track(&workspace.active_track_id)?;
         let active_track = active_stored.track.clone();
-        let all_variants = self.effective_variants(
-            &active_track.head_state_id,
-            &effective_bypassed_edit_ids(&active_stored),
-        )?;
-        let variant_count = all_variants.len() as u64;
-        let variants = match &workspace.focus {
-            Some(context) => all_variants
-                .into_iter()
-                .filter(|variant| {
-                    variant.key.contig == context.contig
-                        && variant.key.position <= context.end
-                        && variant.key.end() >= context.start
-                })
-                .collect(),
-            None => all_variants.into_iter().take(1).collect(),
+        let variant_count = self.root_variant_count()?;
+        let mut variants = match &workspace.focus {
+            Some(context) => self.effective_variants_in_context(
+                &active_track.head_state_id,
+                &effective_bypassed_edit_ids(&active_stored),
+                context,
+            )?,
+            None => {
+                let roots = self.root_variant_page(0, 1)?;
+                let keys: Vec<VariantKey> = roots.into_iter().map(|variant| variant.key).collect();
+                self.effective_variants_at_loci(
+                    &active_track.head_state_id,
+                    &effective_bypassed_edit_ids(&active_stored),
+                    &keys,
+                )?
+            }
         };
+        variants.truncate(MAX_TRACK_REGION_VARIANTS);
         let connection = self.connection()?;
         let mut warning_statement =
             connection.prepare("SELECT message FROM warnings ORDER BY message")?;
@@ -1039,18 +1752,11 @@ impl Project {
         let workspace = self.workspace()?;
         let active_stored = self.stored_track(&workspace.active_track_id)?;
         let active_track = active_stored.track.clone();
-        let all_variants = self.effective_variants(
+        let variants = self.effective_variants_in_context(
             &active_track.head_state_id,
             &effective_bypassed_edit_ids(&active_stored),
+            &context,
         )?;
-        let variants: Vec<EffectiveVariant> = all_variants
-            .into_iter()
-            .filter(|variant| {
-                variant.key.contig == context.contig
-                    && variant.key.position <= context.end
-                    && variant.key.end() >= context.start
-            })
-            .collect();
         let mut warnings = Vec::new();
         let reference_sequence = match self.fetch_reference(&context) {
             Ok(sequence) => Some(sequence),
@@ -1093,6 +1799,12 @@ impl Project {
                     .into(),
             );
         }
+        if variants.len() > MAX_TRACK_REGION_VARIANTS {
+            warnings.push(format!(
+                "This focus contains {} active alleles. The track canvas shows the first {}; use density navigation or a narrower focus to inspect the rest.",
+                variants.len(), MAX_TRACK_REGION_VARIANTS
+            ));
+        }
         let contig_length = self.reference_contig_length(&context.contig).ok();
         Ok(FocusView {
             context,
@@ -1100,7 +1812,10 @@ impl Project {
             reference_sequence,
             haplotype1_sequence,
             haplotype2_sequence,
-            variants,
+            variants: variants
+                .into_iter()
+                .take(MAX_TRACK_REGION_VARIANTS)
+                .collect(),
             states: self.states()?,
             edits: self.edits_to_state(&active_track.head_state_id)?,
             tracks: self.list_tracks()?,
@@ -1127,18 +1842,11 @@ impl Project {
             ));
         }
         let stored = self.stored_track(track_id)?;
-        let all_variants = self.effective_variants(
+        let overlapping = self.effective_variants_in_context(
             &stored.track.head_state_id,
             &effective_bypassed_edit_ids(&stored),
+            &context,
         )?;
-        let overlapping: Vec<EffectiveVariant> = all_variants
-            .into_iter()
-            .filter(|variant| {
-                variant.key.contig == context.contig
-                    && variant.key.position <= context.end
-                    && variant.key.end() >= context.start
-            })
-            .collect();
         if let Some(boundary_variant) = overlapping
             .iter()
             .find(|variant| variant.key.position < context.start || variant.key.end() > context.end)
@@ -1344,6 +2052,55 @@ impl Project {
         Ok(())
     }
 
+    fn write_evidence_sidecar(
+        &self,
+        state_id: &str,
+        output_path: &Path,
+    ) -> Result<(PathBuf, FileFingerprint, usize)> {
+        // Hold one read transaction across count and serialization so an
+        // automatic evaluation completing concurrently cannot make coverage
+        // disagree with the array written to this sidecar.
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let count: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM evaluations", [], |row| row.get(0))?;
+        let entry_count = usize::try_from(count.max(0)).map_err(|_| {
+            DgwError::Project("evaluation cache count exceeds this platform".into())
+        })?;
+        let sidecar_path = PathBuf::from(format!("{}.evidence.json.gz", output_path.display()));
+        let file = File::create(&sidecar_path)?;
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        let payload = EvidenceSidecar {
+            schema_version: 1,
+            project_id: &self.manifest.project_id,
+            state_id,
+            generated_at: Utc::now(),
+            resource_bundle: EvidenceResourceIdentity {
+                id: &self.manifest.resource_bundle.id,
+                assembly: &self.manifest.assembly,
+                fingerprint: &self.manifest.resource_bundle_fingerprint,
+                snpeff_version: &self.manifest.resource_bundle.snpeff_version,
+                dbnsfp_release: &self.manifest.resource_bundle.dbnsfp.release,
+                clinvar_release: &self.manifest.resource_bundle.clinvar.release,
+                cosmic_release: &self.manifest.resource_bundle.cosmic.release,
+            },
+            coverage: EvidenceCoverage {
+                cached_exact_allele_entries: entry_count,
+                scope: "Only exact alleles evaluated in this project are included; absence from this file means not computed.",
+            },
+            evaluations: CachedEvaluationEntries {
+                connection: &transaction,
+                count: entry_count,
+            },
+            limitation: "Evidence applies independently to exact normalized alleles. Imported VCF annotations, compound effects, phase-dependent combined consequences, penetrance, and whole-genome effects are not included.",
+        };
+        serde_json::to_writer(&mut encoder, &payload)?;
+        transaction.commit()?;
+        encoder.finish()?;
+        let fingerprint = fingerprint_file(&sidecar_path)?;
+        Ok((sidecar_path, fingerprint, entry_count))
+    }
+
     pub fn render_state(
         &self,
         state_id: &str,
@@ -1355,16 +2112,45 @@ impl Project {
             output_path.set_extension("vcf.gz");
         }
         let plain_path = output_path.with_extension("").with_extension("vcf");
-        let variants = self.effective_variants(state_id, bypassed_edit_ids)?;
+        let operations = self.edits_to_state(state_id)?;
+        let mut affected_keys: Vec<VariantKey> = operations
+            .iter()
+            .flat_map(|operation| edit_keys(&operation.edit))
+            .cloned()
+            .collect();
+        affected_keys.sort();
+        affected_keys.dedup();
+        let affected_roots = self.root_variants_at_loci(&affected_keys)?;
+        let affected_root_keys: BTreeSet<VariantKey> = affected_roots
+            .iter()
+            .map(|variant| variant.key.clone())
+            .collect();
+        let affected_metadata: BTreeMap<VariantKey, RootVariant> = affected_roots
+            .iter()
+            .cloned()
+            .map(|variant| (variant.key.clone(), variant))
+            .collect();
+        let mut affected_variants =
+            effective_variants(&affected_roots, &operations, bypassed_edit_ids)?;
+        affected_variants.sort_by(|left, right| left.key.cmp(&right.key));
+        let (evidence_path, evidence_fingerprint, evidence_entry_count) =
+            self.write_evidence_sidecar(state_id, &output_path)?;
         let provenance_path = PathBuf::from(format!("{}.provenance.json", output_path.display()));
         let provenance = serde_json::json!({
             "schemaVersion": 1,
             "project": self.manifest,
             "stateId": state_id,
             "bypassedEditIds": bypassed_edit_ids,
-            "edits": self.edits_to_state(state_id)?,
+            "edits": &operations,
             "renderedAt": Utc::now(),
-            "limitation": "SnpEff consequences are evaluated independently per variant; compound haplotype consequences are not computed in DGW v1."
+            "evidenceSidecar": {
+                "path": evidence_path,
+                "sha256": evidence_fingerprint.sha256,
+                "size": evidence_fingerprint.size,
+                "cachedExactAlleleEntries": evidence_entry_count
+            },
+            "inputAnnotationPolicy": "Imported VCF INFO annotations are preserved only in the frozen source artifact and are never copied into this rendered VCF or used as DGW evidence.",
+            "limitation": "Evidence is evaluated independently per exact allele; compound haplotype consequences are not computed in DGW v1."
         });
         let provenance_bytes = serde_json::to_vec_pretty(&provenance)?;
         let provenance_sha256 = hex::encode(Sha256::digest(&provenance_bytes));
@@ -1398,93 +2184,72 @@ impl Project {
         writeln!(output, "##DGWProvenanceSHA256={provenance_sha256}")?;
         writeln!(
             output,
+            "##DGWEvidenceSHA256={}",
+            evidence_fingerprint.sha256
+        )?;
+        writeln!(
+            output,
             "##INFO=<ID=DGW_ORIGIN,Number=1,Type=String,Description=\"DGW allele origin\">"
         )?;
         writeln!(output, "##INFO=<ID=DGW_EDIT_IDS,Number=.,Type=String,Description=\"DGW edit operation identifiers\">")?;
         writeln!(output, "##INFO=<ID=DGW_SOURCE_KEY,Number=1,Type=String,Description=\"Original normalized allele key\">")?;
-        writeln!(output, "##INFO=<ID=DGW_EVAL_STATUS,Number=1,Type=String,Description=\"DGW live evaluation status\">")?;
+        writeln!(
+            output,
+            "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">"
+        )?;
         writeln!(
             output,
             "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{}",
             self.manifest.selected_sample
         )?;
-        for variant in &variants {
-            let genotype = if variant.unphased_alt {
-                "0/1"
-            } else {
-                match (variant.haplotype1_alt, variant.haplotype2_alt) {
-                    (true, true) => "1|1",
-                    (true, false) => "1|0",
-                    (false, true) => "0|1",
-                    (false, false) => continue,
-                }
-            };
-            let origin = match variant.origin {
-                VariantOrigin::Observed => "observed",
-                VariantOrigin::Edited => "edited",
-                VariantOrigin::Created => "created",
-            };
-            let mut info = if variant.origin == VariantOrigin::Observed {
-                variant.source_info.clone()
-            } else {
-                BTreeMap::new()
-            };
-            info.insert("DGW_ORIGIN".into(), origin.into());
-            if !variant.edit_ids.is_empty() {
-                info.insert("DGW_EDIT_IDS".into(), variant.edit_ids.join(","));
+        // Only edit-touched loci are materialized above. Merge that bounded set
+        // with the coordinate-ordered root stream so a million-variant export
+        // never constructs a million-entry EffectiveVariant vector.
+        let root_connection = self.connection()?;
+        let mut root_statement = root_connection.prepare(
+            "SELECT payload FROM root_variants
+              ORDER BY assembly, contig, position, reference, alternate",
+        )?;
+        let root_rows = root_statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut affected = affected_variants.iter().peekable();
+        for row in root_rows {
+            let root: RootVariant = serde_json::from_str(&row?)?;
+            while affected
+                .peek()
+                .is_some_and(|variant| variant.key < root.key)
+            {
+                let variant = affected.next().expect("peeked affected variant");
+                let metadata = affected_metadata.get(&variant.key);
+                write_rendered_variant(&mut output, variant, metadata)?;
             }
-            if let Some(source) = &variant.source_key {
-                info.insert("DGW_SOURCE_KEY".into(), source.stable_key());
+
+            if affected_root_keys.contains(&root.key) {
+                if affected
+                    .peek()
+                    .is_some_and(|variant| variant.key == root.key)
+                {
+                    let variant = affected.next().expect("peeked affected variant");
+                    let metadata = affected_metadata.get(&variant.key);
+                    write_rendered_variant(&mut output, variant, metadata)?;
+                }
+                continue;
             }
-            let cache_key = crate::evaluation::evaluation_cache_key(
-                &variant.key,
-                &self.manifest.resource_bundle_fingerprint,
-            );
-            if let Some(evaluation) = self.cache_get(&cache_key)? {
-                info.insert("DGW_EVAL_STATUS".into(), "computed".into());
-                let annotations = evaluation
-                    .snpeff
-                    .records
-                    .iter()
-                    .filter_map(|record| record.get("raw"))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !annotations.is_empty() {
-                    info.insert("ANN".into(), annotations.join(","));
-                }
-                for evidence in [&evaluation.clinvar, &evaluation.cosmic] {
-                    if let Some(record) = evidence.records.first() {
-                        for (key, value) in record {
-                            if key != "raw" && key != "id" {
-                                info.insert(key.clone(), value.clone());
-                            }
-                        }
-                    }
-                }
+
+            if affected
+                .peek()
+                .is_some_and(|variant| variant.key == root.key)
+            {
+                let variant = affected.next().expect("peeked affected variant");
+                let metadata = affected_metadata.get(&variant.key);
+                write_rendered_variant(&mut output, variant, metadata)?;
             } else {
-                info.insert("DGW_EVAL_STATUS".into(), "not_computed".into());
+                let variant = observed_effective_variant(&root);
+                write_rendered_variant(&mut output, &variant, Some(&root))?;
             }
-            let info_text = info
-                .iter()
-                .map(|(key, value)| {
-                    if value == "true" {
-                        key.clone()
-                    } else {
-                        format!("{key}={value}")
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(";");
-            writeln!(
-                output,
-                "{}\t{}\t.\t{}\t{}\t.\tPASS\t{}\tGT\t{}",
-                variant.key.contig,
-                variant.key.position,
-                variant.key.reference,
-                variant.key.alternate,
-                info_text,
-                genotype
-            )?;
+        }
+        for variant in affected {
+            let metadata = affected_metadata.get(&variant.key);
+            write_rendered_variant(&mut output, variant, metadata)?;
         }
         drop(output);
 
@@ -1530,17 +2295,190 @@ impl Project {
             if line.starts_with("#CHROM") {
                 break;
             }
-            if line.starts_with("##")
-                && !line.starts_with("##fileformat=")
-                && !line.starts_with("##source=")
-                && !line.starts_with("##reference=")
-                && !line.starts_with("##DGW")
-            {
+            // Rendered state VCFs carry only structure plus DGW provenance.
+            // Imported INFO/annotation declarations remain in the frozen
+            // selected-sample artifact and are intentionally not propagated.
+            if line.starts_with("##contig=<") || line.starts_with("##FILTER=<") {
                 headers.push(line);
             }
         }
         Ok(headers)
     }
+}
+
+fn observed_effective_variant(root: &RootVariant) -> EffectiveVariant {
+    EffectiveVariant {
+        key: root.key.clone(),
+        haplotype1_alt: root.haplotype1_alt,
+        haplotype2_alt: root.haplotype2_alt,
+        unphased_alt: root.unphased_alt,
+        origin: VariantOrigin::Observed,
+        edit_ids: Vec::new(),
+        source_key: Some(root.key.clone()),
+        source_info: BTreeMap::new(),
+    }
+}
+
+fn write_rendered_variant<W: Write>(
+    output: &mut W,
+    variant: &EffectiveVariant,
+    source_record: Option<&RootVariant>,
+) -> Result<()> {
+    let genotype = if variant.unphased_alt {
+        "0/1"
+    } else {
+        match (variant.haplotype1_alt, variant.haplotype2_alt) {
+            (true, true) => "1|1",
+            (true, false) => "1|0",
+            (false, true) => "0|1",
+            (false, false) => return Ok(()),
+        }
+    };
+    let origin = match variant.origin {
+        VariantOrigin::Observed => "observed",
+        VariantOrigin::Edited => "edited",
+        VariantOrigin::Created => "created",
+    };
+    let mut info: BTreeMap<String, String> = BTreeMap::new();
+    info.insert("DGW_ORIGIN".into(), origin.into());
+    if !variant.edit_ids.is_empty() {
+        info.insert("DGW_EDIT_IDS".into(), variant.edit_ids.join(","));
+    }
+    if let Some(source) = &variant.source_key {
+        info.insert("DGW_SOURCE_KEY".into(), source.stable_key());
+    }
+    let info_text = info
+        .iter()
+        .map(|(key, value)| {
+            if value == "true" {
+                key.clone()
+            } else {
+                format!("{key}={value}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";");
+    let source_record = if variant.origin == VariantOrigin::Observed {
+        source_record
+    } else {
+        None
+    };
+    let id = source_record
+        .and_then(|record| record.id.as_deref())
+        .unwrap_or(".");
+    let quality = source_record
+        .and_then(|record| record.quality.as_deref())
+        .unwrap_or(".");
+    let filter = source_record
+        .map(|record| record.filter.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("PASS");
+    writeln!(
+        output,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tGT\t{}",
+        variant.key.contig,
+        variant.key.position,
+        id,
+        variant.key.reference,
+        variant.key.alternate,
+        quality,
+        filter,
+        info_text,
+        genotype
+    )?;
+    Ok(())
+}
+
+fn variant_overlaps_context(key: &VariantKey, context: &FocusContext) -> bool {
+    key.contig == context.contig && key.position <= context.end && key.end() >= context.start
+}
+
+fn next_vcf_key<R: BufRead>(
+    reader: &mut R,
+    line: &mut String,
+) -> Result<Option<(String, String, String, String)>> {
+    loop {
+        line.clear();
+        if reader.read_line(line)? == 0 {
+            return Ok(None);
+        }
+        let trimmed = line.trim_end_matches(['\n', '\r']);
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = trimmed.split('\t').collect();
+        if fields.len() < 5 {
+            return Err(DgwError::InvalidVcf(
+                "VCF normalization output contains fewer than five columns".into(),
+            ));
+        }
+        return Ok(Some((
+            fields[0].into(),
+            fields[1].into(),
+            fields[3].into(),
+            fields[4].into(),
+        )));
+    }
+}
+
+fn same_locus(left: &VariantKey, right: &VariantKey) -> bool {
+    left.assembly == right.assembly
+        && left.contig == right.contig
+        && left.position <= right.end()
+        && left.end() >= right.position
+}
+
+fn edit_keys(edit: &EditKind) -> Vec<&VariantKey> {
+    match edit {
+        EditKind::SetAllele { key, source_key } => {
+            let mut keys = vec![key];
+            if let Some(source_key) = source_key {
+                keys.push(source_key);
+            }
+            keys
+        }
+        EditKind::RestoreReference { source_key } => vec![source_key],
+    }
+}
+
+fn edit_overlaps_context(edit: &EditKind, context: &FocusContext) -> bool {
+    edit_keys(edit)
+        .into_iter()
+        .any(|key| variant_overlaps_context(key, context))
+}
+
+fn edit_overlaps_key(edit: &EditKind, key: &VariantKey) -> bool {
+    edit_keys(edit)
+        .into_iter()
+        .any(|candidate| same_locus(candidate, key))
+}
+
+fn context_for_edit(edit: &EditKind) -> Result<FocusContext> {
+    let keys = edit_keys(edit);
+    let first = keys
+        .first()
+        .ok_or_else(|| DgwError::InvalidEdit("edit has no allele key".into()))?;
+    if keys
+        .iter()
+        .any(|key| key.assembly != first.assembly || key.contig != first.contig)
+    {
+        return Err(DgwError::InvalidEdit(
+            "one edit cannot move an allele between assemblies or contigs".into(),
+        ));
+    }
+    Ok(FocusContext {
+        contig: first.contig.clone(),
+        start: keys
+            .iter()
+            .map(|key| key.position)
+            .min()
+            .unwrap_or(first.position),
+        end: keys
+            .iter()
+            .map(|key| key.end())
+            .max()
+            .unwrap_or_else(|| first.end()),
+    })
 }
 
 fn insert_track(connection: &Connection, track: &GenomeTrack) -> Result<()> {
@@ -1844,10 +2782,225 @@ mod tests {
         }
     }
 
+    fn observed_variant(contig: &str, position: u64) -> RootVariant {
+        RootVariant {
+            key: VariantKey {
+                assembly: "b37".into(),
+                contig: contig.into(),
+                position,
+                reference: "A".into(),
+                alternate: "C".into(),
+            },
+            id: None,
+            quality: None,
+            filter: "PASS".into(),
+            info: BTreeMap::new(),
+            format_keys: Vec::new(),
+            sample_values: Vec::new(),
+            haplotype1_alt: true,
+            haplotype2_alt: false,
+            unphased_alt: false,
+            source_line: String::new(),
+        }
+    }
+
+    fn insert_root_variants(project: &Project, variants: &[RootVariant]) {
+        let mut connection = project.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        for variant in variants {
+            transaction
+                .execute(
+                    "INSERT INTO root_variants(
+                        stable_key, payload, assembly, contig, position, end_position, reference, alternate
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        variant.key.stable_key(),
+                        serde_json::to_string(variant).unwrap(),
+                        &variant.key.assembly,
+                        &variant.key.contig,
+                        variant.key.position,
+                        variant.key.end(),
+                        &variant.key.reference,
+                        &variant.key.alternate,
+                    ],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+
     #[test]
     fn deterministic_hashes_are_stable() {
         assert_eq!(hash_text("DGW"), hash_text("DGW"));
         assert_ne!(hash_text("DGW"), hash_text("dgw"));
+    }
+
+    #[test]
+    fn variant_pages_are_capped_and_report_the_remaining_rows() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let variants: Vec<RootVariant> = (1..=250)
+            .map(|position| observed_variant("1", position))
+            .collect();
+        insert_root_variants(&project, &variants);
+
+        let first = project.variant_page(&working.id, 0, u32::MAX).unwrap();
+        assert_eq!(first.limit, VARIANT_PAGE_SIZE);
+        assert_eq!(first.variants.len(), VARIANT_PAGE_SIZE as usize);
+        assert_eq!(first.total, 250);
+        assert!(first.has_more);
+        assert_eq!(first.variants.first().unwrap().key.position, 1);
+        assert_eq!(first.variants.last().unwrap().key.position, 200);
+
+        let last = project
+            .variant_page(&working.id, u64::from(VARIANT_PAGE_SIZE), u32::MAX)
+            .unwrap();
+        assert_eq!(last.variants.len(), 50);
+        assert!(!last.has_more);
+        assert_eq!(last.variants.first().unwrap().key.position, 201);
+        assert_eq!(last.variants.last().unwrap().key.position, 250);
+    }
+
+    #[test]
+    fn density_always_returns_the_fixed_bin_grid() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        insert_root_variants(
+            &project,
+            &[
+                observed_variant("1", 1),
+                observed_variant("1", 128),
+                observed_variant("1", 256),
+                observed_variant("2", 128),
+            ],
+        );
+
+        let density = project
+            .variant_density(
+                &working.id,
+                FocusContext {
+                    contig: "1".into(),
+                    start: 1,
+                    end: 256,
+                },
+            )
+            .unwrap();
+        assert_eq!(density.bins.len(), VARIANT_DENSITY_BINS as usize);
+        assert_eq!(density.total, 3);
+        assert_eq!(density.bins.iter().map(|bin| bin.count).sum::<u64>(), 3);
+        assert_eq!((density.bins[0].start, density.bins[0].end), (1, 1));
+        assert_eq!(
+            (
+                density.bins.last().unwrap().start,
+                density.bins.last().unwrap().end,
+            ),
+            (256, 256)
+        );
+    }
+
+    #[test]
+    fn symbolic_selections_resolve_exclusions_and_report_truncation() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let variants: Vec<RootVariant> = (1..=10)
+            .map(|position| observed_variant("1", position))
+            .collect();
+        insert_root_variants(&project, &variants);
+
+        let interval = project
+            .resolve_selection(
+                &VariantSelection::Interval {
+                    track_id: working.id.clone(),
+                    contig: "1".into(),
+                    start: 3,
+                    end: 8,
+                    exclusions: vec![variants[4].key.clone()],
+                },
+                3,
+            )
+            .unwrap();
+        assert_eq!(interval.total, 5);
+        assert_eq!(interval.limit, 3);
+        assert!(interval.truncated);
+        assert_eq!(
+            interval
+                .variants
+                .iter()
+                .map(|key| key.position)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 6]
+        );
+
+        let all_track = project
+            .resolve_selection(
+                &VariantSelection::AllTrack {
+                    track_id: working.id.clone(),
+                    exclusions: vec![variants[1].key.clone()],
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(all_track.total, 9);
+        assert!(all_track.truncated);
+        assert_eq!(
+            all_track
+                .variants
+                .iter()
+                .map(|key| key.position)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn invalid_edit_late_in_a_batch_leaves_the_track_unchanged() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let head_before = working.head_state_id.clone();
+        let state_count_before = project.states().unwrap().len();
+        let absent_source = VariantKey {
+            assembly: "b37".into(),
+            contig: "1".into(),
+            position: 999,
+            reference: "A".into(),
+            alternate: "C".into(),
+        };
+        let invalid_replacement = EditKind::SetAllele {
+            key: VariantKey {
+                alternate: "G".into(),
+                ..absent_source.clone()
+            },
+            source_key: Some(absent_source),
+        };
+
+        let error = project
+            .apply_edits_to_track(
+                &working.id,
+                &[
+                    (
+                        Haplotype::One,
+                        create_allele(100, "T"),
+                        Some("valid first operation".into()),
+                    ),
+                    (
+                        Haplotype::One,
+                        invalid_replacement,
+                        Some("invalid second operation".into()),
+                    ),
+                ],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("replacement source is absent"));
+        assert_eq!(
+            project.track(&working.id).unwrap().head_state_id,
+            head_before
+        );
+        assert_eq!(project.states().unwrap().len(), state_count_before);
+        assert!(project.edits_for_track(&working.id).unwrap().is_empty());
+        assert!(project
+            .effective_variants_for_track(&working.id)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1963,6 +3116,8 @@ mod tests {
                 selected_variants: before.iter().map(|variant| variant.key.clone()).collect(),
                 amount: 100,
                 seed: 42,
+                substitution_pattern: Default::default(),
+                transition_probability: 67,
             },
         )
         .unwrap();
@@ -1975,7 +3130,7 @@ mod tests {
                     &working.id,
                     proposal.haplotype,
                     proposal.edit.clone(),
-                    Some("Allele Randomizer · seed 42 · amount 100%".into()),
+                    Some("Mutation Generator · Randomizer mode · seed 42 · amount 100%".into()),
                 )
                 .unwrap();
         }
@@ -2092,6 +3247,42 @@ mod tests {
     }
 
     #[test]
+    fn toggles_an_edit_batch_as_one_reversible_track_operation() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let first = project
+            .apply_edit_to_track(&working.id, Haplotype::One, create_allele(100, "T"), None)
+            .unwrap()
+            .edit_id
+            .unwrap();
+        let second = project
+            .apply_edit_to_track(&working.id, Haplotype::Two, create_allele(200, "G"), None)
+            .unwrap()
+            .edit_id
+            .unwrap();
+        let edit_ids = vec![first, second];
+
+        project
+            .toggle_track_edits_bypass(&working.id, &edit_ids, true)
+            .unwrap();
+        assert!(project
+            .effective_variants_for_track(&working.id)
+            .unwrap()
+            .is_empty());
+
+        project
+            .toggle_track_edits_bypass(&working.id, &edit_ids, false)
+            .unwrap();
+        assert_eq!(
+            project
+                .effective_variants_for_track(&working.id)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn source_active_and_last_editable_tracks_are_protected_from_deletion() {
         let (_temporary, project) = test_project();
         let tracks = project.list_tracks().unwrap();
@@ -2162,6 +3353,143 @@ mod tests {
 
         let reopened_again = Project::open(&project.root).unwrap();
         assert_eq!(reopened_again.list_tracks().unwrap(), tracks);
+    }
+
+    #[test]
+    fn export_streams_large_root_and_keeps_only_dgw_info() {
+        let (temporary, project) = test_project();
+        let roots: Vec<RootVariant> = (1..=2_000)
+            .map(|position| {
+                let mut variant = observed_variant("1", position);
+                variant.id = Some(format!("rs{position}"));
+                variant.quality = Some("42".into());
+                variant
+                    .info
+                    .insert("ANN".into(), "C|missense_variant|HIGH|IMPORTED_ONLY".into());
+                variant.info.insert("CLNSIG".into(), "Pathogenic".into());
+                if position == 1 {
+                    variant.filter = "LowQual".into();
+                }
+                variant
+            })
+            .collect();
+        insert_root_variants(&project, &roots);
+
+        // A legacy annotated header remains in the frozen source artifact but
+        // must not enter the clean rendered VCF.
+        let selected_vcf =
+            File::create(project.root.join("artifacts/root.selected.vcf.gz")).unwrap();
+        let mut selected_vcf =
+            flate2::write::GzEncoder::new(selected_vcf, flate2::Compression::default());
+        selected_vcf
+            .write_all(
+                b"##fileformat=VCFv4.3\n##contig=<ID=1>\n##FILTER=<ID=LowQual,Description=\"fixture\">\n##INFO=<ID=ANN,Number=.,Type=String,Description=\"imported\">\n##INFO=<ID=CLNSIG,Number=.,Type=String,Description=\"imported\">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTEST\n",
+            )
+            .unwrap();
+        selected_vcf.finish().unwrap();
+
+        let working = project.active_track().unwrap();
+        let replacement_source = roots[999].key.clone();
+        project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::One,
+                EditKind::SetAllele {
+                    key: VariantKey {
+                        alternate: "G".into(),
+                        ..replacement_source.clone()
+                    },
+                    source_key: Some(replacement_source),
+                },
+                Some("streamed replacement".into()),
+            )
+            .unwrap();
+        project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::One,
+                EditKind::RestoreReference {
+                    source_key: roots[1_499].key.clone(),
+                },
+                Some("streamed restoration".into()),
+            )
+            .unwrap();
+        project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::Unphased,
+                create_allele(2_500, "T"),
+                Some("streamed creation".into()),
+            )
+            .unwrap();
+
+        let cached = EvaluationResult {
+            variant: roots[0].key.clone(),
+            cache_key: "fixture-evaluation".into(),
+            snpeff: EvidenceResult {
+                source: "SnpEff".into(),
+                status: EvidenceStatus::NoExactMatch,
+                records: Vec::new(),
+                message: None,
+            },
+            dbnsfp: EvidenceResult {
+                source: "dbNSFP".into(),
+                status: EvidenceStatus::NoExactMatch,
+                records: Vec::new(),
+                message: None,
+            },
+            clinvar: EvidenceResult {
+                source: "ClinVar".into(),
+                status: EvidenceStatus::NoExactMatch,
+                records: Vec::new(),
+                message: None,
+            },
+            cosmic: EvidenceResult {
+                source: "COSMIC".into(),
+                status: EvidenceStatus::NoExactMatch,
+                records: Vec::new(),
+                message: None,
+            },
+            evaluated_at: Utc::now(),
+            resource_bundle_fingerprint: "bundle-sha".into(),
+            limitation: "fixture".into(),
+        };
+        project.cache_put(&cached).unwrap();
+
+        let rendered_path = project
+            .render_track(&working.id, temporary.path().join("streamed.vcf.gz"))
+            .unwrap();
+        let mut rendered = String::new();
+        MultiGzDecoder::new(File::open(&rendered_path).unwrap())
+            .read_to_string(&mut rendered)
+            .unwrap();
+        assert!(rendered.contains("##FILTER=<ID=LowQual"));
+        assert!(!rendered.contains("##INFO=<ID=ANN"));
+        assert!(!rendered.contains("##INFO=<ID=CLNSIG"));
+        let records: Vec<Vec<&str>> = rendered
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| line.split('\t').collect())
+            .collect();
+        assert_eq!(records.len(), 2_000);
+        assert_eq!(&records[0][2..7], &["rs1", "A", "C", "42", "LowQual"]);
+        assert!(records
+            .iter()
+            .all(|fields| !fields[7].contains("ANN") && !fields[7].contains("CLNSIG")));
+        let replacement = records.iter().find(|fields| fields[1] == "1000").unwrap();
+        assert_eq!(&replacement[2..7], &[".", "A", "G", ".", "PASS"]);
+        assert!(!records.iter().any(|fields| fields[1] == "1500"));
+        let created = records.iter().find(|fields| fields[1] == "2500").unwrap();
+        assert_eq!(created[4], "T");
+        assert_eq!(created[9], "0/1");
+
+        let evidence_path = PathBuf::from(format!("{}.evidence.json.gz", rendered_path.display()));
+        let evidence: serde_json::Value =
+            serde_json::from_reader(MultiGzDecoder::new(File::open(evidence_path).unwrap()))
+                .unwrap();
+        assert_eq!(evidence["coverage"]["cachedExactAlleleEntries"], 1);
+        assert_eq!(evidence["evaluations"].as_array().unwrap().len(), 1);
+        assert_eq!(evidence["evaluations"][0]["cacheKey"], "fixture-evaluation");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   DeviceManifest,
+  CreatedProject,
   EditKind,
   ExampleFixture,
   EvidenceResult,
@@ -19,6 +20,10 @@ import type {
   RandomizerRunResult,
   ResourceBundle,
   VariantKey,
+  VariantDensity,
+  VariantPage,
+  VariantSelection,
+  SelectionResolution,
   VcfInspection,
   WorkspaceSnapshot
 } from "./types";
@@ -38,6 +43,8 @@ export const api = {
     selectedSample: string;
     resourceBundle: ResourceBundle;
   }) => invoke<ProjectSnapshot>("create_project", { request }),
+  createProjectFromCurrent: (currentProjectPath: string, templateId: "standardEvidence" | "empty") =>
+    invoke<CreatedProject>("create_project_from_current", { currentProjectPath, templateId }),
   openProject: (path: string) => invoke<ProjectSnapshot>("open_project", { path }),
   focusRegion: (projectPath: string, context: FocusContext) =>
     invoke<FocusView>("focus_region", { projectPath, context }),
@@ -52,8 +59,14 @@ export const api = {
     context,
     outputPath
   }),
-  trackDeck: (projectPath: string) =>
-    invoke<GenomeTrackLane[]>("track_deck", { projectPath }),
+  trackDeck: (projectPath: string, context?: FocusContext) =>
+    invoke<GenomeTrackLane[]>("track_deck", { projectPath, context }),
+  variantPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
+    invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
+  variantDensity: (projectPath: string, trackId: string, context: FocusContext) =>
+    invoke<VariantDensity>("variant_density", { projectPath, trackId, context }),
+  resolveVariantSelection: (projectPath: string, selection: VariantSelection, limit: number) =>
+    invoke<SelectionResolution>("resolve_variant_selection", { projectPath, selection, limit }),
   saveWorkspace: (projectPath: string, workspace: WorkspaceSnapshot) =>
     invoke<ProjectSnapshot>("save_workspace", { projectPath, workspace }),
   selectTrack: (projectPath: string, trackId: string) =>
@@ -74,6 +87,8 @@ export const api = {
     invoke<RandomizerRunResult>("run_randomizer", { projectPath, trackId, request }),
   setTrackEditBypass: (projectPath: string, trackId: string, editId: string, bypassed: boolean) =>
     invoke<ProjectSnapshot>("set_track_edit_bypass", { projectPath, trackId, editId, bypassed }),
+  setTrackEditsBypass: (projectPath: string, trackId: string, editIds: string[], bypassed: boolean) =>
+    invoke<ProjectSnapshot>("set_track_edits_bypass", { projectPath, trackId, editIds, bypassed }),
   applyEdit: (
     projectPath: string,
     parentStateId: string,

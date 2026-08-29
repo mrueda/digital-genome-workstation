@@ -8,7 +8,11 @@ Choose an effective sample variant from the left navigator or enter an exact b37
 
 In the track deck, use **Ctrl/Command + wheel** to zoom around the pointer and **Shift + wheel** (or a horizontal trackpad gesture) to pan. The **+**, **−**, and arrow controls provide the same operations, while the navigator beneath the tracks scrolls across the contig. Press **0** or choose **Fit allele** to return to an 81-base window around the selected allele. At close range, one visible lane division represents one reference base. **Height −/+** changes track height without changing the genomic scale.
 
-Choose **Select all** or press **Ctrl/Command+A** to select every visible VCF allele position on the active track. This does not select every reference base: DGW v0.1 can edit only positions represented by the input VCF. **Clear** removes the multi-selection. A normal lollipop click returns to one selected allele and opens its editor.
+Choose **Select visible** to select VCF allele positions in the displayed interval. Choose **Select all in track** or press **Ctrl/Command+A** to select every active VCF allele across every chromosome on the selected track. The counter reports both the global selection and how many of those positions are currently visible. Neither action selects every reference base: DGW v0.1 can edit only positions represented by the input VCF. **Clear** removes the multi-selection. A normal lollipop click returns to one selected allele and opens its editor.
+
+Use **Control-click** on a lollipop to add it to or remove it from an arbitrary multi-selection. DGW also accepts **Command-click** when that modifier reaches the application. When macOS hosts DGW inside a Linux virtual machine, use Control-click because the guest identifies itself as Linux and the virtualization software may reserve the Command key.
+
+For mouse-only DAW-style selection, drag across empty space in the active track lane. A cyan marquee follows the pointer and selects every visible lollipop whose coordinate falls inside it. Dragging a new marquee replaces the previous selection; Control/Command-drag adds the enclosed lollipops. A marquee containing no lollipops clears the selection unless the additive modifier is held.
 
 ## Read the sequence rows
 
@@ -34,6 +38,6 @@ DGW never invents phase during export. An unphased heterozygous allele is masked
 
 The focused export is limited to 50 kb. If an allele crosses the requested boundary, DGW asks you to expand the focus so the complete allele is included.
 
-## Inspect source annotation
+## Inspect live allele evidence
 
-Selecting an observed allele shows its frozen input `ANN` immediately. This is source evidence, not a promise that the current resource bundle will return the same transcript set. Run live evaluation when comparing track edits.
+Selecting an observed or edited allele automatically starts the active exact-allele Evidence devices. DGW does not show or use a frozen input `ANN`; annotated and unannotated inputs follow the same path. Stable cached results appear first, and unavailable optional resources remain clearly unavailable rather than becoming an empty or benign result.

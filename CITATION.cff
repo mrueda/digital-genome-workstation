@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use Digital Genome Workstation, please cite the software."
-title: "Digital Genome Workstation: Interactive, Non-Destructive Editing and Evaluation of Human Genome Variants"
+title: "Digital Genome Workstation: Interactive, Non-Destructive Editing and Evaluation of Genome Variants"
 type: software
 authors:
   - family-names: Rueda
@@ -11,8 +11,8 @@ repository-code: "https://github.com/mrueda/digital-genome-workstation"
 license: Apache-2.0
 abstract: >-
   Digital Genome Workstation is a desktop research environment for editing
-  phased human variants without changing the source VCF and immediately
-  evaluating predicted biological consequences and external evidence.
+  phased and unphased genome variants without changing the source VCF and
+  evaluating predicted molecular consequences and external evidence.
 keywords:
   - genomics
   - variant interpretation

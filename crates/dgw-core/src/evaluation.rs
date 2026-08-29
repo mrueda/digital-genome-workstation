@@ -1,3 +1,4 @@
+use crate::device::built_in_device_manifest;
 use crate::error::{DgwError, Result};
 use crate::model::{
     EvaluationResult, EvidenceResult, EvidenceStatus, IndexedResource, ResourceBundle, VariantKey,
@@ -8,13 +9,14 @@ use chrono::Utc;
 use flate2::read::MultiGzDecoder;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -25,6 +27,107 @@ pub fn evaluation_cache_key(variant: &VariantKey, bundle_fingerprint: &str) -> S
         bundle_fingerprint
     );
     hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+pub fn device_evaluation_cache_key(
+    variant: &VariantKey,
+    device_id: &str,
+    device_version: &str,
+    resource_fingerprint: &str,
+) -> String {
+    let value = format!(
+        "dgw-device-eval-v1|{}|{}|{}|{}",
+        variant.stable_key(),
+        device_id,
+        device_version,
+        resource_fingerprint
+    );
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+/// Builds the identity of the resource that is scientifically relevant to one
+/// built-in evidence device. Database devices are deliberately independent of
+/// one another, so replacing COSMIC does not invalidate ClinVar or dbNSFP.
+pub fn device_resource_fingerprint(
+    bundle: &ResourceBundle,
+    bundle_fingerprint: &str,
+    device_id: &str,
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dgw-device-resource-v1\0");
+    hasher.update(bundle.schema_version.to_le_bytes());
+    hash_field(&mut hasher, &bundle.assembly);
+    hash_field(&mut hasher, device_id);
+    match device_id {
+        "org.dgw.builtin.snpeff" => {
+            // ResourceBundle v1 has no separate fingerprint for the SnpEff
+            // database directory. Keep the pinned bundle identity as a safe
+            // fallback, then add the concrete runtime inputs and metadata.
+            hash_field(&mut hasher, bundle_fingerprint);
+            hash_field(&mut hasher, &bundle.snpeff_version);
+            hash_field(&mut hasher, &bundle.snpeff_genome);
+            hash_path_identity(&mut hasher, "java", &bundle.java_path);
+            hash_path_identity(&mut hasher, "snpeff-jar", &bundle.snpeff_jar_path);
+            if let Some(config) = &bundle.snpeff_config_path {
+                hash_path_identity(&mut hasher, "snpeff-config", config);
+            } else {
+                hasher.update(b"snpeff-config\0none\0");
+            }
+            if let Some(predictor) = configured_snpeff_predictor(bundle) {
+                hash_path_identity(&mut hasher, "snpeff-predictor", &predictor);
+            }
+        }
+        "org.dgw.builtin.dbnsfp" => {
+            hash_indexed_resource(&mut hasher, &bundle.tabix_path, &bundle.dbnsfp)?;
+        }
+        "org.dgw.builtin.clinvar" => {
+            hash_indexed_resource(&mut hasher, &bundle.tabix_path, &bundle.clinvar)?;
+        }
+        "org.dgw.builtin.cosmic" => {
+            hash_indexed_resource(&mut hasher, &bundle.tabix_path, &bundle.cosmic)?;
+        }
+        _ => {
+            return Err(DgwError::InvalidDevice(format!(
+                "device {device_id} cannot evaluate a selected allele"
+            )))
+        }
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn hash_indexed_resource(
+    hasher: &mut Sha256,
+    tabix_path: &Path,
+    resource: &IndexedResource,
+) -> Result<()> {
+    hash_field(hasher, &serde_json::to_string(resource)?);
+    hash_path_identity(hasher, "tabix", tabix_path);
+    hash_path_identity(hasher, "data", &resource.path);
+    hash_path_identity(hasher, "index", &resource.index_path);
+    Ok(())
+}
+
+fn hash_field(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn hash_path_identity(hasher: &mut Sha256, label: &str, path: &Path) {
+    hash_field(hasher, label);
+    hash_field(hasher, &path.to_string_lossy());
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            hasher.update(b"present\0");
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(elapsed) = modified.duration_since(UNIX_EPOCH) {
+                    hasher.update(elapsed.as_secs().to_le_bytes());
+                    hasher.update(elapsed.subsec_nanos().to_le_bytes());
+                }
+            }
+        }
+        Err(_) => hasher.update(b"missing\0"),
+    }
 }
 
 pub struct EvaluationService {
@@ -47,10 +150,9 @@ impl EvaluationService {
     pub fn evaluate(&self, project: &Project, variant: &VariantKey) -> Result<EvaluationResult> {
         let cache_key =
             evaluation_cache_key(variant, &project.manifest().resource_bundle_fingerprint);
-        if let Some(result) = project.cache_get(&cache_key)? {
-            return Ok(result);
-        }
-
+        // Always assemble through the device boundary. Each call is cheap when
+        // its exact allele/resource entry is already cached, and one missing or
+        // replaced optional database does not invalidate the other devices.
         let snpeff = self.evaluate_device(project, variant, "org.dgw.builtin.snpeff")?;
         let dbnsfp = self.evaluate_device(project, variant, "org.dgw.builtin.dbnsfp")?;
         let clinvar = self.evaluate_device(project, variant, "org.dgw.builtin.clinvar")?;
@@ -73,13 +175,10 @@ impl EvaluationService {
             &result.cosmic,
         ]
         .iter()
-        .all(|evidence| {
-            !matches!(
-                evidence.status,
-                EvidenceStatus::Error | EvidenceStatus::ResourceUnavailable
-            )
-        });
+        .all(|evidence| is_durable_evidence(evidence));
         if durable {
+            // Keep the v1 combined entry for existing export/provenance callers.
+            // Device-specific entries remain the authoritative reusable cache.
             project.cache_put(&result)?;
         }
         Ok(result)
@@ -93,27 +192,68 @@ impl EvaluationService {
         device_id: &str,
     ) -> Result<EvidenceResult> {
         let bundle = &project.manifest().resource_bundle;
+        let manifest = built_in_device_manifest(device_id).ok_or_else(|| {
+            DgwError::InvalidDevice(format!(
+                "device {device_id} cannot evaluate a selected allele"
+            ))
+        })?;
+        if !matches!(
+            device_id,
+            "org.dgw.builtin.snpeff"
+                | "org.dgw.builtin.dbnsfp"
+                | "org.dgw.builtin.clinvar"
+                | "org.dgw.builtin.cosmic"
+        ) {
+            return Err(DgwError::InvalidDevice(format!(
+                "device {device_id} cannot evaluate a selected allele"
+            )));
+        }
+        let resource_fingerprint = device_resource_fingerprint(
+            bundle,
+            &project.manifest().resource_bundle_fingerprint,
+            device_id,
+        )?;
+        let cache_key = device_evaluation_cache_key(
+            variant,
+            device_id,
+            &manifest.version,
+            &resource_fingerprint,
+        );
+        if let Some(cached) = project.cache_get(&cache_key)? {
+            if cached.variant == *variant {
+                if let Some(evidence) = evidence_for_device(&cached, device_id) {
+                    if is_durable_evidence(evidence) {
+                        return Ok(evidence.clone());
+                    }
+                }
+            }
+        }
+
         let result = match device_id {
-            "org.dgw.builtin.snpeff" => match self.annotate_snpeff(
-                bundle,
-                &project.manifest().resource_bundle_fingerprint,
-                variant,
-            ) {
-                Ok(records) => EvidenceResult {
+            "org.dgw.builtin.snpeff" => match snpeff_resource_unavailable(bundle) {
+                Some(message) => EvidenceResult {
                     source: "SnpEff".into(),
-                    status: if records.is_empty() {
-                        EvidenceStatus::NoExactMatch
-                    } else {
-                        EvidenceStatus::Found
-                    },
-                    records,
-                    message: None,
-                },
-                Err(error) => EvidenceResult {
-                    source: "SnpEff".into(),
-                    status: EvidenceStatus::Error,
+                    status: EvidenceStatus::ResourceUnavailable,
                     records: Vec::new(),
-                    message: Some(error.to_string()),
+                    message: Some(message),
+                },
+                None => match self.annotate_snpeff(bundle, &resource_fingerprint, variant) {
+                    Ok(records) => EvidenceResult {
+                        source: "SnpEff".into(),
+                        status: if records.is_empty() {
+                            EvidenceStatus::NoExactMatch
+                        } else {
+                            EvidenceStatus::Found
+                        },
+                        records,
+                        message: None,
+                    },
+                    Err(error) => EvidenceResult {
+                        source: "SnpEff".into(),
+                        status: EvidenceStatus::Error,
+                        records: Vec::new(),
+                        message: Some(error.to_string()),
+                    },
                 },
             },
             "org.dgw.builtin.dbnsfp" => query_resource(
@@ -134,12 +274,17 @@ impl EvaluationService {
                 variant,
                 ResourceKind::Vcf,
             ),
-            _ => {
-                return Err(DgwError::InvalidDevice(format!(
-                    "device {device_id} cannot evaluate a selected allele"
-                )))
-            }
+            _ => unreachable!("supported evidence device was checked above"),
         };
+        if is_durable_evidence(&result) {
+            project.cache_put(&device_cache_envelope(
+                &project.manifest().resource_bundle_fingerprint,
+                variant,
+                cache_key,
+                device_id,
+                result.clone(),
+            ))?;
+        }
         Ok(result)
     }
 
@@ -174,6 +319,132 @@ impl EvaluationService {
             }
         }
     }
+}
+
+fn is_durable_evidence(evidence: &EvidenceResult) -> bool {
+    matches!(
+        evidence.status,
+        EvidenceStatus::Found | EvidenceStatus::NoExactMatch
+    )
+}
+
+fn evidence_for_device<'a>(
+    evaluation: &'a EvaluationResult,
+    device_id: &str,
+) -> Option<&'a EvidenceResult> {
+    match device_id {
+        "org.dgw.builtin.snpeff" => Some(&evaluation.snpeff),
+        "org.dgw.builtin.dbnsfp" => Some(&evaluation.dbnsfp),
+        "org.dgw.builtin.clinvar" => Some(&evaluation.clinvar),
+        "org.dgw.builtin.cosmic" => Some(&evaluation.cosmic),
+        _ => None,
+    }
+}
+
+fn device_cache_envelope(
+    bundle_fingerprint: &str,
+    variant: &VariantKey,
+    cache_key: String,
+    device_id: &str,
+    evidence: EvidenceResult,
+) -> EvaluationResult {
+    let mut result = EvaluationResult {
+        variant: variant.clone(),
+        cache_key,
+        snpeff: not_computed_evidence("SnpEff"),
+        dbnsfp: not_computed_evidence("dbNSFP"),
+        clinvar: not_computed_evidence("ClinVar"),
+        cosmic: not_computed_evidence("COSMIC"),
+        evaluated_at: Utc::now(),
+        resource_bundle_fingerprint: bundle_fingerprint.into(),
+        limitation: "Per-device evidence cache entry; evidence applies only to the exact normalized allele and pinned device resource.".into(),
+    };
+    match device_id {
+        "org.dgw.builtin.snpeff" => result.snpeff = evidence,
+        "org.dgw.builtin.dbnsfp" => result.dbnsfp = evidence,
+        "org.dgw.builtin.clinvar" => result.clinvar = evidence,
+        "org.dgw.builtin.cosmic" => result.cosmic = evidence,
+        _ => unreachable!("cache envelopes are built only for supported evidence devices"),
+    }
+    result
+}
+
+fn not_computed_evidence(source: &str) -> EvidenceResult {
+    EvidenceResult {
+        source: source.into(),
+        status: EvidenceStatus::NotComputed,
+        records: Vec::new(),
+        message: None,
+    }
+}
+
+fn snpeff_resource_unavailable(bundle: &ResourceBundle) -> Option<String> {
+    let required = [
+        (&bundle.java_path, "Java executable"),
+        (&bundle.snpeff_jar_path, "SnpEff JAR"),
+    ];
+    for (path, label) in required {
+        if !path.is_file() {
+            return Some(format!("{label} is missing: {}", path.display()));
+        }
+    }
+    if let Some(config) = &bundle.snpeff_config_path {
+        if !config.is_file() {
+            return Some(format!(
+                "SnpEff configuration is missing: {}",
+                config.display()
+            ));
+        }
+    }
+    if bundle.snpeff_genome.trim().is_empty() {
+        return Some("SnpEff genome identifier is not configured".into());
+    }
+    if let Some(predictor) = configured_snpeff_predictor(bundle) {
+        if !predictor.is_file() {
+            return Some(format!(
+                "SnpEff database {} is missing: {}",
+                bundle.snpeff_genome,
+                predictor.display()
+            ));
+        }
+    }
+    None
+}
+
+fn configured_snpeff_predictor(bundle: &ResourceBundle) -> Option<PathBuf> {
+    let config = bundle.snpeff_config_path.as_ref()?;
+    let contents = fs::read_to_string(config).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || !line.starts_with("data.dir") {
+            continue;
+        }
+        let Some(remainder) = line.strip_prefix("data.dir") else {
+            continue;
+        };
+        let remainder = remainder.trim_start();
+        let Some(value) = remainder
+            .strip_prefix('=')
+            .or_else(|| remainder.strip_prefix(':'))
+        else {
+            continue;
+        };
+        let value = value.split('#').next().unwrap_or_default().trim();
+        if value.is_empty() {
+            continue;
+        }
+        let data_dir = PathBuf::from(value);
+        // Relative SnpEff data.dir semantics depend on the process working
+        // directory, which ResourceBundle v1 does not pin. Avoid guessing.
+        if data_dir.is_absolute() {
+            return Some(
+                data_dir
+                    .join(&bundle.snpeff_genome)
+                    .join("snpEffectPredictor.bin"),
+            );
+        }
+    }
+    None
 }
 
 struct SnpeffWorker {
@@ -329,6 +600,17 @@ fn query_resource(
     kind: ResourceKind,
 ) -> EvidenceResult {
     let source = resource.release.clone();
+    if !tabix_path.is_file() {
+        return EvidenceResult {
+            source,
+            status: EvidenceStatus::ResourceUnavailable,
+            records: Vec::new(),
+            message: Some(format!(
+                "tabix executable is missing: {}",
+                tabix_path.display()
+            )),
+        };
+    }
     if !resource.path.is_file() || !resource.index_path.is_file() {
         return EvidenceResult {
             source,
@@ -392,16 +674,14 @@ fn query_resource(
             if matches!(kind, ResourceKind::Vcf) {
                 record.insert("id".into(), fields[2].into());
                 record.extend(parse_info(fields[7]));
-            } else {
-                if let Ok(columns) = dbnsfp_columns(&resource.path) {
-                    for (column, value) in columns.iter().zip(fields.iter()) {
-                        record.insert(column.clone(), (*value).into());
-                    }
-                } else {
-                    record.insert("position".into(), fields[1].into());
-                    record.insert("ref".into(), fields[2].into());
-                    record.insert("alt".into(), fields[3].into());
+            } else if let Ok(columns) = dbnsfp_columns(&resource.path) {
+                for (column, value) in columns.iter().zip(fields.iter()) {
+                    record.insert(column.clone(), (*value).into());
                 }
+            } else {
+                record.insert("position".into(), fields[1].into());
+                record.insert("ref".into(), fields[2].into());
+                record.insert("alt".into(), fields[3].into());
             }
             records.push(record);
         }
@@ -484,19 +764,178 @@ pub fn normalize_variant(bundle: &ResourceBundle, variant: &VariantKey) -> Resul
 mod tests {
     use super::*;
 
-    #[test]
-    fn cache_keys_are_resource_specific() {
-        let variant = VariantKey {
+    fn indexed_resource(name: &str) -> IndexedResource {
+        IndexedResource {
+            path: format!("/configured/{name}.gz").into(),
+            index_path: format!("/configured/{name}.gz.tbi").into(),
+            release: format!("{name}-release"),
+            license_label: "test".into(),
+            fingerprint: None,
+        }
+    }
+
+    fn resource_bundle() -> ResourceBundle {
+        ResourceBundle {
+            schema_version: 1,
+            id: "test-bundle".into(),
+            assembly: "b37".into(),
+            contig_style: "no_chr_prefix".into(),
+            reference_path: "/configured/reference.fa.gz".into(),
+            reference_fai_path: "/configured/reference.fa.gz.fai".into(),
+            reference_gzi_path: None,
+            java_path: "/configured/java".into(),
+            snpeff_jar_path: "/configured/snpEff.jar".into(),
+            snpeff_config_path: Some("/configured/snpEff.config".into()),
+            snpeff_genome: "hg19".into(),
+            snpeff_version: "5.0e".into(),
+            bcftools_path: "/configured/bcftools".into(),
+            bgzip_path: "/configured/bgzip".into(),
+            tabix_path: "/configured/tabix".into(),
+            dbnsfp: indexed_resource("dbnsfp"),
+            clinvar: indexed_resource("clinvar"),
+            cosmic: indexed_resource("cosmic"),
+            bundle_fingerprint: None,
+        }
+    }
+
+    fn variant() -> VariantKey {
+        VariantKey {
             assembly: "b37".into(),
             contig: "7".into(),
             position: 140_453_136,
             reference: "A".into(),
             alternate: "T".into(),
-        };
+        }
+    }
+
+    #[test]
+    fn cache_keys_are_resource_specific() {
+        let variant = variant();
         assert_ne!(
             evaluation_cache_key(&variant, "bundle-a"),
             evaluation_cache_key(&variant, "bundle-b")
         );
+    }
+
+    #[test]
+    fn device_cache_keys_bind_allele_device_version_and_resource() {
+        let variant = variant();
+        let base =
+            device_evaluation_cache_key(&variant, "org.dgw.builtin.clinvar", "0.1.0", "clinvar-a");
+        let mut other_allele = variant.clone();
+        other_allele.alternate = "G".into();
+        assert_ne!(
+            base,
+            device_evaluation_cache_key(
+                &other_allele,
+                "org.dgw.builtin.clinvar",
+                "0.1.0",
+                "clinvar-a"
+            )
+        );
+        assert_ne!(
+            base,
+            device_evaluation_cache_key(&variant, "org.dgw.builtin.cosmic", "0.1.0", "clinvar-a")
+        );
+        assert_ne!(
+            base,
+            device_evaluation_cache_key(&variant, "org.dgw.builtin.clinvar", "0.2.0", "clinvar-a")
+        );
+        assert_ne!(
+            base,
+            device_evaluation_cache_key(&variant, "org.dgw.builtin.clinvar", "0.1.0", "clinvar-b")
+        );
+    }
+
+    #[test]
+    fn database_fingerprints_ignore_unrelated_optional_resources() {
+        let bundle = resource_bundle();
+        let clinvar =
+            device_resource_fingerprint(&bundle, "bundle-a", "org.dgw.builtin.clinvar").unwrap();
+
+        let mut cosmic_changed = bundle.clone();
+        cosmic_changed.cosmic.release = "different-cosmic-release".into();
+        assert_eq!(
+            clinvar,
+            device_resource_fingerprint(&cosmic_changed, "bundle-b", "org.dgw.builtin.clinvar")
+                .unwrap()
+        );
+
+        let mut clinvar_changed = bundle;
+        clinvar_changed.clinvar.release = "different-clinvar-release".into();
+        assert_ne!(
+            clinvar,
+            device_resource_fingerprint(&clinvar_changed, "bundle-a", "org.dgw.builtin.clinvar")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn only_terminal_exact_lookup_results_are_durable() {
+        for (status, durable) in [
+            (EvidenceStatus::Found, true),
+            (EvidenceStatus::NoExactMatch, true),
+            (EvidenceStatus::NotComputed, false),
+            (EvidenceStatus::ResourceUnavailable, false),
+            (EvidenceStatus::Error, false),
+        ] {
+            assert_eq!(
+                is_durable_evidence(&EvidenceResult {
+                    source: "test".into(),
+                    status,
+                    records: Vec::new(),
+                    message: None,
+                }),
+                durable
+            );
+        }
+    }
+
+    #[test]
+    fn per_device_cache_envelope_keeps_other_devices_not_computed() {
+        let evidence = EvidenceResult {
+            source: "ClinVar release".into(),
+            status: EvidenceStatus::Found,
+            records: vec![BTreeMap::from([("CLNSIG".into(), "Benign".into())])],
+            message: None,
+        };
+        let envelope = device_cache_envelope(
+            "bundle-a",
+            &variant(),
+            "cache-key".into(),
+            "org.dgw.builtin.clinvar",
+            evidence.clone(),
+        );
+        assert_eq!(envelope.clinvar, evidence);
+        assert_eq!(envelope.snpeff.status, EvidenceStatus::NotComputed);
+        assert_eq!(envelope.dbnsfp.status, EvidenceStatus::NotComputed);
+        assert_eq!(envelope.cosmic.status, EvidenceStatus::NotComputed);
+        assert_eq!(
+            evidence_for_device(&envelope, "org.dgw.builtin.clinvar"),
+            Some(&envelope.clinvar)
+        );
+    }
+
+    #[test]
+    fn configured_snpeff_database_is_part_of_availability() {
+        let temporary = tempfile::tempdir().unwrap();
+        let data_dir = temporary.path().join("data");
+        let config = temporary.path().join("snpEff.config");
+        std::fs::write(&config, format!("data.dir = {}\n", data_dir.display())).unwrap();
+
+        let mut bundle = resource_bundle();
+        bundle.snpeff_config_path = Some(config);
+        let expected = data_dir.join("hg19").join("snpEffectPredictor.bin");
+        assert_eq!(configured_snpeff_predictor(&bundle), Some(expected.clone()));
+
+        // The Java and JAR checks run first; create them so the missing pinned
+        // database is the reported optional-resource condition.
+        bundle.java_path = temporary.path().join("java");
+        bundle.snpeff_jar_path = temporary.path().join("snpEff.jar");
+        std::fs::write(&bundle.java_path, b"test").unwrap();
+        std::fs::write(&bundle.snpeff_jar_path, b"test").unwrap();
+        assert!(snpeff_resource_unavailable(&bundle)
+            .is_some_and(|message| message.contains(&expected.display().to_string())));
     }
 
     #[test]

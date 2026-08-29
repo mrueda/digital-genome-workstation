@@ -2,9 +2,9 @@
 
 Evaluation always targets one exact normalized allele selected from an edit block or observed call. It does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
 
-In the device-rack model, SnpEff is an analysis device. dbNSFP, ClinVar, and COSMIC are evidence devices. Their code is separate from the configured models and database snapshots in the resource pack.
+In the Device Browser, SnpEff, dbNSFP, ClinVar, and COSMIC are all **Evidence** devices: they report annotations, predictions, classifications, or observations for one allele. DGW Starter applies them to a new track's Rack by default, between Mutation Generator and Genome Optimizer. Their code is separate from the configured models and database snapshots in the resource pack.
 
-The selected track's rack shows all four in order. **Run** executes only that card for the selected allele. **Run all active devices** executes the enabled cards; if none are bypassed, DGW can use the combined project cache. Bypassing an analysis or evidence card hides and excludes its result for that track without changing any allele or edit block. These card bypass choices are currently application-session state.
+With DGW Starter, the selected track's Rack initially shows the complete six-device workflow. A missing optional resource leaves its Evidence card unavailable and inert; the other cards and genome editing continue to work. Selecting an allele automatically runs the applied, non-bypassed Evidence cards after a short debounce. Stable cached results appear first and DGW requests only missing device results. **Refresh active Evidence devices** and each card's manual action remain available. Bypassing an Evidence card hides and excludes its result for that track without changing any allele or edit block. Applied-chain and card-bypass choices are currently application-session state.
 
 ## Consequence layer
 
@@ -20,16 +20,18 @@ Each card reports one of [five explicit statuses](../reference/evidence-statuses
 
 ## Provenance and cache
 
-Results are cached by normalized variant key and resource-bundle fingerprint. Tool or resource errors are not cached. Imported VCF annotations remain visible as the annotations that came with the file; new results have their own timestamp and recorded resource versions.
+Results are cached per device by normalized variant key, device version, and device-resource fingerprint. Found and exact no-match results are durable; tool or resource errors are not cached. Imported VCF annotations are neither displayed nor used. New results have their own timestamp and recorded resource versions.
 
 :::caution Per-variant interpretation
-SnpEff results are independent per allele. DGW v0.1 does not calculate joint transcript/protein effects for nearby edits on the same genome copy. A device may place several edit blocks on one track, but their evidence cards remain separate.
+SnpEff results are independent per allele. DGW v0.1 does not calculate joint transcript/protein effects for nearby edits on the same genome copy. A device may place several edit blocks on one track, but their evidence cards remain separate. Track Profiler can submit all active mutation blocks to the applied Evidence devices in one coordinated run and aggregate their coverage and source-relative signals; it does not change the scientific scope of the underlying allele requests.
 :::
 
 ## Optimizer scores are not live evidence
 
-The experimental Genome Optimizer ranks allowed changes with one of two implemented additive scores: alternate-allele burden or predicted-impact burden. The predicted-impact score reads imported impact and recognized ClinVar-classification fields already attached to source variants, plus exact membership in the immutable source VCF. It does not run SnpEff or query the configured dbNSFP, ClinVar, or COSMIC resources while planning.
+The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live SnpEff for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC and dbNSFP provide context and never reduce the score through absence.
 
-The displayed aggregate is a sum of independent allele-copy contributions. It is not a new ClinVar classification, clinical conclusion, or calculation of the combined biological effect of all edits. Every proposed edit remains selectable and should be evaluated separately through the live evidence stack.
+REF is the registered reference allele, not a benign or healthy classification. Likewise, Minimize and Maximize mean lower or higher values of the displayed proxy score only.
+
+The displayed aggregate is a sum of independent allele-copy contributions. It is not a new ClinVar classification, clinical conclusion, or calculation of the combined biological effect of all edits. Every proposed edit remains selectable for individual review, while Track Profiler can coordinate the independent live-evidence evaluations for the complete active edit set.
 
 Generated edit operations persist. The full optimizer request, score components, exclusions, device grouping, and control settings do not yet persist in the project schema. Until formal run provenance is implemented, a displayed optimizer score cannot be reconstructed from the project package alone.

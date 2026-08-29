@@ -2,7 +2,7 @@
 
 ## v0.1 foundation — Working engine
 
-- b37 annotated VCF import and one selected sample, with phased and unphased GT support.
+- b37 normalized biallelic VCF import, with or without INFO annotations, and one selected sample with phased and unphased GT support.
 - Focused two-copy DNA reconstruction with explicit copy-unknown alleles.
 - Immutable SNV/short-indel edits, branches, bypass, and internal A/B pointers.
 - Per-allele SnpEff plus exact dbNSFP, ClinVar, and COSMIC evidence.
@@ -16,24 +16,29 @@
 - Experimental tracks can be duplicated, renamed, selected, compared, hidden, and archived.
 - Manual and generated changes are persistent, selectable edit blocks over shared focused coordinates.
 - Each editable track has a device rack with edit-level and current-session device bypass.
+- A function-grouped Device Browser is separate from each track's ordered applied-device Rack below the tracks; applied devices appear there as horizontally arranged full panels, and the source-relative Track Meter has a separate Track Monitor area.
+- File-level DGW Starter and Empty project templates establish a complete inert-until-run workstation versus a blank starting chain; duplicating a track copies its applied chain. Templates remain separate from the Device Browser.
 - Version history and A/B state slots are out of the primary workflow while the immutable DAG remains internal provenance.
 - Consolidation moves the visual base to the current head, retains complete ancestry, and privately preserves bypassed baseline edits.
 - Track-based VCF export merges private baseline exclusions and visible bypass choices.
 
 ## Implemented experimental prototype — Genome Optimizer
 
-- Alternate-allele burden and additive predicted-impact burden objectives.
+- Conservative **Distance from reference (ALT copies)** objective with no annotation or health interpretation.
 - Minimize restores eligible active exact-source alleles to reference.
 - Maximize only reintroduces exact original-source alleles absent from the current track; it is not disease maximization.
-- Impact, recognized ClinVar, and exact-source-membership weights for predicted-impact burden.
+- Live SnpEff candidate ranking and fixed ClinVar candidate screening for Saturation.
+- Explicit objective inclusion versus user bypass: included bypassed devices contribute zero while excluded/new devices cannot silently enter a score.
 - Maximum-edits bound, deterministic ranking, and explicit candidate exclusions.
 - Proposals become normal visible, reversible edit blocks with individual evidence review.
+- Selected-position Saturation scan evaluates all three non-REF canonical-SNV bases with SnpEff, reports database evidence separately, and preserves copy placement.
 - The interface reports the additive-score limitation: no interactions, compound effects, penetrance, or whole-genome model.
 
 ## Engineering next
 
 - Persist device settings and device-to-edit ownership.
 - Add formal optimizer-run provenance: input identity, scoring contract/version, request, components, exclusions, output edit IDs, and uncertainty.
+- Scale Saturation beyond its initial 100-position safety bound: chunked SnpEff annotation through one persistent worker, fingerprinted allele-result caching, batched indexed-resource queries, streaming three-candidate reduction, cancellation, and progress reporting.
 - Include track identity, consolidation details, and device/run records in export provenance.
 - Publish versioned DGW Device API schemas for editing, analysis, and evidence devices.
 - Move built-in Genome Optimizer, SnpEff, dbNSFP, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
@@ -54,4 +59,4 @@
 - Splice/regulatory models.
 - Sequence-resolved structural variants after the small-variant state model is validated.
 
-BAM/CRAM visualization, read pileups, cloud collaboration, clinical classification, a universal health score, disease maximization, and claims of a disease-free genome are not roadmap requirements.
+BAM/CRAM visualization, read pileups, cloud collaboration, clinical classification, universal health scoring, and claims of biological perfection are not roadmap requirements.

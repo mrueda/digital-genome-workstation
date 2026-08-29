@@ -2,6 +2,7 @@
 ##source=DGW-synthetic-cluster-demonstration
 ##reference=hs37d5
 ##contig=<ID=7,length=159138663,assembly=b37>
+##contig=<ID=17,length=81195210,assembly=b37>
 ##INFO=<ID=ANN,Number=.,Type=String,Description="Functional annotations: Allele|Annotation|Annotation_Impact|Gene_Name|Gene_ID|Feature_Type|Feature_ID|Transcript_BioType|Rank|HGVS.c|HGVS.p|cDNA.pos / cDNA.length|CDS.pos / CDS.length|AA.pos / AA.length|Distance|ERRORS / WARNINGS / INFO">
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##DGWSynthetic=true
@@ -14,3 +15,6 @@
 7	140453146	DGW_SYNTH_4	G	A	.	PASS	ANN=A|sequence_variant|MODIFIER||||||||||||||	GT	1|1
 7	140453157	DGW_SYNTH_5	C	G	.	PASS	ANN=G|sequence_variant|MODIFIER||||||||||||||	GT	1|0
 7	140453164	DGW_SYNTH_6	T	G	.	PASS	ANN=G|sequence_variant|MODIFIER||||||||||||||	GT	0|1
+17	7577500	DGW_SYNTH_7	T	C	.	PASS	ANN=C|sequence_variant|MODIFIER|TP53|TP53|transcript|NM_000546.6|protein_coding|||||||||	GT	0|1
+17	7577512	DGW_SYNTH_8	G	A	.	PASS	ANN=A|sequence_variant|MODIFIER|TP53|TP53|transcript|NM_000546.6|protein_coding|||||||||	GT	1|0
+17	7577524	DGW_SYNTH_9	T	G	.	PASS	ANN=G|sequence_variant|MODIFIER|TP53|TP53|transcript|NM_000546.6|protein_coding|||||||||	GT	0/1

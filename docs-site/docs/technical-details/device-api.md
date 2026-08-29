@@ -4,7 +4,7 @@ DGW uses **device** as a general workstation concept, not only for tools that ed
 
 | Device kind | Built-in example | Structured output |
 | --- | --- | --- |
-| Editing | Allele Randomizer, Genome Optimizer | Proposed normalized edit operations and planning details |
+| Editing | Mutation Generator, Genome Optimizer | Proposed normalized edit operations and planning details |
 | Analysis | SnpEff | Predicted transcript consequences for one exact allele |
 | Evidence | dbNSFP, ClinVar, COSMIC | Exact-match evidence records with explicit status |
 
@@ -63,14 +63,25 @@ Separating these concepts lets one device work with several compatible resource 
 
 The built-in implementations already establish much of the contract shape:
 
-- the Allele Randomizer and Genome Optimizer are non-mutating core planners; the Tauri host validates and applies returned proposals through normal track operations;
+- the Mutation Generator and Genome Optimizer are non-mutating core planners; the Tauri host validates and applies returned proposals through normal track operations;
 - SnpEff receives a structured exact-allele request through the evaluation service and returns parsed consequence fields;
 - dbNSFP, ClinVar, and COSMIC adapters return structured exact-match evidence states; and
 - the resource bundle identifies and fingerprints their local resources.
 
 These are built into DGW and exposed through the same host catalog. The app validates versioned built-in and external manifest shapes, structured requests, structured responses, resource bindings, and editing proposals. There is not yet a community registry, install/update workflow, sandboxed external runner, or enabled third-party execution path. Device settings and full optimizer-run provenance also do not yet persist in the project schema.
 
-SnpEff, dbNSFP, ClinVar, and COSMIC now appear as ordered rack cards on the selected track. Each can run independently for the selected allele. **Run all active devices** uses the cached combined evaluation when all four are enabled; bypassed devices are skipped and their output is excluded from the current evidence view. The Allele Randomizer targets selected VCF positions, while the Genome Optimizer targets the focused region; both appear only on editable tracks.
+SnpEff, dbNSFP, ClinVar, and COSMIC can be applied as ordered rack cards on the selected track. Each optional resource-backed card can run independently for the selected allele. Selection automatically requests missing active-device results and shows stable cached results first; unapplied, bypassed, or unavailable devices are excluded from the current evidence view. **Track Profiler** is currently host orchestration over that same allele-level API: it walks active edit blocks, evaluates edited and source alleles with applied Evidence devices, reuses duplicate requests within the run, and progressively fills the session-only Track Meter store. It is not yet a separately installable device or a joint-effect protocol. Mutation Generator and both Genome Optimizer modes target explicit selected VCF positions; Saturation requires active SnpEff and host-evaluates three non-REF candidates per canonical SNV. Both devices are available only to editable tracks and must be applied explicitly. Randomizer is currently the Mutation Generator's only mode; its request includes amount, seed, substitution pattern, and transition probability, and its plan reports transition/transversion counts plus explicit exclusions.
+
+The Device Browser groups available devices by function: **Edit**, **Evidence**, and **Analyze**. Mutation Generator is Edit; SnpEff, dbNSFP, ClinVar, and COSMIC are Evidence; and Genome Optimizer is Analyze. There is no separate Score group because the objective-driven operation is an analysis. The per-track Device Rack is different: it contains only applied device instances in order. Group membership is presentation metadata, not an implied biological pipeline, audio-style signal chain, or replacement for the lower-level protocol capability declared by a manifest.
+
+The file-level DGW Starter project template applies Mutation Generator, all four Evidence devices, and Genome Optimizer in functional order; the Empty project template applies none. Neither is a Device Browser action. Applied Edit and Analyze devices remain inert until their explicit Preview/Apply or Run action. Duplicating a track copies its applied device IDs and session bypass state. Applied-chain and device-setting persistence still require a project-schema extension.
+
+Scoring has two independent control axes:
+
+- the selected objective explicitly includes or excludes named device outputs; and
+- the user can activate or bypass an installed device.
+
+An included, applied, active device contributes according to its configured weight. An included device that is bypassed or not applied has effective weight `0`, but DGW retains its source data and configured weight and distinguishes **Bypassed** from **Not in rack**. An excluded device can still run and display results when applied. Unknown and newly installed devices default to unapplied and excluded from existing objectives, so installation cannot silently change a score. Unavailable and failed devices must remain distinguishable from deliberate bypass. Full persistence of these states and their run provenance remains future work.
 
 ## Community-device path
 

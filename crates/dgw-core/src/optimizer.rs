@@ -1,13 +1,16 @@
 use crate::error::{DgwError, Result};
-use crate::model::{EditKind, EffectiveVariant, FocusContext, Haplotype, VariantKey};
+use crate::model::{
+    EditKind, EffectiveVariant, EvidenceResult, EvidenceStatus, FocusContext, Haplotype, VariantKey,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A run can propose only a small, reviewable set of edit operations.
 pub const MAX_OPTIMIZER_EDITS: u32 = 100;
+pub const MAX_SATURATION_POSITIONS: usize = 100;
 
-pub const ADDITIVE_SCORE_LIMITATION: &str = "Scores are additive sums of independently scored allele copies in the focused region. Interactions among nearby variants, phase-dependent combined consequences, penetrance, and whole-genome effects are not modeled.";
+pub const ADDITIVE_SCORE_LIMITATION: &str = "Scores are additive sums of independently scored allele copies in the analyzed scope. Interactions among nearby variants, phase-dependent combined consequences, penetrance, and whole-genome effects are not modeled.";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +26,14 @@ pub enum OptimizerDirection {
     Maximize,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum OptimizerMode {
+    #[default]
+    Conservative,
+    Saturation,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerWeights {
@@ -35,7 +46,7 @@ impl Default for OptimizerWeights {
     fn default() -> Self {
         Self {
             impact: 1.0,
-            clinvar: 1.0,
+            clinvar: 0.0,
             source_evidence: 0.25,
         }
     }
@@ -44,11 +55,17 @@ impl Default for OptimizerWeights {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerRequest {
+    #[serde(default)]
+    pub mode: OptimizerMode,
     pub objective: OptimizerObjective,
     pub direction: OptimizerDirection,
     pub max_edits: u32,
     #[serde(default)]
     pub weights: OptimizerWeights,
+    #[serde(default)]
+    pub selected_variants: Vec<VariantKey>,
+    #[serde(default)]
+    pub evidence_device_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -102,6 +119,42 @@ pub struct OptimizerExclusion {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct SaturationAlleleInput {
+    pub source_variant: VariantKey,
+    pub candidate_variant: VariantKey,
+    pub snpeff: EvidenceResult,
+    pub clinvar: EvidenceResult,
+    pub evidence_statuses: BTreeMap<String, String>,
+    pub exact_evidence_sources: Vec<String>,
+}
+
+/// Exact-allele evidence prepared by the host from the pinned live devices.
+/// Imported VCF INFO is deliberately absent from this contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizerAlleleEvidenceInput {
+    pub variant: VariantKey,
+    pub snpeff: EvidenceResult,
+    pub clinvar: EvidenceResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizerCandidateComparison {
+    pub source_variant: VariantKey,
+    pub candidate_variant: VariantKey,
+    pub current: bool,
+    pub selected: bool,
+    pub comparable: bool,
+    pub evidence: OptimizerEvidence,
+    pub score_components: OptimizerScoreComponents,
+    pub evidence_statuses: BTreeMap<String, String>,
+    pub exact_evidence_sources: Vec<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct OptimizerPlan {
     pub request: OptimizerRequest,
     pub focus: FocusContext,
@@ -112,6 +165,8 @@ pub struct OptimizerPlan {
     pub considered_variants: u32,
     pub considered_source_variants: u32,
     pub eligible_candidates: u32,
+    #[serde(default)]
+    pub candidate_comparisons: Vec<OptimizerCandidateComparison>,
     pub no_op_reason: Option<String>,
     pub score_description: String,
     pub limitation: String,
@@ -122,6 +177,14 @@ pub struct OptimizerPlan {
 struct Candidate {
     proposal: OptimizerProposal,
     improvement: f64,
+}
+
+#[derive(Debug)]
+struct SaturationGroup {
+    source_variant: VariantKey,
+    proposals: Vec<OptimizerProposal>,
+    improvement: f64,
+    score_delta: f64,
 }
 
 /// Build a bounded, non-mutating edit plan for a focused region.
@@ -135,9 +198,29 @@ pub fn plan_optimizer(
     focus: &FocusContext,
     request: &OptimizerRequest,
 ) -> Result<OptimizerPlan> {
+    plan_optimizer_with_evidence(current, source, focus, request, &[])
+}
+
+pub fn plan_optimizer_with_evidence(
+    current: &[EffectiveVariant],
+    source: &[EffectiveVariant],
+    focus: &FocusContext,
+    request: &OptimizerRequest,
+    evaluated_alleles: &[OptimizerAlleleEvidenceInput],
+) -> Result<OptimizerPlan> {
     validate_request(focus, request)?;
+    if request.mode != OptimizerMode::Conservative {
+        return Err(DgwError::InvalidEdit(
+            "saturation mode requires evaluated candidate alleles".into(),
+        ));
+    }
     validate_unique_keys("current", current)?;
     validate_unique_keys("source", source)?;
+    let evidence_by_key: BTreeMap<&VariantKey, &OptimizerAlleleEvidenceInput> = evaluated_alleles
+        .iter()
+        .map(|evidence| (&evidence.variant, evidence))
+        .collect();
+    validate_live_evidence(current, source, request, &evidence_by_key)?;
 
     let source_by_key: BTreeMap<&VariantKey, &EffectiveVariant> = source
         .iter()
@@ -151,13 +234,13 @@ pub fn plan_optimizer(
 
     let focused_current: Vec<&EffectiveVariant> = current
         .iter()
-        .filter(|variant| is_in_focus(&variant.key, focus))
+        .filter(|variant| is_selected(&variant.key, focus, request))
         .collect();
     let considered_source_variants = source
         .iter()
-        .filter(|variant| is_in_focus(&variant.key, focus))
+        .filter(|variant| is_selected(&variant.key, focus, request))
         .count() as u32;
-    let score_before = score_state(&focused_current, &source_keys, request);
+    let score_before = score_state(&focused_current, &source_keys, request, &evidence_by_key);
     let mut candidates = Vec::new();
     let mut exclusions = Vec::new();
 
@@ -167,6 +250,7 @@ pub fn plan_optimizer(
                 &focused_current,
                 &source_by_key,
                 request,
+                &evidence_by_key,
                 &mut candidates,
                 &mut exclusions,
             );
@@ -178,6 +262,7 @@ pub fn plan_optimizer(
                 &current_by_key,
                 focus,
                 request,
+                &evidence_by_key,
                 &mut candidates,
                 &mut exclusions,
             );
@@ -214,11 +299,16 @@ pub fn plan_optimizer(
         considered_variants: focused_current.len() as u32,
         considered_source_variants,
         eligible_candidates,
+        candidate_comparisons: Vec::new(),
         no_op_reason,
-        score_description: score_description(request.objective).into(),
+        score_description: score_description(request).into(),
         limitation: ADDITIVE_SCORE_LIMITATION.into(),
         constraints: vec![
-            "Candidates are restricted to exact alleles present in the original source input."
+            "Conservative candidates are restricted to exact alleles present in the original source input. Saturation candidates are exact non-reference SNV bases evaluated live."
+                .into(),
+            "Imported VCF annotations are ignored; scores use only exact-allele evidence from the pinned devices."
+                .into(),
+            "ClinVar Pathogenic/Likely pathogenic exact matches are never eligible optimizer targets."
                 .into(),
             format!(
                 "One run emits at most {} reversible edit operations.",
@@ -227,6 +317,359 @@ pub fn plan_optimizer(
             "Unphased source alleles remain unphased in proposed edits.".into(),
         ],
     })
+}
+
+/// Compare all three non-reference SNV alleles at each selected active position.
+/// Candidate evidence is prepared by the host so the pure planner remains
+/// deterministic and does not execute external tools.
+pub fn plan_saturation_optimizer(
+    current: &[EffectiveVariant],
+    focus: &FocusContext,
+    request: &OptimizerRequest,
+    evaluated_candidates: &[SaturationAlleleInput],
+) -> Result<OptimizerPlan> {
+    validate_request(focus, request)?;
+    if request.mode != OptimizerMode::Saturation {
+        return Err(DgwError::InvalidEdit(
+            "saturation planning requires saturation mode".into(),
+        ));
+    }
+    validate_unique_keys("current", current)?;
+
+    let current_by_key: BTreeMap<&VariantKey, &EffectiveVariant> = current
+        .iter()
+        .map(|variant| (&variant.key, variant))
+        .collect();
+    let mut selected = BTreeSet::new();
+    for key in &request.selected_variants {
+        if !selected.insert(key.clone()) {
+            return Err(DgwError::InvalidEdit(format!(
+                "saturation selection contains duplicate allele {}",
+                key.display()
+            )));
+        }
+    }
+    let mut inputs_by_source: BTreeMap<&VariantKey, Vec<&SaturationAlleleInput>> = BTreeMap::new();
+    for input in evaluated_candidates {
+        inputs_by_source
+            .entry(&input.source_variant)
+            .or_default()
+            .push(input);
+    }
+
+    let mut comparisons = Vec::new();
+    let mut groups = Vec::new();
+    let mut exclusions = Vec::new();
+    let mut score_before = 0.0;
+
+    for selected_key in &request.selected_variants {
+        let Some(current_variant) = current_by_key.get(selected_key).copied() else {
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                None,
+                "The selected allele is no longer active on this track.",
+            ));
+            continue;
+        };
+        let haplotypes = active_haplotypes(current_variant);
+        if haplotypes.is_empty() {
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                None,
+                "The selected allele has no active chromosome-copy placement.",
+            ));
+            continue;
+        }
+        if !is_canonical_snv(selected_key) {
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                haplotypes.first().copied(),
+                "Saturation mode currently supports canonical A/C/G/T SNVs only.",
+            ));
+            continue;
+        }
+        let inputs = inputs_by_source
+            .get(selected_key)
+            .cloned()
+            .unwrap_or_default();
+        let mut unique_alternates = BTreeSet::new();
+        let valid_inputs: Vec<&SaturationAlleleInput> = inputs
+            .into_iter()
+            .filter(|input| {
+                let key = &input.candidate_variant;
+                key.assembly == selected_key.assembly
+                    && key.contig == selected_key.contig
+                    && key.position == selected_key.position
+                    && key.reference.eq_ignore_ascii_case(&selected_key.reference)
+                    && is_canonical_snv(key)
+                    && unique_alternates.insert(key.alternate.to_ascii_uppercase())
+            })
+            .collect();
+        if valid_inputs.len() != 3 {
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                haplotypes.first().copied(),
+                "The host did not provide all three unique non-REF SNV candidates.",
+            ));
+            continue;
+        }
+
+        let mut local = Vec::with_capacity(3);
+        for input in valid_inputs {
+            if matches!(
+                input.snpeff.status,
+                EvidenceStatus::Error
+                    | EvidenceStatus::ResourceUnavailable
+                    | EvidenceStatus::NotComputed
+            ) {
+                return Err(DgwError::InvalidEdit(format!(
+                    "SnpEff could not evaluate saturation candidate {} ({:?})",
+                    input.candidate_variant.display(),
+                    input.snpeff.status
+                )));
+            }
+            ensure_completed_clinvar(&input.candidate_variant, &input.clinvar)?;
+            let (evidence, score_components) =
+                score_live_evidence(Some(&input.snpeff), Some(&input.clinvar), false, request);
+            let snpeff_found = input.snpeff.status == EvidenceStatus::Found;
+            let comparable = snpeff_found && evidence.impact_label.is_some();
+            let guarded = clinvar_is_pathogenic_or_likely_pathogenic(&input.clinvar);
+            local.push((input, evidence, score_components, comparable, guarded));
+        }
+        if local.iter().any(|(_, _, _, comparable, _)| !comparable) {
+            for (input, evidence, score_components, comparable, guarded) in local {
+                comparisons.push(OptimizerCandidateComparison {
+                    source_variant: selected_key.clone(),
+                    candidate_variant: input.candidate_variant.clone(),
+                    current: input
+                        .candidate_variant
+                        .alternate
+                        .eq_ignore_ascii_case(&selected_key.alternate),
+                    selected: false,
+                    comparable,
+                    evidence,
+                    score_components,
+                    evidence_statuses: input.evidence_statuses.clone(),
+                    exact_evidence_sources: input.exact_evidence_sources.clone(),
+                    note: if !comparable {
+                        Some(
+                            "SnpEff did not return a recognized comparable impact category.".into(),
+                        )
+                    } else if guarded {
+                        Some(
+                            "Excluded by the fixed ClinVar Pathogenic/Likely pathogenic guard."
+                                .into(),
+                        )
+                    } else {
+                        None
+                    },
+                });
+            }
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                haplotypes.first().copied(),
+                "At least one possible ALT lacks a recognized SnpEff impact, so this position cannot be compared safely.",
+            ));
+            continue;
+        }
+
+        let current_index = local
+            .iter()
+            .position(|(input, _, _, _, _)| {
+                input
+                    .candidate_variant
+                    .alternate
+                    .eq_ignore_ascii_case(&selected_key.alternate)
+            })
+            .ok_or_else(|| {
+                DgwError::InvalidEdit(format!(
+                    "saturation candidates omit the current ALT for {}",
+                    selected_key.display()
+                ))
+            })?;
+        let winner_index = local
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| !candidate.4)
+            .min_by(|(left_index, left), (right_index, right)| {
+                compare_saturation_scores(
+                    request.direction,
+                    left.2.objective_score,
+                    right.2.objective_score,
+                    *left_index == current_index,
+                    *right_index == current_index,
+                    &left.0.candidate_variant,
+                    &right.0.candidate_variant,
+                )
+            })
+            .map(|(index, _)| index)
+            .ok_or_else(|| {
+                DgwError::InvalidEdit(format!(
+                    "every saturation candidate for {} is excluded by the fixed ClinVar guard",
+                    selected_key.display()
+                ))
+            })?;
+        let before_per_copy = local[current_index].2.objective_score;
+        let after_per_copy = local[winner_index].2.objective_score;
+        let copies = haplotypes.len() as f64;
+        score_before += before_per_copy * copies;
+
+        for (index, (input, evidence, score_components, comparable, guarded)) in
+            local.iter().enumerate()
+        {
+            comparisons.push(OptimizerCandidateComparison {
+                source_variant: selected_key.clone(),
+                candidate_variant: input.candidate_variant.clone(),
+                current: index == current_index,
+                selected: index == winner_index && !*guarded,
+                comparable: *comparable,
+                evidence: evidence.clone(),
+                score_components: score_components.clone(),
+                evidence_statuses: input.evidence_statuses.clone(),
+                exact_evidence_sources: input.exact_evidence_sources.clone(),
+                note: (*guarded).then(|| {
+                    "Excluded by the fixed ClinVar Pathogenic/Likely pathogenic guard.".into()
+                }),
+            });
+        }
+
+        let improvement_per_copy = match request.direction {
+            OptimizerDirection::Minimize => before_per_copy - after_per_copy,
+            OptimizerDirection::Maximize => after_per_copy - before_per_copy,
+        };
+        if winner_index == current_index || improvement_per_copy <= 0.0 {
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                haplotypes.first().copied(),
+                "The current ALT already has the best comparable score at this position.",
+            ));
+            continue;
+        }
+
+        let winner = &local[winner_index];
+        let score_delta_per_copy = after_per_copy - before_per_copy;
+        let proposals = haplotypes
+            .into_iter()
+            .map(|haplotype| OptimizerProposal {
+                source_variant: selected_key.clone(),
+                haplotype,
+                edit: EditKind::SetAllele {
+                    key: winner.0.candidate_variant.clone(),
+                    source_key: Some(selected_key.clone()),
+                },
+                evidence: winner.1.clone(),
+                score_components: winner.2.clone(),
+                replaced_score_components: Some(local[current_index].2.clone()),
+                score_before_contribution: before_per_copy,
+                score_after_contribution: after_per_copy,
+                score_delta: score_delta_per_copy,
+                rationale: format!(
+                    "Choose the {}-scoring non-reference SNV ALT from the complete three-base saturation set at this position.",
+                    if request.direction == OptimizerDirection::Minimize { "lowest" } else { "highest" }
+                ),
+            })
+            .collect();
+        groups.push(SaturationGroup {
+            source_variant: selected_key.clone(),
+            proposals,
+            improvement: improvement_per_copy * copies,
+            score_delta: score_delta_per_copy * copies,
+        });
+    }
+
+    groups.sort_by(|left, right| {
+        right
+            .improvement
+            .partial_cmp(&left.improvement)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.source_variant.cmp(&right.source_variant))
+    });
+    let eligible_candidates = comparisons
+        .iter()
+        .filter(|comparison| comparison.comparable)
+        .count() as u32;
+    let mut proposals = Vec::new();
+    let mut applied_delta = 0.0;
+    for group in groups.into_iter().take(request.max_edits as usize) {
+        applied_delta += group.score_delta;
+        proposals.extend(group.proposals);
+    }
+    let no_op_reason = proposals.is_empty().then(|| {
+        if comparisons.is_empty() {
+            "No selected positions had a complete comparable saturation set; review the exclusions."
+                .into()
+        } else {
+            "The current ALTs already have the best comparable scores, or the edit limit excludes the available genotype changes."
+                .into()
+        }
+    });
+
+    Ok(OptimizerPlan {
+        request: request.clone(),
+        focus: focus.clone(),
+        proposals,
+        exclusions,
+        score_before: clean_zero(score_before),
+        score_after: clean_zero(score_before + applied_delta),
+        considered_variants: selected.len() as u32,
+        considered_source_variants: selected.len() as u32,
+        eligible_candidates,
+        candidate_comparisons: comparisons,
+        no_op_reason,
+        score_description: score_description(request).into(),
+        limitation: ADDITIVE_SCORE_LIMITATION.into(),
+        constraints: vec![
+            "Candidates are restricted to the three non-reference SNV bases at each explicitly selected imported VCF position, across any chromosome.".into(),
+            "Only normalized SnpEff impact contributes to the comparable saturation score; database absence never lowers the score.".into(),
+            "All active chromosome-copy placements at a position are changed together; a bounded run never emits a partial homozygous replacement.".into(),
+            format!("One run changes at most {} selected positions; a homozygous position may emit two internal mutation blocks.", request.max_edits),
+        ],
+    })
+}
+
+fn compare_saturation_scores(
+    direction: OptimizerDirection,
+    left_score: f64,
+    right_score: f64,
+    left_current: bool,
+    right_current: bool,
+    left_key: &VariantKey,
+    right_key: &VariantKey,
+) -> Ordering {
+    let score_order = match direction {
+        OptimizerDirection::Minimize => left_score.partial_cmp(&right_score),
+        OptimizerDirection::Maximize => right_score.partial_cmp(&left_score),
+    }
+    .unwrap_or(Ordering::Equal);
+    score_order
+        .then_with(|| right_current.cmp(&left_current))
+        .then_with(|| left_key.cmp(right_key))
+}
+
+fn saturation_exclusion(
+    source_variant: &VariantKey,
+    haplotype: Option<Haplotype>,
+    reason: &str,
+) -> OptimizerExclusion {
+    OptimizerExclusion {
+        source_variant: source_variant.clone(),
+        haplotype: haplotype.unwrap_or(Haplotype::Unphased),
+        reason: reason.into(),
+    }
+}
+
+fn is_canonical_snv(key: &VariantKey) -> bool {
+    key.reference.len() == 1
+        && key.alternate.len() == 1
+        && matches!(
+            key.reference.as_bytes()[0].to_ascii_uppercase(),
+            b'A' | b'C' | b'G' | b'T'
+        )
+        && matches!(
+            key.alternate.as_bytes()[0].to_ascii_uppercase(),
+            b'A' | b'C' | b'G' | b'T'
+        )
+        && !key.reference.eq_ignore_ascii_case(&key.alternate)
 }
 
 fn validate_request(focus: &FocusContext, request: &OptimizerRequest) -> Result<()> {
@@ -244,6 +687,21 @@ fn validate_request(focus: &FocusContext, request: &OptimizerRequest) -> Result<
         return Err(DgwError::InvalidEdit(format!(
             "optimizer max_edits must be between 1 and {MAX_OPTIMIZER_EDITS}"
         )));
+    }
+    if request.selected_variants.len() > MAX_SATURATION_POSITIONS {
+        return Err(DgwError::InvalidEdit(format!(
+            "optimizer accepts at most {MAX_SATURATION_POSITIONS} selected positions per run"
+        )));
+    }
+    let mut selected = BTreeSet::new();
+    if request
+        .selected_variants
+        .iter()
+        .any(|variant| !selected.insert(variant.stable_key()))
+    {
+        return Err(DgwError::InvalidEdit(
+            "optimizer selection contains duplicate alleles".into(),
+        ));
     }
     for (name, weight) in [
         ("impact", request.weights.impact),
@@ -265,6 +723,126 @@ fn validate_request(focus: &FocusContext, request: &OptimizerRequest) -> Result<
             "predicted impact burden requires at least one positive weight".into(),
         ));
     }
+    if request.mode == OptimizerMode::Conservative
+        && request.objective == OptimizerObjective::PredictedImpactBurden
+    {
+        return Err(DgwError::InvalidEdit(
+            "weighted biological impact cannot treat REF as a zero-burden allele; use Saturation to compare live-evaluated ALT candidates, or use ALT-copy count explicitly as a reference-distance objective"
+                .into(),
+        ));
+    }
+    if request.weights.clinvar != 0.0 {
+        return Err(DgwError::InvalidEdit(
+            "ClinVar is a fixed optimizer guard, not a burden weight; set its legacy weight to 0"
+                .into(),
+        ));
+    }
+    if request.mode == OptimizerMode::Saturation {
+        if request.objective != OptimizerObjective::PredictedImpactBurden {
+            return Err(DgwError::InvalidEdit(
+                "saturation mode requires the weighted annotation burden objective".into(),
+            ));
+        }
+        if request.selected_variants.is_empty() {
+            return Err(DgwError::InvalidEdit(
+                "select one or more active SNV positions for saturation mode".into(),
+            ));
+        }
+        if request.weights.source_evidence != 0.0 {
+            return Err(DgwError::InvalidEdit(
+                "saturation mode uses comparable SnpEff impact only; ClinVar absence and source membership cannot contribute to its score".into(),
+            ));
+        }
+        if request.weights.impact <= 0.0 {
+            return Err(DgwError::InvalidEdit(
+                "saturation mode requires a positive SnpEff impact weight".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_live_evidence<'a>(
+    current: &[EffectiveVariant],
+    source: &[EffectiveVariant],
+    request: &OptimizerRequest,
+    evidence_by_key: &BTreeMap<&'a VariantKey, &'a OptimizerAlleleEvidenceInput>,
+) -> Result<()> {
+    let selected_current: Vec<&EffectiveVariant> = current
+        .iter()
+        .filter(|variant| {
+            request.selected_variants.is_empty() || selection_contains_locus(request, &variant.key)
+        })
+        .collect();
+    let selected_source: Vec<&EffectiveVariant> = source
+        .iter()
+        .filter(|variant| {
+            request.selected_variants.is_empty() || selection_contains_locus(request, &variant.key)
+        })
+        .collect();
+    if request.objective == OptimizerObjective::PredictedImpactBurden
+        && request.weights.impact > 0.0
+    {
+        let mut required = BTreeSet::new();
+        for variant in selected_current.iter().chain(selected_source.iter()) {
+            if required.insert(variant.key.stable_key()) {
+                let input = evidence_by_key.get(&variant.key).copied().ok_or_else(|| {
+                    DgwError::InvalidEdit(format!(
+                        "live SnpEff evidence is missing for {}",
+                        variant.key.display()
+                    ))
+                })?;
+                ensure_comparable_snpeff(&variant.key, &input.snpeff)?;
+            }
+        }
+    }
+    if request.direction == OptimizerDirection::Maximize {
+        for variant in selected_source {
+            if current.iter().any(|candidate| {
+                candidate.key == variant.key && !active_haplotypes(candidate).is_empty()
+            }) {
+                continue;
+            }
+            let input = evidence_by_key.get(&variant.key).copied().ok_or_else(|| {
+                DgwError::InvalidEdit(format!(
+                    "the fixed ClinVar guard has not evaluated {}",
+                    variant.key.display()
+                ))
+            })?;
+            ensure_completed_clinvar(&variant.key, &input.clinvar)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_comparable_snpeff(key: &VariantKey, evidence: &EvidenceResult) -> Result<()> {
+    if evidence.status != EvidenceStatus::Found {
+        return Err(DgwError::InvalidEdit(format!(
+            "SnpEff did not return comparable exact-allele evidence for {} ({:?})",
+            key.display(),
+            evidence.status
+        )));
+    }
+    if impact_signal_from_evidence(evidence).1.is_none() {
+        return Err(DgwError::InvalidEdit(format!(
+            "SnpEff returned no recognized impact category for {}",
+            key.display()
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_completed_clinvar(key: &VariantKey, evidence: &EvidenceResult) -> Result<()> {
+    if !matches!(
+        evidence.status,
+        EvidenceStatus::Found | EvidenceStatus::NoExactMatch
+    ) {
+        return Err(DgwError::InvalidEdit(format!(
+            "the fixed ClinVar guard could not evaluate {} ({:?})",
+            key.display(),
+            evidence.status
+        )));
+    }
     Ok(())
 }
 
@@ -285,6 +863,7 @@ fn collect_minimize_candidates(
     current: &[&EffectiveVariant],
     source_by_key: &BTreeMap<&VariantKey, &EffectiveVariant>,
     request: &OptimizerRequest,
+    evidence_by_key: &BTreeMap<&VariantKey, &OptimizerAlleleEvidenceInput>,
     candidates: &mut Vec<Candidate>,
     exclusions: &mut Vec<OptimizerExclusion>,
 ) {
@@ -292,7 +871,7 @@ fn collect_minimize_candidates(
         if !source_by_key.contains_key(&variant.key) {
             continue;
         }
-        let (evidence, components) = score_variant(variant, true, request);
+        let (evidence, components) = score_variant(&variant.key, true, request, evidence_by_key);
         for haplotype in active_haplotypes(variant) {
             if components.objective_score <= 0.0 {
                 exclusions.push(OptimizerExclusion {
@@ -334,13 +913,14 @@ fn collect_maximize_candidates(
     current_by_key: &BTreeMap<&VariantKey, &EffectiveVariant>,
     focus: &FocusContext,
     request: &OptimizerRequest,
+    evidence_by_key: &BTreeMap<&VariantKey, &OptimizerAlleleEvidenceInput>,
     candidates: &mut Vec<Candidate>,
     exclusions: &mut Vec<OptimizerExclusion>,
 ) {
     let source_keys: BTreeSet<&VariantKey> = source.iter().map(|variant| &variant.key).collect();
     for source_variant in source
         .iter()
-        .filter(|variant| is_in_focus(&variant.key, focus))
+        .filter(|variant| is_selected(&variant.key, focus, request))
     {
         // Reintroduction is deliberately allele-level. A partially present
         // genotype is not rewritten because its copy/phase intent is ambiguous.
@@ -351,7 +931,23 @@ fn collect_maximize_candidates(
             continue;
         }
 
-        let (evidence, components) = score_variant(source_variant, true, request);
+        let candidate_evidence = evidence_by_key
+            .get(&source_variant.key)
+            .copied()
+            .expect("maximize candidates were validated for exact ClinVar evidence");
+        if clinvar_is_pathogenic_or_likely_pathogenic(&candidate_evidence.clinvar) {
+            for haplotype in active_haplotypes(source_variant) {
+                exclusions.push(OptimizerExclusion {
+                    source_variant: source_variant.key.clone(),
+                    haplotype,
+                    reason: "ClinVar reports an exact Pathogenic/Likely pathogenic match; the fixed optimizer guard excludes this target."
+                        .into(),
+                });
+            }
+            continue;
+        }
+        let (evidence, components) =
+            score_variant(&source_variant.key, true, request, evidence_by_key);
         for haplotype in active_haplotypes(source_variant) {
             let replacements: Vec<&EffectiveVariant> = current
                 .iter()
@@ -388,7 +984,13 @@ fn collect_maximize_candidates(
             }
 
             let replaced_components = replacement.map(|variant| {
-                score_variant(variant, source_keys.contains(&variant.key), request).1
+                score_variant(
+                    &variant.key,
+                    source_keys.contains(&variant.key),
+                    request,
+                    evidence_by_key,
+                )
+                .1
             });
             let before = replaced_components
                 .as_ref()
@@ -459,6 +1061,23 @@ fn is_in_focus(key: &VariantKey, focus: &FocusContext) -> bool {
     key.contig == focus.contig && key.position <= focus.end && key.end() >= focus.start
 }
 
+fn selection_contains_locus(request: &OptimizerRequest, key: &VariantKey) -> bool {
+    request.selected_variants.iter().any(|selected| {
+        selected.assembly == key.assembly
+            && selected.contig == key.contig
+            && selected.position == key.position
+            && selected.reference.eq_ignore_ascii_case(&key.reference)
+    })
+}
+
+fn is_selected(key: &VariantKey, focus: &FocusContext, request: &OptimizerRequest) -> bool {
+    if request.selected_variants.is_empty() {
+        is_in_focus(key, focus)
+    } else {
+        selection_contains_locus(request, key)
+    }
+}
+
 fn active_haplotypes(variant: &EffectiveVariant) -> Vec<Haplotype> {
     let mut haplotypes = Vec::with_capacity(3);
     if variant.haplotype1_alt {
@@ -485,25 +1104,51 @@ fn score_state(
     variants: &[&EffectiveVariant],
     source_keys: &BTreeSet<&VariantKey>,
     request: &OptimizerRequest,
+    evidence_by_key: &BTreeMap<&VariantKey, &OptimizerAlleleEvidenceInput>,
 ) -> f64 {
     variants
         .iter()
         .map(|variant| {
             let copies = active_haplotypes(variant).len() as f64;
-            let (_, components) =
-                score_variant(variant, source_keys.contains(&variant.key), request);
+            let (_, components) = score_variant(
+                &variant.key,
+                source_keys.contains(&variant.key),
+                request,
+                evidence_by_key,
+            );
             copies * components.objective_score
         })
         .sum()
 }
 
 fn score_variant(
-    variant: &EffectiveVariant,
+    key: &VariantKey,
+    exact_source_allele: bool,
+    request: &OptimizerRequest,
+    evidence_by_key: &BTreeMap<&VariantKey, &OptimizerAlleleEvidenceInput>,
+) -> (OptimizerEvidence, OptimizerScoreComponents) {
+    let input = evidence_by_key.get(key).copied();
+    score_live_evidence(
+        input.map(|value| &value.snpeff),
+        input.map(|value| &value.clinvar),
+        exact_source_allele,
+        request,
+    )
+}
+
+fn score_live_evidence(
+    snpeff: Option<&EvidenceResult>,
+    clinvar: Option<&EvidenceResult>,
     exact_source_allele: bool,
     request: &OptimizerRequest,
 ) -> (OptimizerEvidence, OptimizerScoreComponents) {
-    let (impact_signal, impact_label) = impact_signal(&variant.source_info);
-    let (clinvar_signal, clinvar_classification) = clinvar_signal(&variant.source_info);
+    let (impact_signal, impact_label) = snpeff
+        .map(impact_signal_from_evidence)
+        .unwrap_or((0.0, None));
+    let clinvar_classification = clinvar.and_then(clinvar_classification);
+    // ClinVar is deliberately not a numeric burden term. It is enforced as a
+    // fixed candidate guard by the planners.
+    let clinvar_signal = 0.0;
     let source_evidence_signal = f64::from(exact_source_allele);
     let evidence = OptimizerEvidence {
         impact_signal,
@@ -534,16 +1179,17 @@ fn score_variant(
     )
 }
 
-fn impact_signal(info: &BTreeMap<String, String>) -> (f64, Option<String>) {
-    let direct = info_value(info, &["IMPACT", "ANNOTATION_IMPACT"])
-        .into_iter()
-        .flat_map(split_labels);
-    let ann = info_value(info, &["ANN"])
-        .into_iter()
-        .flat_map(|value| value.split(','))
-        .filter_map(|annotation| annotation.split('|').nth(2));
-    direct
-        .chain(ann)
+fn impact_signal_from_evidence(evidence: &EvidenceResult) -> (f64, Option<String>) {
+    evidence
+        .records
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("impact")
+                .or_else(|| record.get("IMPACT"))
+                .map(String::as_str)
+        })
+        .flat_map(split_labels)
         .filter_map(|label| impact_label_score(label).map(|score| (score, label)))
         .max_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(Ordering::Equal))
         .map(|(score, label)| (score, Some(label.trim().to_ascii_uppercase())))
@@ -560,32 +1206,35 @@ fn impact_label_score(label: &str) -> Option<f64> {
     }
 }
 
-fn clinvar_signal(info: &BTreeMap<String, String>) -> (f64, Option<String>) {
-    let Some(classification) = info_value(info, &["CLNSIG", "CLINVAR_CLNSIG"]) else {
-        return (0.0, None);
-    };
-    let score = split_labels(classification)
-        .filter_map(clinvar_label_score)
-        .fold(0.0_f64, f64::max);
-    (score, Some(classification.to_owned()))
+fn clinvar_classification(evidence: &EvidenceResult) -> Option<String> {
+    let values: Vec<String> = evidence
+        .records
+        .iter()
+        .filter_map(|record| {
+            record
+                .iter()
+                .find(|(key, _)| {
+                    key.eq_ignore_ascii_case("CLNSIG") || key.eq_ignore_ascii_case("CLINVAR_CLNSIG")
+                })
+                .map(|(_, value)| value.clone())
+        })
+        .collect();
+    (!values.is_empty()).then(|| values.join("|"))
 }
 
-fn clinvar_label_score(label: &str) -> Option<f64> {
-    let normalized = label.trim().replace([' ', '-'], "_").to_ascii_uppercase();
-    match normalized.as_str() {
-        "PATHOGENIC" => Some(1.0),
-        "LIKELY_PATHOGENIC" => Some(0.75),
-        "UNCERTAIN_SIGNIFICANCE" | "CONFLICTING_CLASSIFICATIONS_OF_PATHOGENICITY" => Some(0.25),
-        "BENIGN" | "LIKELY_BENIGN" | "BENIGN_LIKELY_BENIGN" => Some(0.0),
-        _ => None,
-    }
-}
-
-fn info_value<'a>(info: &'a BTreeMap<String, String>, names: &[&str]) -> Option<&'a str> {
-    info.iter()
-        .find(|(key, _)| names.iter().any(|name| key.eq_ignore_ascii_case(name)))
-        .map(|(_, value)| value.as_str())
-        .filter(|value| !value.is_empty() && *value != ".")
+fn clinvar_is_pathogenic_or_likely_pathogenic(evidence: &EvidenceResult) -> bool {
+    clinvar_classification(evidence).is_some_and(|classification| {
+        split_labels(&classification).any(|label| {
+            matches!(
+                label
+                    .trim()
+                    .replace([' ', '-'], "_")
+                    .to_ascii_uppercase()
+                    .as_str(),
+                "PATHOGENIC" | "LIKELY_PATHOGENIC"
+            )
+        })
+    })
 }
 
 fn split_labels(value: &str) -> impl Iterator<Item = &str> {
@@ -623,13 +1272,16 @@ fn clean_zero(value: f64) -> f64 {
     }
 }
 
-fn score_description(objective: OptimizerObjective) -> &'static str {
-    match objective {
+fn score_description(request: &OptimizerRequest) -> &'static str {
+    if request.mode == OptimizerMode::Saturation {
+        return "Comparable normalized SnpEff impact per allele copy across all non-reference SNV bases at the selected positions.";
+    }
+    match request.objective {
         OptimizerObjective::AlternateAlleleBurden => {
-            "Number of alternate allele copies in the focused region."
+            "Number of alternate allele copies in the focused region; this measures distance from the reference, not biological burden."
         }
         OptimizerObjective::PredictedImpactBurden => {
-            "Weighted sum of normalized SnpEff impact, recognized ClinVar classification, and exact source-membership signals per allele copy."
+            "Comparable normalized SnpEff molecular-impact proxy across live-evaluated non-reference alleles; ClinVar is a fixed exclusion guard, not a score weight."
         }
     }
 }
@@ -717,10 +1369,110 @@ mod tests {
 
     fn request(objective: OptimizerObjective, direction: OptimizerDirection) -> OptimizerRequest {
         OptimizerRequest {
+            mode: OptimizerMode::Conservative,
             objective,
             direction,
             max_edits: 10,
             weights: OptimizerWeights::default(),
+            selected_variants: Vec::new(),
+            evidence_device_ids: Vec::new(),
+        }
+    }
+
+    fn saturation_request(source: &VariantKey, direction: OptimizerDirection) -> OptimizerRequest {
+        OptimizerRequest {
+            mode: OptimizerMode::Saturation,
+            objective: OptimizerObjective::PredictedImpactBurden,
+            direction,
+            max_edits: 10,
+            weights: OptimizerWeights {
+                impact: 1.0,
+                clinvar: 0.0,
+                source_evidence: 0.0,
+            },
+            selected_variants: vec![source.clone()],
+            evidence_device_ids: vec![
+                "org.dgw.builtin.snpeff".into(),
+                "org.dgw.builtin.clinvar".into(),
+            ],
+        }
+    }
+
+    fn saturation_candidate(
+        source: &VariantKey,
+        alternate: &str,
+        impact: Option<&str>,
+    ) -> SaturationAlleleInput {
+        let snpeff = EvidenceResult {
+            source: "SnpEff".into(),
+            status: if impact.is_some() {
+                EvidenceStatus::Found
+            } else {
+                EvidenceStatus::NoExactMatch
+            },
+            records: impact
+                .map(|impact| BTreeMap::from([("impact".into(), impact.into())]))
+                .into_iter()
+                .collect(),
+            message: None,
+        };
+        SaturationAlleleInput {
+            source_variant: source.clone(),
+            candidate_variant: VariantKey {
+                alternate: alternate.into(),
+                ..source.clone()
+            },
+            snpeff,
+            clinvar: EvidenceResult {
+                source: "ClinVar".into(),
+                status: EvidenceStatus::NoExactMatch,
+                records: Vec::new(),
+                message: None,
+            },
+            evidence_statuses: BTreeMap::from([(
+                "org.dgw.builtin.snpeff".into(),
+                if impact.is_some() {
+                    "found"
+                } else {
+                    "noExactMatch"
+                }
+                .into(),
+            )]),
+            exact_evidence_sources: Vec::new(),
+        }
+    }
+
+    fn live_evidence(
+        variant: &VariantKey,
+        impact: Option<&str>,
+        clinvar: Option<&str>,
+    ) -> OptimizerAlleleEvidenceInput {
+        OptimizerAlleleEvidenceInput {
+            variant: variant.clone(),
+            snpeff: EvidenceResult {
+                source: "SnpEff".into(),
+                status: if impact.is_some() {
+                    EvidenceStatus::Found
+                } else {
+                    EvidenceStatus::NotComputed
+                },
+                records: impact
+                    .map(|impact| BTreeMap::from([("impact".into(), impact.into())]))
+                    .into_iter()
+                    .collect(),
+                message: None,
+            },
+            clinvar: EvidenceResult {
+                source: "ClinVar".into(),
+                status: clinvar
+                    .map(|_| EvidenceStatus::Found)
+                    .unwrap_or(EvidenceStatus::NoExactMatch),
+                records: clinvar
+                    .map(|value| BTreeMap::from([("CLNSIG".into(), value.into())]))
+                    .into_iter()
+                    .collect(),
+                message: None,
+            },
         }
     }
 
@@ -756,7 +1508,8 @@ mod tests {
     #[test]
     fn maximize_reintroduces_only_a_source_allele_and_preserves_unphased_state() {
         let source = vec![variant(key(101, "G", "A"), false, false, true, &[])];
-        let plan = plan_optimizer(
+        let evidence = [live_evidence(&source[0].key, None, None)];
+        let plan = plan_optimizer_with_evidence(
             &[],
             &source,
             &focus(),
@@ -764,6 +1517,7 @@ mod tests {
                 OptimizerObjective::AlternateAlleleBurden,
                 OptimizerDirection::Maximize,
             ),
+            &evidence,
         )
         .unwrap();
 
@@ -784,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    fn maximize_can_reverse_a_replacement_without_inventing_an_allele() {
+    fn alt_copy_maximize_does_not_swap_one_alt_for_another() {
         let original_key = key(102, "C", "T");
         let replacement_key = key(102, "C", "G");
         let source = vec![variant(original_key.clone(), true, false, false, &[])];
@@ -793,29 +1547,29 @@ mod tests {
         replacement.source_key = Some(original_key.clone());
 
         let mut optimizer_request = request(
-            OptimizerObjective::PredictedImpactBurden,
+            OptimizerObjective::AlternateAlleleBurden,
             OptimizerDirection::Maximize,
         );
-        optimizer_request.weights = OptimizerWeights {
-            impact: 0.0,
-            clinvar: 0.0,
-            source_evidence: 1.0,
-        };
-        let plan = plan_optimizer(&[replacement], &source, &focus(), &optimizer_request).unwrap();
+        optimizer_request.weights = OptimizerWeights::default();
+        let evidence = [live_evidence(&original_key, None, None)];
+        let plan = plan_optimizer_with_evidence(
+            &[replacement],
+            &source,
+            &focus(),
+            &optimizer_request,
+            &evidence,
+        )
+        .unwrap();
 
-        assert_eq!(plan.proposals.len(), 1);
-        assert_eq!(
-            plan.proposals[0].edit,
-            EditKind::SetAllele {
-                key: original_key,
-                source_key: Some(replacement_key)
-            }
-        );
-        assert_eq!(plan.proposals[0].score_delta, 1.0);
+        assert!(plan.proposals.is_empty());
+        assert!(plan
+            .exclusions
+            .iter()
+            .any(|exclusion| exclusion.reason.contains("would not increase")));
     }
 
     #[test]
-    fn predicted_impact_ranks_candidates_and_obeys_the_edit_limit() {
+    fn conservative_weighted_impact_does_not_assume_ref_is_benign() {
         let high = variant(
             key(110, "A", "G"),
             true,
@@ -838,22 +1592,19 @@ mod tests {
         optimizer_request.max_edits = 1;
         optimizer_request.weights = OptimizerWeights {
             impact: 1.0,
-            clinvar: 1.0,
+            clinvar: 0.0,
             source_evidence: 0.0,
         };
-
-        let plan = plan_optimizer(&source, &source, &focus(), &optimizer_request).unwrap();
-
-        assert_eq!(plan.eligible_candidates, 2);
-        assert_eq!(plan.proposals.len(), 1);
-        assert_eq!(plan.proposals[0].source_variant, high.key);
-        assert_eq!(
-            plan.proposals[0].evidence.impact_label.as_deref(),
-            Some("HIGH")
-        );
-        assert!((plan.proposals[0].score_delta + 1.75).abs() < 1e-12);
-        assert!((plan.score_before - 2.08).abs() < 1e-12);
-        assert!((plan.score_after - 0.33).abs() < 1e-12);
+        let evidence = [
+            live_evidence(&high.key, Some("HIGH"), None),
+            live_evidence(&low.key, Some("LOW"), None),
+        ];
+        let error =
+            plan_optimizer_with_evidence(&source, &source, &focus(), &optimizer_request, &evidence)
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("cannot treat REF as a zero-burden allele"));
     }
 
     #[test]
@@ -885,7 +1636,8 @@ mod tests {
         overlap.origin = VariantOrigin::Created;
         overlap.source_key = None;
 
-        let plan = plan_optimizer(
+        let evidence = [live_evidence(&source[0].key, None, None)];
+        let plan = plan_optimizer_with_evidence(
             &[overlap],
             &source,
             &focus(),
@@ -893,6 +1645,7 @@ mod tests {
                 OptimizerObjective::AlternateAlleleBurden,
                 OptimizerDirection::Maximize,
             ),
+            &evidence,
         )
         .unwrap();
 
@@ -930,5 +1683,197 @@ mod tests {
             )
         )
         .is_err());
+    }
+
+    #[test]
+    fn saturation_minimize_compares_all_non_reference_bases_and_preserves_placement() {
+        let source_key = key(160, "A", "G");
+        let current = variant(source_key.clone(), false, false, true, &[]);
+        let candidates = vec![
+            saturation_candidate(&source_key, "C", Some("HIGH")),
+            saturation_candidate(&source_key, "G", Some("MODERATE")),
+            saturation_candidate(&source_key, "T", Some("MODIFIER")),
+        ];
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Minimize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert_eq!(plan.candidate_comparisons.len(), 3);
+        assert_eq!(plan.proposals.len(), 1);
+        assert_eq!(plan.proposals[0].haplotype, Haplotype::Unphased);
+        assert_eq!(
+            plan.proposals[0].edit,
+            EditKind::SetAllele {
+                key: key(160, "A", "T"),
+                source_key: Some(source_key)
+            }
+        );
+        assert_eq!(
+            plan.candidate_comparisons
+                .iter()
+                .find(|candidate| candidate.selected)
+                .map(|candidate| candidate.candidate_variant.alternate.as_str()),
+            Some("T")
+        );
+        assert!((plan.score_before - 0.67).abs() < 1e-12);
+        assert!((plan.score_after - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn saturation_maximize_can_choose_a_new_high_impact_alt() {
+        let source_key = key(170, "A", "G");
+        let current = variant(source_key.clone(), true, false, false, &[]);
+        let candidates = vec![
+            saturation_candidate(&source_key, "C", Some("HIGH")),
+            saturation_candidate(&source_key, "G", Some("LOW")),
+            saturation_candidate(&source_key, "T", Some("MODIFIER")),
+        ];
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Maximize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert_eq!(plan.proposals.len(), 1);
+        assert_eq!(
+            plan.proposals[0].edit,
+            EditKind::SetAllele {
+                key: key(170, "A", "C"),
+                source_key: Some(source_key)
+            }
+        );
+        assert!((plan.score_after - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn saturation_never_selects_a_clinvar_pathogenic_candidate() {
+        let source_key = key(175, "A", "G");
+        let current = variant(source_key.clone(), true, false, false, &[]);
+        let mut guarded = saturation_candidate(&source_key, "C", Some("MODIFIER"));
+        guarded.clinvar = EvidenceResult {
+            source: "ClinVar".into(),
+            status: EvidenceStatus::Found,
+            records: vec![BTreeMap::from([(
+                "CLNSIG".into(),
+                "Likely_pathogenic".into(),
+            )])],
+            message: None,
+        };
+        let candidates = vec![
+            guarded,
+            saturation_candidate(&source_key, "G", Some("HIGH")),
+            saturation_candidate(&source_key, "T", Some("LOW")),
+        ];
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Minimize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert_eq!(plan.proposals.len(), 1);
+        assert!(matches!(
+            &plan.proposals[0].edit,
+            EditKind::SetAllele { key, .. } if key.alternate == "T"
+        ));
+        assert!(plan.candidate_comparisons.iter().any(|candidate| {
+            candidate.candidate_variant.alternate == "C"
+                && !candidate.selected
+                && candidate
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains("ClinVar"))
+        }));
+    }
+
+    #[test]
+    fn saturation_excludes_a_position_when_any_alt_is_not_comparable() {
+        let source_key = key(180, "A", "G");
+        let current = variant(source_key.clone(), true, false, false, &[]);
+        let candidates = vec![
+            saturation_candidate(&source_key, "C", Some("HIGH")),
+            saturation_candidate(&source_key, "G", Some("LOW")),
+            saturation_candidate(&source_key, "T", None),
+        ];
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Minimize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert!(plan.proposals.is_empty());
+        assert_eq!(plan.exclusions.len(), 1);
+        assert_eq!(plan.candidate_comparisons.len(), 3);
+        assert!(plan
+            .candidate_comparisons
+            .iter()
+            .any(|candidate| !candidate.comparable));
+    }
+
+    #[test]
+    fn saturation_position_limit_keeps_a_two_copy_genotype_atomic() {
+        let source_key = key(190, "A", "G");
+        let current = variant(source_key.clone(), true, true, false, &[]);
+        let candidates = vec![
+            saturation_candidate(&source_key, "C", Some("HIGH")),
+            saturation_candidate(&source_key, "G", Some("HIGH")),
+            saturation_candidate(&source_key, "T", Some("LOW")),
+        ];
+        let mut optimizer_request = saturation_request(&source_key, OptimizerDirection::Minimize);
+        optimizer_request.max_edits = 1;
+
+        let plan = plan_saturation_optimizer(&[current], &focus(), &optimizer_request, &candidates)
+            .unwrap();
+
+        assert_eq!(plan.proposals.len(), 2);
+        assert_eq!(plan.proposals[0].haplotype, Haplotype::One);
+        assert_eq!(plan.proposals[1].haplotype, Haplotype::Two);
+        assert!((plan.score_before - 2.0).abs() < 1e-12);
+        assert!((plan.score_after - 0.66).abs() < 1e-12);
+    }
+
+    #[test]
+    fn saturation_accepts_explicitly_selected_positions_outside_the_visible_contig() {
+        let source_key = VariantKey {
+            assembly: "GRCh37".into(),
+            contig: "2".into(),
+            position: 200,
+            reference: "C".into(),
+            alternate: "T".into(),
+        };
+        let current = variant(source_key.clone(), true, false, false, &[]);
+        let candidates = vec![
+            saturation_candidate(&source_key, "A", Some("MODIFIER")),
+            saturation_candidate(&source_key, "G", Some("LOW")),
+            saturation_candidate(&source_key, "T", Some("HIGH")),
+        ];
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Minimize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert_eq!(plan.proposals.len(), 1);
+        assert_eq!(plan.proposals[0].source_variant.contig, "2");
+        assert!(plan
+            .constraints
+            .iter()
+            .any(|constraint| constraint.contains("any chromosome")));
     }
 }

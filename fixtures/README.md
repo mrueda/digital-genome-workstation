@@ -2,9 +2,9 @@
 
 ## `dgw-cluster.synthetic.vcf`
 
-The default workstation demonstration. One fictional sample (`DGW_DEMO`) has seven synthetic SNVs across 55 bases around the BRAF V600E coordinate. This deliberately dense layout makes the imported VCF alleles, lollipop selection, horizontal zoom, track duplication, and mutation blocks visible together. All REF bases were checked against hs37d5. The genotypes contain no participant data.
+The default workstation demonstration. One fictional sample (`DGW_DEMO`) has ten synthetic SNVs: seven across 55 bases around the BRAF V600E coordinate on chromosome 7 and three near TP53 on chromosome 17. The dense chromosome 7 layout makes the imported VCF alleles, lollipop selection, horizontal zoom, track duplication, and mutation blocks visible together, while chromosome 17 demonstrates explicit chromosome boundaries and navigation. All REF bases were checked against hs37d5. The genotypes contain no participant data.
 
-This is the fixture opened by the onboarding screen's **Load example** button and bundled with desktop builds.
+This is the fixture opened as a new project by the onboarding screen's **Open example** button and bundled with desktop builds.
 
 ## `braf-v600e.synthetic.vcf`
 
@@ -13,7 +13,7 @@ It remains the focused real-resource smoke-test fixture because its exact SnpEff
 
 ## `1000G-HG00096.public.vcf.gz`
 
-A selected-sample subset extracted from the 2,504-sample public 1000 Genomes test cohort used by the CINECA/Beacon development stack. It contains the 35 non-reference, phased records for sample `HG00096`, including the annotations already present in the source cohort. The adjacent `.csi` file is its index.
+A selected-sample subset extracted from the 2,504-sample public 1000 Genomes test cohort used by the CINECA/Beacon development stack. It contains the 35 non-reference, phased records for sample `HG00096`, including annotations already present in the source cohort; DGW accepts but ignores those INFO annotations. The adjacent `.csi` file is its index.
 
 The extraction command was:
 
