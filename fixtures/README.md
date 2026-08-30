@@ -11,6 +11,14 @@ This is the fixture opened as a new project by the onboarding screen's **Open ex
 One fictional sample (`DGW_DEMO`) with an unphased BRAF V600E genotype. The file is generated test data and contains no participant data.
 It remains the focused real-resource smoke-test fixture because its exact SnpEff, dbNSFP, ClinVar, and COSMIC behavior is easy to verify.
 
+## `multiallelic.synthetic.vcf`
+
+A fictional one-sample fixture for the multiallelic importer. `DGW_MULTI` has one unphased `1/2` and one phased `1|2` SNV record. Each row projects to two independently selectable exact alleles, while the genotype retains either copy-unknown `/` slots or explicit chromosome-copy placement. REF bases were checked against hs37d5. The file contains no participant data.
+
+## `import-normalization.synthetic.vcf`
+
+A fictional one-sample deletion written as the valid but non-minimal `1:970549 TGG>TG`. During import, DGW normalizes its private projection to `1:970549 TG>T` against hs37d5 while leaving this source fixture unchanged. It is the regression fixture for automatic import normalization and contains no participant data.
+
 ## `1000G-HG00096.public.vcf.gz`
 
 A selected-sample subset extracted from the 2,504-sample public 1000 Genomes test cohort used by the CINECA/Beacon development stack. It contains the 35 non-reference, phased records for sample `HG00096`, including annotations already present in the source cohort; DGW accepts but ignores those INFO annotations. The adjacent `.csi` file is its index.

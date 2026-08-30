@@ -4,7 +4,7 @@ use crate::state::{
     effective_variants, materialize_haplotype, materialize_haplotype_masking_unphased,
     validate_edit_shape, validate_no_overlap,
 };
-use crate::vcf::{fingerprint_file, stream_selected_sample, validate_resource_bundle};
+use crate::vcf::{contig_rank, fingerprint_file, stream_selected_sample, validate_resource_bundle};
 use chrono::Utc;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
@@ -18,6 +18,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 use uuid::Uuid;
 
 const MANIFEST_FILE: &str = "manifest.json";
@@ -114,7 +115,24 @@ impl Serialize for CachedEvaluationEntries<'_> {
 }
 
 impl Project {
-    pub fn create(mut request: CreateProjectRequest) -> Result<Self> {
+    pub fn create(request: CreateProjectRequest) -> Result<Self> {
+        Self::create_with_progress(request, |_| {})
+    }
+
+    pub fn create_with_progress<F>(
+        mut request: CreateProjectRequest,
+        mut on_progress: F,
+    ) -> Result<Self>
+    where
+        F: FnMut(ProcessProgress),
+    {
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "destination",
+            "Checking the project destination",
+            1,
+            10,
+        ));
         let final_path = request.project_path.clone();
         prepare_project_destination(&final_path)?;
 
@@ -127,7 +145,14 @@ impl Project {
         let staging_path = parent.join(format!(".{name}.creating-{}", Uuid::new_v4()));
         request.project_path = staging_path.clone();
 
-        let result = Self::create_in_place(request).and_then(|mut project| {
+        let result = Self::create_in_place(request, &mut on_progress).and_then(|mut project| {
+            on_progress(ProcessProgress::new(
+                "vcfImport",
+                "finalize",
+                "Moving the completed package into place",
+                9,
+                10,
+            ));
             fs::rename(&staging_path, &final_path)?;
             project.root = final_path;
             Ok(project)
@@ -138,7 +163,17 @@ impl Project {
         result
     }
 
-    fn create_in_place(request: CreateProjectRequest) -> Result<Self> {
+    fn create_in_place<F>(request: CreateProjectRequest, on_progress: &mut F) -> Result<Self>
+    where
+        F: FnMut(ProcessProgress),
+    {
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "resources",
+            "Validating resources and fingerprinting the source VCF",
+            2,
+            10,
+        ));
         let warnings = validate_resource_bundle(&request.resource_bundle)?;
         fs::create_dir_all(request.project_path.join("artifacts"))?;
         fs::create_dir_all(request.project_path.join("exports"))?;
@@ -168,8 +203,22 @@ impl Project {
             root: request.project_path,
             manifest,
         };
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "database",
+            "Creating the project database and genome tracks",
+            3,
+            10,
+        ));
         project.initialize_database(&root_state_id, &[], &warnings)?;
-        project.import_selected_sample_stream(&request.source_vcf_path)?;
+        project.import_selected_sample_stream(&request.source_vcf_path, on_progress)?;
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "manifest",
+            "Writing project provenance and manifest",
+            8,
+            10,
+        ));
         project.write_manifest()?;
         Ok(project)
     }
@@ -203,9 +252,11 @@ impl Project {
 
     fn connection(&self) -> Result<Connection> {
         let mut connection = Connection::open(self.root.join(DATABASE_FILE))?;
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         self.ensure_variant_schema(&mut connection)?;
         self.ensure_track_schema(&mut connection)?;
+        self.ensure_job_schema(&mut connection)?;
         Ok(connection)
     }
 
@@ -321,6 +372,39 @@ impl Project {
             [serde_json::to_string(&workspace)?],
         )?;
         transaction.commit()?;
+        Ok(())
+    }
+
+    fn ensure_job_schema(&self, connection: &mut Connection) -> Result<()> {
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS background_jobs (
+               id TEXT PRIMARY KEY,
+               status TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               payload TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS background_jobs_updated_idx
+               ON background_jobs(updated_at DESC);
+             CREATE TABLE IF NOT EXISTS compound_mutation_layers (
+               id TEXT PRIMARY KEY,
+               track_id TEXT NOT NULL,
+               source_state_id TEXT NOT NULL,
+               applied_edit_id TEXT,
+               payload TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS compound_mutation_changes (
+               layer_id TEXT NOT NULL REFERENCES compound_mutation_layers(id) ON DELETE CASCADE,
+               ordinal INTEGER NOT NULL,
+               assembly TEXT NOT NULL,
+               contig TEXT NOT NULL,
+               position INTEGER NOT NULL,
+               end_position INTEGER NOT NULL,
+               payload TEXT NOT NULL,
+               PRIMARY KEY(layer_id, ordinal)
+             );
+             CREATE INDEX IF NOT EXISTS compound_mutation_changes_region_idx
+               ON compound_mutation_changes(layer_id, assembly, contig, position, end_position);",
+        )?;
         Ok(())
     }
 
@@ -476,19 +560,26 @@ impl Project {
         Ok(())
     }
 
-    fn import_selected_sample_stream(&self, source_path: &Path) -> Result<()> {
+    fn import_selected_sample_stream<F>(
+        &self,
+        source_path: &Path,
+        on_progress: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(ProcessProgress),
+    {
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "projection",
+            "Keeping PASS calls and projecting the selected sample",
+            4,
+            10,
+        ));
         let plain_path = self.root.join("artifacts/root.selected.vcf");
         let body_path = self.root.join("artifacts/root.selected.body.tmp");
+        let projected_path = self.root.join("artifacts/root.selected.projected.tmp.vcf");
+        let normalized_path = self.root.join("artifacts/root.selected.normalized.tmp.vcf");
         let mut body = File::create(&body_path)?;
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        let mut insert = transaction.prepare(
-            "INSERT INTO root_variants(
-                stable_key, payload, assembly, contig, position, end_position, reference, alternate
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        )?;
-        let mut first_key: Option<VariantKey> = None;
-        let mut cluster_end = 0_u64;
         let (headers, import_warnings) = stream_selected_sample(
             source_path,
             &self.manifest.assembly,
@@ -507,7 +598,70 @@ impl Project {
                     fields[..9].join("\t"),
                     variant.sample_values.join(":")
                 )?;
+                Ok(())
+            },
+        )?;
+        drop(body);
 
+        // Freeze only a selected-sample projection before normalization. The
+        // original VCF remains external and immutable.
+        let mut selected = File::create(&projected_path)?;
+        for header in headers {
+            writeln!(selected, "{header}")?;
+        }
+        writeln!(selected, "##DGWProject={}", self.manifest.project_id)?;
+        writeln!(
+            selected,
+            "##DGWSourceSHA256={}",
+            self.manifest.source_vcf.sha256
+        )?;
+        writeln!(
+            selected,
+            "##DGWImportNormalization=<Method=bcftools_norm,ResourceBundleFingerprint={}>",
+            self.manifest.resource_bundle_fingerprint
+        )?;
+        writeln!(
+            selected,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{}",
+            self.manifest.selected_sample
+        )?;
+        std::io::copy(&mut File::open(&body_path)?, &mut selected)?;
+        drop(selected);
+        fs::remove_file(&body_path)?;
+
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "normalization",
+            "Normalizing and sorting exact alleles with bcftools",
+            5,
+            10,
+        ));
+        let normalization =
+            self.normalize_selected_vcf(&projected_path, &normalized_path, &plain_path)?;
+        fs::remove_file(&projected_path)?;
+        fs::remove_file(&normalized_path)?;
+
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "variants",
+            "Writing normalized alleles to the project database",
+            6,
+            10,
+        ));
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let mut insert = transaction.prepare(
+            "INSERT INTO root_variants(
+                stable_key, payload, assembly, contig, position, end_position, reference, alternate
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        let mut first_key: Option<VariantKey> = None;
+        let mut cluster_end = 0_u64;
+        let (_, normalized_warnings) = stream_selected_sample(
+            &plain_path,
+            &self.manifest.assembly,
+            &self.manifest.selected_sample,
+            |variant| {
                 if first_key.is_none() {
                     first_key = Some(variant.key.clone());
                     cluster_end = variant.key.end();
@@ -518,8 +672,8 @@ impl Project {
                     cluster_end = cluster_end.max(variant.key.end());
                 }
 
-                // The frozen BGZF artifact is the sole raw INFO/source-record
-                // copy. SQLite stores only the fields needed by the editor.
+                // The frozen BGZF artifact is the sole projected VCF record
+                // copy. SQLite stores only fields needed by the editor.
                 let mut stored = variant.clone();
                 stored.info.clear();
                 stored.format_keys.clear();
@@ -539,7 +693,13 @@ impl Project {
             },
         )?;
         drop(insert);
-        drop(body);
+
+        if first_key.is_none() {
+            return Err(DgwError::InvalidVcf(
+                "the selected sample has no supported non-reference FILTER=PASS alleles to import"
+                    .into(),
+            ));
+        }
 
         let workspace_payload: String = transaction.query_row(
             "SELECT payload FROM workspace WHERE singleton = 1",
@@ -556,7 +716,12 @@ impl Project {
             "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
             [serde_json::to_string(&workspace)?],
         )?;
-        for warning in import_warnings {
+        let mut warnings = import_warnings;
+        warnings.extend(normalized_warnings);
+        if let Some(warning) = normalization.warning() {
+            warnings.push(warning);
+        }
+        for warning in warnings {
             transaction.execute(
                 "INSERT OR IGNORE INTO warnings(message) VALUES (?1)",
                 [warning],
@@ -564,28 +729,13 @@ impl Project {
         }
         transaction.commit()?;
 
-        // Freeze only the selected sample, never the original multi-sample payload.
-        let mut selected = File::create(&plain_path)?;
-        for header in headers {
-            writeln!(selected, "{header}")?;
-        }
-        writeln!(selected, "##DGWProject={}", self.manifest.project_id)?;
-        writeln!(
-            selected,
-            "##DGWSourceSHA256={}",
-            self.manifest.source_vcf.sha256
-        )?;
-        writeln!(
-            selected,
-            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{}",
-            self.manifest.selected_sample
-        )?;
-        std::io::copy(&mut File::open(&body_path)?, &mut selected)?;
-        drop(selected);
-        fs::remove_file(&body_path)?;
-
-        self.validate_selected_vcf(&plain_path)?;
-
+        on_progress(ProcessProgress::new(
+            "vcfImport",
+            "index",
+            "Compressing and indexing the frozen project VCF",
+            7,
+            10,
+        ));
         let compressed = self.root.join(&self.manifest.selected_vcf_path);
         let output = File::create(&compressed)?;
         let status = Command::new(&self.manifest.resource_bundle.bgzip_path)
@@ -611,45 +761,41 @@ impl Project {
         Ok(())
     }
 
-    fn validate_selected_vcf(&self, plain_path: &Path) -> Result<()> {
-        let normalized_path = plain_path.with_extension("normalized.vcf");
+    fn normalize_selected_vcf(
+        &self,
+        projected_path: &Path,
+        normalized_path: &Path,
+        sorted_path: &Path,
+    ) -> Result<NormalizationSummary> {
         let output = Command::new(&self.manifest.resource_bundle.bcftools_path)
             .arg("norm")
             .args(["-c", "e", "-f"])
             .arg(&self.manifest.resource_bundle.reference_path)
-            .args(["-m", "-both", "-Ov", "--no-version", "-o"])
+            .args(["-Ov", "--no-version", "-o"])
             .arg(&normalized_path)
-            .arg(plain_path)
+            .arg(projected_path)
             .output()?;
         if !output.status.success() {
             return Err(DgwError::InvalidVcf(format!(
-                "bcftools REF/normalization validation failed: {}",
+                "DGW could not normalize the selected sample against the configured reference: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        let mut original = BufReader::new(File::open(plain_path)?);
-        let mut normalized = BufReader::new(File::open(&normalized_path)?);
-        let mut original_line = String::new();
-        let mut normalized_line = String::new();
-        let mut mismatch = None;
-        loop {
-            let original_key = next_vcf_key(&mut original, &mut original_line)?;
-            let normalized_key = next_vcf_key(&mut normalized, &mut normalized_line)?;
-            if original_key != normalized_key {
-                mismatch = original_key.or(normalized_key);
-                break;
-            }
-            if original_key.is_none() {
-                break;
-            }
-        }
-        fs::remove_file(&normalized_path)?;
-        if let Some((contig, position, reference, alternate)) = mismatch {
+
+        let summary = compare_vcf_normalization(projected_path, normalized_path)?;
+        let output = Command::new(&self.manifest.resource_bundle.bcftools_path)
+            .arg("sort")
+            .args(["-Ov", "-o"])
+            .arg(sorted_path)
+            .arg(normalized_path)
+            .output()?;
+        if !output.status.success() {
             return Err(DgwError::InvalidVcf(format!(
-                "selected sample contains an allele that is not left-aligned/minimal near {contig}:{position} {reference}>{alternate}; normalize the source before importing"
+                "DGW normalized the selected sample but could not sort the project copy: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        Ok(())
+        Ok(summary)
     }
 
     fn root_variants(&self) -> Result<Vec<RootVariant>> {
@@ -797,6 +943,278 @@ impl Project {
         Ok(serde_json::from_str(&payload)?)
     }
 
+    pub fn save_background_job(&self, job: &BackgroundJob) -> Result<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT OR REPLACE INTO background_jobs(id, status, updated_at, payload)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                job.id,
+                format!("{:?}", job.status),
+                job.updated_at.to_rfc3339(),
+                serde_json::to_string(job)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn background_job(&self, job_id: &str) -> Result<BackgroundJob> {
+        let connection = self.connection()?;
+        let payload: String = connection
+            .query_row(
+                "SELECT payload FROM background_jobs WHERE id = ?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| DgwError::Project(format!("unknown background job {job_id}")))?;
+        Ok(serde_json::from_str(&payload)?)
+    }
+
+    pub fn list_background_jobs(&self, limit: u32) -> Result<Vec<BackgroundJob>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT payload FROM background_jobs ORDER BY updated_at DESC LIMIT ?1")?;
+        let rows = statement.query_map([limit.clamp(1, 200)], |row| row.get::<_, String>(0))?;
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(serde_json::from_str(&row?)?);
+        }
+        Ok(jobs)
+    }
+
+    /// Persist a device result without attaching it to genome history yet.
+    /// Applying the returned layer later is O(1) in visible history size.
+    pub fn stage_compound_mutation_layer(
+        &self,
+        track_id: &str,
+        source_state_id: &str,
+        device_id: &str,
+        position_count: u32,
+        changes: &[CompoundMutationChange],
+        note: Option<String>,
+    ) -> Result<CompoundMutationLayer> {
+        let track = self.track(track_id)?;
+        if track.read_only {
+            return Err(DgwError::Project(
+                "the source genome track is read-only; duplicate it before making changes".into(),
+            ));
+        }
+        if track.head_state_id != source_state_id {
+            return Err(DgwError::Project(
+                "the selected track changed while the bulk preview was being prepared".into(),
+            ));
+        }
+        if changes.is_empty() || position_count == 0 {
+            return Err(DgwError::InvalidEdit(
+                "a compound mutation layer must contain at least one change".into(),
+            ));
+        }
+        for change in changes {
+            if matches!(change.edit, EditKind::CompoundMutationLayer { .. }) {
+                return Err(DgwError::InvalidEdit(
+                    "compound mutation layers cannot contain another compound layer".into(),
+                ));
+            }
+            validate_edit_shape(&change.edit)?;
+        }
+
+        let layer = CompoundMutationLayer {
+            id: Uuid::new_v4().to_string(),
+            track_id: track_id.into(),
+            source_state_id: source_state_id.into(),
+            device_id: device_id.into(),
+            position_count,
+            change_count: changes.len() as u32,
+            note,
+            applied_edit_id: None,
+            created_at: Utc::now(),
+        };
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO compound_mutation_layers(id, track_id, source_state_id, applied_edit_id, payload)
+             VALUES (?1, ?2, ?3, NULL, ?4)",
+            params![
+                layer.id,
+                layer.track_id,
+                layer.source_state_id,
+                serde_json::to_string(&layer)?
+            ],
+        )?;
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO compound_mutation_changes(
+                   layer_id, ordinal, assembly, contig, position, end_position, payload
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for (ordinal, change) in changes.iter().enumerate() {
+                let key = primary_edit_key(&change.edit)?;
+                statement.execute(params![
+                    layer.id,
+                    ordinal as u64,
+                    key.assembly,
+                    key.contig,
+                    key.position,
+                    key.end(),
+                    serde_json::to_string(change)?
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(layer)
+    }
+
+    pub fn compound_mutation_layer(&self, layer_id: &str) -> Result<CompoundMutationLayer> {
+        let connection = self.connection()?;
+        let payload: String = connection
+            .query_row(
+                "SELECT payload FROM compound_mutation_layers WHERE id = ?1",
+                [layer_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                DgwError::Project(format!("unknown compound mutation layer {layer_id}"))
+            })?;
+        Ok(serde_json::from_str(&payload)?)
+    }
+
+    /// Attach a staged bulk result to its selected track as one reversible
+    /// history operation. The source state guard prevents applying stale work.
+    pub fn apply_compound_mutation_layer(
+        &self,
+        track_id: &str,
+        layer_id: &str,
+    ) -> Result<GenomeState> {
+        let mut layer = self.compound_mutation_layer(layer_id)?;
+        let mut stored = self.stored_track(track_id)?;
+        if stored.track.read_only {
+            return Err(DgwError::Project(
+                "the source genome track is read-only; duplicate it before making changes".into(),
+            ));
+        }
+        if layer.track_id != track_id {
+            return Err(DgwError::Project(
+                "the compound mutation layer belongs to a different genome track".into(),
+            ));
+        }
+        if layer.applied_edit_id.is_some() {
+            return Err(DgwError::Project(
+                "this compound mutation layer has already been applied".into(),
+            ));
+        }
+        if stored.track.head_state_id != layer.source_state_id {
+            return Err(DgwError::Project(
+                "the selected track changed after preview; preview the bulk operation again".into(),
+            ));
+        }
+
+        // Loading once here verifies that the normalized child rows are intact.
+        let changes = self.compound_layer_changes(layer_id)?;
+        if changes.len() != layer.change_count as usize {
+            return Err(DgwError::Project(format!(
+                "compound mutation layer expected {} changes but stored {}",
+                layer.change_count,
+                changes.len()
+            )));
+        }
+        let operation_id = Uuid::new_v4().to_string();
+        let operation = EditOperation {
+            id: operation_id.clone(),
+            parent_state_id: stored.track.head_state_id.clone(),
+            haplotype: Haplotype::Unphased,
+            edit: EditKind::CompoundMutationLayer {
+                layer_id: layer.id.clone(),
+                position_count: layer.position_count,
+                change_count: layer.change_count,
+            },
+            note: layer.note.clone(),
+            created_at: Utc::now(),
+        };
+        let state_id = hash_text(&format!(
+            "{}|{}",
+            operation.parent_state_id,
+            serde_json::to_string(&operation)?
+        ));
+        let state = GenomeState {
+            id: state_id.clone(),
+            parent_id: Some(operation.parent_state_id.clone()),
+            edit_id: Some(operation_id.clone()),
+            label: None,
+            created_at: operation.created_at,
+        };
+        let mut workspace = self.workspace()?;
+        let is_active = workspace.active_track_id == stored.track.id;
+        stored.track.head_state_id = state.id.clone();
+        stored.track.updated_at = operation.created_at;
+        if is_active {
+            workspace.current_state_id = state.id.clone();
+        }
+        layer.applied_edit_id = Some(operation_id.clone());
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO states(id, parent_id, edit_id, payload) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                state.id,
+                state.parent_id,
+                operation.id,
+                serde_json::to_string(&state)?
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO edits(id, state_id, payload) VALUES (?1, ?2, ?3)",
+            params![operation.id, state.id, serde_json::to_string(&operation)?],
+        )?;
+        transaction.execute(
+            "UPDATE compound_mutation_layers SET applied_edit_id = ?1, payload = ?2 WHERE id = ?3",
+            params![operation_id, serde_json::to_string(&layer)?, layer.id],
+        )?;
+        update_stored_track(&transaction, &stored)?;
+        if is_active {
+            transaction.execute(
+                "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+                [serde_json::to_string(&workspace)?],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(state)
+    }
+
+    /// Expand active visible history into allele-copy mutations for Track
+    /// Profiler. Compound rows never cross the desktop IPC boundary.
+    pub fn active_track_mutations(&self, track_id: &str) -> Result<Vec<TrackMutation>> {
+        let track = self.track(track_id)?;
+        let bypassed: BTreeSet<&str> = track.bypassed_edit_ids.iter().map(String::as_str).collect();
+        let mut mutations = Vec::new();
+        for operation in self.edits_for_track(track_id)? {
+            if bypassed.contains(operation.id.as_str()) {
+                continue;
+            }
+            match &operation.edit {
+                EditKind::CompoundMutationLayer { layer_id, .. } => {
+                    for change in self.compound_layer_changes(layer_id)? {
+                        if let Some(mutation) =
+                            track_mutation_from_edit(&operation.id, change.haplotype, &change.edit)
+                        {
+                            mutations.push(mutation);
+                        }
+                    }
+                }
+                edit => {
+                    if let Some(mutation) =
+                        track_mutation_from_edit(&operation.id, operation.haplotype, edit)
+                    {
+                        mutations.push(mutation);
+                    }
+                }
+            }
+        }
+        Ok(mutations)
+    }
+
     pub fn list_tracks(&self) -> Result<Vec<GenomeTrack>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare("SELECT payload FROM tracks ORDER BY rowid")?;
@@ -816,7 +1234,7 @@ impl Project {
         self.track(&workspace.active_track_id)
     }
 
-    fn track(&self, track_id: &str) -> Result<GenomeTrack> {
+    pub fn track(&self, track_id: &str) -> Result<GenomeTrack> {
         Ok(self.stored_track(track_id)?.track)
     }
 
@@ -1003,6 +1421,152 @@ impl Project {
         Ok(edits)
     }
 
+    fn compound_layer_changes(&self, layer_id: &str) -> Result<Vec<CompoundMutationChange>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM compound_mutation_changes
+              WHERE layer_id = ?1 ORDER BY ordinal",
+        )?;
+        let rows = statement.query_map([layer_id], |row| row.get::<_, String>(0))?;
+        let mut changes = Vec::new();
+        for row in rows {
+            changes.push(serde_json::from_str(&row?)?);
+        }
+        Ok(changes)
+    }
+
+    fn compound_layer_changes_in_context(
+        &self,
+        layer_id: &str,
+        context: &FocusContext,
+    ) -> Result<Vec<CompoundMutationChange>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM compound_mutation_changes
+              WHERE layer_id = ?1 AND contig = ?2
+                AND position <= ?3 AND end_position >= ?4
+              ORDER BY ordinal",
+        )?;
+        let rows = statement.query_map(
+            params![layer_id, context.contig, context.end, context.start],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut changes = Vec::new();
+        for row in rows {
+            changes.push(serde_json::from_str(&row?)?);
+        }
+        Ok(changes)
+    }
+
+    fn compound_layer_changes_at_loci(
+        &self,
+        layer_id: &str,
+        keys: &[VariantKey],
+    ) -> Result<Vec<CompoundMutationChange>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let loci = VariantLocusIndex::new(keys);
+        let mut ranges: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();
+        for key in keys {
+            let range = ranges
+                .entry((key.assembly.clone(), key.contig.clone()))
+                .or_insert((key.position, key.end()));
+            range.0 = range.0.min(key.position);
+            range.1 = range.1.max(key.end());
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM compound_mutation_changes
+              WHERE layer_id = ?1 AND assembly = ?2 AND contig = ?3
+                AND position <= ?4 AND end_position >= ?5
+              ORDER BY ordinal",
+        )?;
+        let mut changes = Vec::new();
+        for ((assembly, contig), (start, end)) in ranges {
+            let rows = statement
+                .query_map(params![layer_id, assembly, contig, end, start], |row| {
+                    row.get::<_, String>(0)
+                })?;
+            for row in rows {
+                let change: CompoundMutationChange = serde_json::from_str(&row?)?;
+                if edit_keys(&change.edit)
+                    .into_iter()
+                    .any(|key| loci.overlaps(key))
+                {
+                    changes.push(change);
+                }
+            }
+        }
+        Ok(changes)
+    }
+
+    fn expanded_edits_to_state(&self, state_id: &str) -> Result<Vec<EditOperation>> {
+        let operations = self.edits_to_state(state_id)?;
+        let mut expanded = Vec::new();
+        for operation in operations {
+            match &operation.edit {
+                EditKind::CompoundMutationLayer { layer_id, .. } => {
+                    append_compound_operations(
+                        &mut expanded,
+                        &operation,
+                        self.compound_layer_changes(layer_id)?,
+                    );
+                }
+                _ => expanded.push(operation),
+            }
+        }
+        Ok(expanded)
+    }
+
+    fn expanded_edits_to_state_in_context(
+        &self,
+        state_id: &str,
+        context: &FocusContext,
+    ) -> Result<Vec<EditOperation>> {
+        let operations = self.edits_to_state(state_id)?;
+        let mut expanded = Vec::new();
+        for operation in operations {
+            match &operation.edit {
+                EditKind::CompoundMutationLayer { layer_id, .. } => append_compound_operations(
+                    &mut expanded,
+                    &operation,
+                    self.compound_layer_changes_in_context(layer_id, context)?,
+                ),
+                _ if edit_overlaps_context(&operation.edit, context) => expanded.push(operation),
+                _ => {}
+            }
+        }
+        Ok(expanded)
+    }
+
+    fn expanded_edits_to_state_at_loci(
+        &self,
+        state_id: &str,
+        keys: &[VariantKey],
+    ) -> Result<Vec<EditOperation>> {
+        let loci = VariantLocusIndex::new(keys);
+        let operations = self.edits_to_state(state_id)?;
+        let mut expanded = Vec::new();
+        for operation in operations {
+            match &operation.edit {
+                EditKind::CompoundMutationLayer { layer_id, .. } => append_compound_operations(
+                    &mut expanded,
+                    &operation,
+                    self.compound_layer_changes_at_loci(layer_id, keys)?,
+                ),
+                _ if edit_keys(&operation.edit)
+                    .into_iter()
+                    .any(|key| loci.overlaps(key)) =>
+                {
+                    expanded.push(operation)
+                }
+                _ => {}
+            }
+        }
+        Ok(expanded)
+    }
+
     /// Returns the persistent edit blocks that are still visible on a track.
     ///
     /// The baseline state itself and every edit before it remain available in the
@@ -1064,7 +1628,7 @@ impl Project {
     ) -> Result<Vec<EffectiveVariant>> {
         effective_variants(
             &self.root_variants()?,
-            &self.edits_to_state(state_id)?,
+            &self.expanded_edits_to_state(state_id)?,
             bypassed_edit_ids,
         )
     }
@@ -1082,11 +1646,7 @@ impl Project {
         context: &FocusContext,
     ) -> Result<Vec<EffectiveVariant>> {
         let roots = self.root_variants_in_context(context, None, 0)?;
-        let operations: Vec<EditOperation> = self
-            .edits_to_state(state_id)?
-            .into_iter()
-            .filter(|operation| edit_overlaps_context(&operation.edit, context))
-            .collect();
+        let operations = self.expanded_edits_to_state_in_context(state_id, context)?;
         let mut variants = effective_variants(&roots, &operations, bypassed_edit_ids)?;
         variants.retain(|variant| variant_overlaps_context(&variant.key, context));
         Ok(variants)
@@ -1114,17 +1674,11 @@ impl Project {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
+        let loci = VariantLocusIndex::new(keys);
         let roots = self.root_variants_at_loci(keys)?;
-        let operations: Vec<EditOperation> = self
-            .edits_to_state(state_id)?
-            .into_iter()
-            .filter(|operation| {
-                keys.iter()
-                    .any(|key| edit_overlaps_key(&operation.edit, key))
-            })
-            .collect();
+        let operations = self.expanded_edits_to_state_at_loci(state_id, keys)?;
         let mut variants = effective_variants(&roots, &operations, bypassed_edit_ids)?;
-        variants.retain(|variant| keys.iter().any(|key| same_locus(&variant.key, key)));
+        variants.retain(|variant| loci.overlaps(&variant.key));
         Ok(variants)
     }
 
@@ -1159,6 +1713,102 @@ impl Project {
             has_more: offset.saturating_add(u64::from(limit)) < total,
             variants,
         })
+    }
+
+    pub fn variant_contig_summaries(&self) -> Result<Vec<VariantContigSummary>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT contig, COUNT(*), MIN(position), MAX(end_position)
+               FROM root_variants
+              GROUP BY contig",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(VariantContigSummary {
+                contig: row.get(0)?,
+                total: row.get(1)?,
+                min_position: row.get(2)?,
+                max_position: row.get(3)?,
+            })
+        })?;
+        let mut summaries = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        summaries.sort_by(|left, right| contig_rank(&left.contig).cmp(&contig_rank(&right.contig)));
+        Ok(summaries)
+    }
+
+    pub fn variant_navigation_bins(
+        &self,
+        contig: &str,
+        requested_bins: u32,
+    ) -> Result<Vec<VariantNavigationBin>> {
+        self.variant_navigation_bins_in_region(contig, None, None, requested_bins)
+    }
+
+    pub fn variant_navigation_bins_in_region(
+        &self,
+        contig: &str,
+        region_start: Option<u64>,
+        region_end: Option<u64>,
+        requested_bins: u32,
+    ) -> Result<Vec<VariantNavigationBin>> {
+        if matches!(
+            (region_start, region_end),
+            (Some(_), None) | (None, Some(_))
+        ) || matches!((region_start, region_end), (Some(start), Some(end)) if start == 0 || end < start)
+        {
+            return Err(DgwError::Project(
+                "variant navigation region must be a valid 1-based inclusive interval".into(),
+            ));
+        }
+        let bins = requested_bins.clamp(1, 32);
+        let connection = self.connection()?;
+        let (minimum, maximum, total): (Option<u64>, Option<u64>, u64) = connection.query_row(
+            "SELECT MIN(position), MAX(end_position), COUNT(*)
+               FROM root_variants
+              WHERE contig = ?1
+                AND (?2 IS NULL OR position >= ?2)
+                AND (?3 IS NULL OR position <= ?3)",
+            params![contig, region_start, region_end],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let (Some(minimum), Some(maximum)) = (minimum, maximum) else {
+            return Ok(Vec::new());
+        };
+        let span = maximum.saturating_sub(minimum).saturating_add(1);
+        let bins = bins
+            .min(total.min(u64::from(u32::MAX)) as u32)
+            .min(span.min(u64::from(u32::MAX)) as u32)
+            .max(1);
+        let mut statement = connection.prepare(
+            "SELECT MIN(?6 - 1, ((position - ?4) * ?6) / ?5) AS bin,
+                    COUNT(*), MIN(position), MAX(end_position)
+               FROM root_variants
+              WHERE contig = ?1
+                AND (?2 IS NULL OR position >= ?2)
+                AND (?3 IS NULL OR position <= ?3)
+              GROUP BY bin ORDER BY bin",
+        )?;
+        let rows = statement.query_map(
+            params![contig, region_start, region_end, minimum, span, bins],
+            |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, u64>(3)?,
+                ))
+            },
+        )?;
+        let mut navigation = Vec::new();
+        for row in rows {
+            let (_index, count, start, end) = row?;
+            navigation.push(VariantNavigationBin {
+                contig: contig.into(),
+                start,
+                end: end.max(start),
+                total: count,
+            });
+        }
+        Ok(navigation)
     }
 
     pub fn variant_density(&self, track_id: &str, context: FocusContext) -> Result<VariantDensity> {
@@ -1276,23 +1926,19 @@ impl Project {
                 exclusions,
             } => {
                 self.track(track_id)?;
-                let mut candidates = Vec::new();
-                let mut offset = 0_u64;
-                while candidates.len() <= limit as usize {
-                    let page = self.variant_page(track_id, offset, VARIANT_PAGE_SIZE)?;
-                    if page.variants.is_empty() {
-                        if page.has_more {
-                            offset = offset.saturating_add(u64::from(VARIANT_PAGE_SIZE));
-                            continue;
-                        }
-                        break;
-                    }
-                    candidates.extend(page.variants.into_iter().map(|variant| variant.key));
-                    if !page.has_more {
-                        break;
-                    }
-                    offset = offset.saturating_add(u64::from(VARIANT_PAGE_SIZE));
-                }
+                let fetch_limit = limit
+                    .saturating_add(exclusions.len().min(u32::MAX as usize) as u32)
+                    .saturating_add(1);
+                let keys: Vec<VariantKey> = self
+                    .root_variant_page(0, fetch_limit)?
+                    .into_iter()
+                    .map(|variant| variant.key)
+                    .collect();
+                let candidates = self
+                    .effective_variants_for_track_at_loci(track_id, &keys)?
+                    .into_iter()
+                    .map(|variant| variant.key)
+                    .collect();
                 (
                     track_id.clone(),
                     exclusions.clone(),
@@ -1361,15 +2007,8 @@ impl Project {
             locus_keys.extend(edit_keys(edit).into_iter().cloned());
         }
         let roots = self.root_variants_at_loci(&locus_keys)?;
-        let mut operations: Vec<EditOperation> = self
-            .edits_to_state(&stored.track.head_state_id)?
-            .into_iter()
-            .filter(|operation| {
-                locus_keys
-                    .iter()
-                    .any(|key| edit_overlaps_key(&operation.edit, key))
-            })
-            .collect();
+        let mut operations =
+            self.expanded_edits_to_state_at_loci(&stored.track.head_state_id, &locus_keys)?;
         let mut parent_state_id = stored.track.head_state_id.clone();
         let mut states = Vec::with_capacity(edits.len());
         let mut new_operations = Vec::with_capacity(edits.len());
@@ -1498,11 +2137,8 @@ impl Project {
             note,
             created_at: Utc::now(),
         };
-        let mut candidate_operations: Vec<EditOperation> = self
-            .edits_to_state(&stored.track.head_state_id)?
-            .into_iter()
-            .filter(|candidate| edit_overlaps_context(&candidate.edit, &edit_context))
-            .collect();
+        let mut candidate_operations =
+            self.expanded_edits_to_state_in_context(&stored.track.head_state_id, &edit_context)?;
         candidate_operations.push(operation.clone());
         effective_variants(
             &self.root_variants_in_context(&edit_context, None, 0)?,
@@ -1718,8 +2354,14 @@ impl Project {
         };
         variants.truncate(MAX_TRACK_REGION_VARIANTS);
         let connection = self.connection()?;
-        let mut warning_statement =
-            connection.prepare("SELECT message FROM warnings ORDER BY message")?;
+        let mut warning_statement = connection.prepare(
+            "SELECT message FROM warnings
+             ORDER BY CASE
+               WHEN message LIKE 'DGW excluded % non-PASS %' THEN 0
+               WHEN message LIKE 'DGW normalized %' THEN 1
+               ELSE 2
+             END, message",
+        )?;
         let rows = warning_statement.query_map([], |row| row.get::<_, String>(0))?;
         let mut warnings = Vec::new();
         for row in rows {
@@ -2112,7 +2754,7 @@ impl Project {
             output_path.set_extension("vcf.gz");
         }
         let plain_path = output_path.with_extension("").with_extension("vcf");
-        let operations = self.edits_to_state(state_id)?;
+        let operations = self.expanded_edits_to_state(state_id)?;
         let mut affected_keys: Vec<VariantKey> = operations
             .iter()
             .flat_map(|operation| edit_keys(&operation.edit))
@@ -2312,6 +2954,7 @@ fn observed_effective_variant(root: &RootVariant) -> EffectiveVariant {
         haplotype1_alt: root.haplotype1_alt,
         haplotype2_alt: root.haplotype2_alt,
         unphased_alt: root.unphased_alt,
+        unphased_slot: root.unphased_slot,
         origin: VariantOrigin::Observed,
         edit_ids: Vec::new(),
         source_key: Some(root.key.clone()),
@@ -2325,7 +2968,10 @@ fn write_rendered_variant<W: Write>(
     source_record: Option<&RootVariant>,
 ) -> Result<()> {
     let genotype = if variant.unphased_alt {
-        "0/1"
+        match variant.unphased_slot {
+            Some(1) => "1/0",
+            _ => "0/1",
+        }
     } else {
         match (variant.haplotype1_alt, variant.haplotype2_alt) {
             (true, true) => "1|1",
@@ -2393,10 +3039,91 @@ fn variant_overlaps_context(key: &VariantKey, context: &FocusContext) -> bool {
     key.contig == context.contig && key.position <= context.end && key.end() >= context.start
 }
 
-fn next_vcf_key<R: BufRead>(
-    reader: &mut R,
-    line: &mut String,
-) -> Result<Option<(String, String, String, String)>> {
+type VcfKeyTuple = (String, String, String, String);
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct NormalizationSummary {
+    changed_records: u64,
+    input_records: u64,
+    output_records: u64,
+    first_change: Option<(Option<VcfKeyTuple>, Option<VcfKeyTuple>)>,
+}
+
+impl NormalizationSummary {
+    fn warning(&self) -> Option<String> {
+        if self.changed_records == 0 && self.input_records == self.output_records {
+            return None;
+        }
+        let record_word = if self.changed_records == 1 {
+            "record"
+        } else {
+            "records"
+        };
+        let example = self
+            .first_change
+            .as_ref()
+            .map(|(before, after)| {
+                format!(
+                    " Example: {} -> {}.",
+                    display_vcf_key(before.as_ref()),
+                    display_vcf_key(after.as_ref())
+                )
+            })
+            .unwrap_or_default();
+        let count_note = (self.input_records != self.output_records)
+            .then(|| {
+                format!(
+                    " The selected projection changed from {} to {} records.",
+                    self.input_records, self.output_records
+                )
+            })
+            .unwrap_or_default();
+        Some(format!(
+            "DGW normalized {} selected allele {} against the configured reference while importing a project copy; the original source VCF was not changed.{}{}",
+            self.changed_records, record_word, example, count_note
+        ))
+    }
+}
+
+fn display_vcf_key(key: Option<&VcfKeyTuple>) -> String {
+    key.map(|(contig, position, reference, alternate)| {
+        format!("{contig}:{position} {reference}>{alternate}")
+    })
+    .unwrap_or_else(|| "no record".into())
+}
+
+fn compare_vcf_normalization(
+    projected_path: &Path,
+    normalized_path: &Path,
+) -> Result<NormalizationSummary> {
+    let mut projected = BufReader::new(File::open(projected_path)?);
+    let mut normalized = BufReader::new(File::open(normalized_path)?);
+    let mut projected_line = String::new();
+    let mut normalized_line = String::new();
+    let mut summary = NormalizationSummary::default();
+    loop {
+        let before = next_vcf_key(&mut projected, &mut projected_line)?;
+        let after = next_vcf_key(&mut normalized, &mut normalized_line)?;
+        if before.is_some() {
+            summary.input_records += 1;
+        }
+        if after.is_some() {
+            summary.output_records += 1;
+        }
+        if before != after {
+            summary.changed_records += 1;
+            if summary.first_change.is_none() {
+                summary.first_change = Some((before.clone(), after.clone()));
+            }
+        }
+        if before.is_none() && after.is_none() {
+            break;
+        }
+    }
+    Ok(summary)
+}
+
+fn next_vcf_key<R: BufRead>(reader: &mut R, line: &mut String) -> Result<Option<VcfKeyTuple>> {
     loop {
         line.clear();
         if reader.read_line(line)? == 0 {
@@ -2421,11 +3148,42 @@ fn next_vcf_key<R: BufRead>(
     }
 }
 
-fn same_locus(left: &VariantKey, right: &VariantKey) -> bool {
-    left.assembly == right.assembly
-        && left.contig == right.contig
-        && left.position <= right.end()
-        && left.end() >= right.position
+/// Interval lookup used by bulk selections. Stored ends are prefix maxima, so
+/// overlap queries are logarithmic rather than scanning every selected locus.
+struct VariantLocusIndex {
+    intervals: BTreeMap<(String, String), Vec<(u64, u64)>>,
+}
+
+impl VariantLocusIndex {
+    fn new(keys: &[VariantKey]) -> Self {
+        let mut intervals: BTreeMap<(String, String), Vec<(u64, u64)>> = BTreeMap::new();
+        for key in keys {
+            intervals
+                .entry((key.assembly.clone(), key.contig.clone()))
+                .or_default()
+                .push((key.position, key.end()));
+        }
+        for entries in intervals.values_mut() {
+            entries.sort_unstable_by_key(|(start, end)| (*start, *end));
+            let mut maximum_end = 0;
+            for (_, end) in entries {
+                maximum_end = maximum_end.max(*end);
+                *end = maximum_end;
+            }
+        }
+        Self { intervals }
+    }
+
+    fn overlaps(&self, key: &VariantKey) -> bool {
+        let Some(entries) = self
+            .intervals
+            .get(&(key.assembly.clone(), key.contig.clone()))
+        else {
+            return false;
+        };
+        let upper = entries.partition_point(|(start, _)| *start <= key.end());
+        upper > 0 && entries[upper - 1].1 >= key.position
+    }
 }
 
 fn edit_keys(edit: &EditKind) -> Vec<&VariantKey> {
@@ -2438,6 +3196,56 @@ fn edit_keys(edit: &EditKind) -> Vec<&VariantKey> {
             keys
         }
         EditKind::RestoreReference { source_key } => vec![source_key],
+        EditKind::CompoundMutationLayer { .. } => Vec::new(),
+    }
+}
+
+fn primary_edit_key(edit: &EditKind) -> Result<&VariantKey> {
+    match edit {
+        EditKind::SetAllele { key, .. } => Ok(key),
+        EditKind::RestoreReference { source_key } => Ok(source_key),
+        EditKind::CompoundMutationLayer { .. } => Err(DgwError::InvalidEdit(
+            "a compound mutation layer cannot be nested".into(),
+        )),
+    }
+}
+
+fn append_compound_operations(
+    target: &mut Vec<EditOperation>,
+    marker: &EditOperation,
+    changes: Vec<CompoundMutationChange>,
+) {
+    target.extend(changes.into_iter().map(|change| EditOperation {
+        // Every child shares the marker id. Bypassing or undoing the one
+        // visible block therefore excludes the complete layer atomically.
+        id: marker.id.clone(),
+        parent_state_id: marker.parent_state_id.clone(),
+        haplotype: change.haplotype,
+        edit: change.edit,
+        note: marker.note.clone(),
+        created_at: marker.created_at,
+    }));
+}
+
+fn track_mutation_from_edit(
+    edit_id: &str,
+    haplotype: Haplotype,
+    edit: &EditKind,
+) -> Option<TrackMutation> {
+    match edit {
+        EditKind::SetAllele { key, source_key } => Some(TrackMutation {
+            edit_id: edit_id.into(),
+            haplotype,
+            source_variant: source_key.clone().unwrap_or_else(|| key.clone()),
+            current_variant: Some(key.clone()),
+        }),
+        EditKind::RestoreReference { source_key } => Some(TrackMutation {
+            edit_id: edit_id.into(),
+            haplotype,
+            source_variant: source_key.clone(),
+            current_variant: None,
+        }),
+        EditKind::CompoundMutationLayer { .. } => None,
     }
 }
 
@@ -2445,12 +3253,6 @@ fn edit_overlaps_context(edit: &EditKind, context: &FocusContext) -> bool {
     edit_keys(edit)
         .into_iter()
         .any(|key| variant_overlaps_context(key, context))
-}
-
-fn edit_overlaps_key(edit: &EditKind, key: &VariantKey) -> bool {
-    edit_keys(edit)
-        .into_iter()
-        .any(|candidate| same_locus(candidate, key))
 }
 
 fn context_for_edit(edit: &EditKind) -> Result<FocusContext> {
@@ -2695,6 +3497,164 @@ mod tests {
     use std::io::Read;
     use tempfile::{tempdir, TempDir};
 
+    #[test]
+    fn bulk_locus_index_handles_overlaps_without_pairwise_scanning() {
+        let keys: Vec<VariantKey> = (1..=50_000)
+            .map(|position| VariantKey {
+                assembly: "b37".into(),
+                contig: "1".into(),
+                position,
+                reference: "A".into(),
+                alternate: "C".into(),
+            })
+            .collect();
+        let index = VariantLocusIndex::new(&keys);
+        assert!(index.overlaps(&keys[24_999]));
+        assert!(!index.overlaps(&VariantKey {
+            assembly: "b37".into(),
+            contig: "2".into(),
+            position: 25_000,
+            reference: "A".into(),
+            alternate: "G".into(),
+        }));
+    }
+
+    #[test]
+    fn background_jobs_are_persistent_project_records() {
+        let (_temporary, project) = test_project();
+        let now = Utc::now();
+        let job = BackgroundJob {
+            id: "job-fixture".into(),
+            operation: "mutationGeneratorPreview".into(),
+            device_id: "org.dgw.builtin.mutation-generator".into(),
+            track_id: project.workspace().unwrap().active_track_id,
+            status: BackgroundJobStatus::Completed,
+            progress: 100,
+            stage: "completed".into(),
+            message: "Complete".into(),
+            worker_threads: 4,
+            request: serde_json::json!({"selection": "allTrack"}),
+            result: Some(serde_json::json!({"randomizedPositions": 42})),
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+        project.save_background_job(&job).unwrap();
+        assert_eq!(project.background_job(&job.id).unwrap(), job);
+        assert_eq!(project.list_background_jobs(10).unwrap(), vec![job]);
+    }
+
+    #[test]
+    fn compound_mutation_layer_is_one_reversible_block_with_exact_projection() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let roots = vec![observed_variant("1", 100), observed_variant("2", 200)];
+        insert_root_variants(&project, &roots);
+        let changes: Vec<_> = roots
+            .iter()
+            .enumerate()
+            .map(|(index, root)| CompoundMutationChange {
+                haplotype: Haplotype::One,
+                edit: EditKind::SetAllele {
+                    key: VariantKey {
+                        alternate: if index == 0 { "G" } else { "T" }.into(),
+                        ..root.key.clone()
+                    },
+                    source_key: Some(root.key.clone()),
+                },
+            })
+            .collect();
+        let layer = project
+            .stage_compound_mutation_layer(
+                &working.id,
+                &working.head_state_id,
+                "org.dgw.builtin.mutation-generator",
+                2,
+                &changes,
+                Some("Bulk randomization".into()),
+            )
+            .unwrap();
+        let state = project
+            .apply_compound_mutation_layer(&working.id, &layer.id)
+            .unwrap();
+        let edit_id = state.edit_id.unwrap();
+
+        let visible = project.edits_for_track(&working.id).unwrap();
+        assert_eq!(visible.len(), 1);
+        assert!(matches!(
+            visible[0].edit,
+            EditKind::CompoundMutationLayer {
+                position_count: 2,
+                change_count: 2,
+                ..
+            }
+        ));
+        let effective = project.effective_variants_for_track(&working.id).unwrap();
+        assert_eq!(effective.len(), 2);
+        assert!(effective.iter().any(|variant| {
+            variant.key.contig == "1"
+                && variant.key.alternate == "G"
+                && variant.edit_ids == vec![edit_id.clone()]
+        }));
+        assert!(effective.iter().any(|variant| {
+            variant.key.contig == "2"
+                && variant.key.alternate == "T"
+                && variant.edit_ids == vec![edit_id.clone()]
+        }));
+        let mutations = project.active_track_mutations(&working.id).unwrap();
+        assert_eq!(mutations.len(), 2);
+        assert!(mutations.iter().all(|mutation| mutation.edit_id == edit_id));
+        assert!(mutations.iter().all(|mutation| mutation
+            .current_variant
+            .as_ref()
+            .is_some_and(|key| key.alternate != "C")));
+
+        let focused = project
+            .effective_variants_for_track_in_context(
+                &working.id,
+                &FocusContext {
+                    contig: "2".into(),
+                    start: 190,
+                    end: 210,
+                },
+            )
+            .unwrap();
+        assert_eq!(focused.len(), 1);
+        assert_eq!(focused[0].key.alternate, "T");
+
+        project
+            .toggle_track_edit_bypass(&working.id, &edit_id, true)
+            .unwrap();
+        let bypassed = project.effective_variants_for_track(&working.id).unwrap();
+        assert!(bypassed.iter().all(|variant| variant.key.alternate == "C"));
+    }
+
+    #[test]
+    fn compound_mutation_layer_rejects_a_changed_track_head() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let layer = project
+            .stage_compound_mutation_layer(
+                &working.id,
+                &working.head_state_id,
+                "org.dgw.builtin.mutation-generator",
+                1,
+                &[CompoundMutationChange {
+                    haplotype: Haplotype::One,
+                    edit: create_allele(100, "G"),
+                }],
+                None,
+            )
+            .unwrap();
+        project
+            .apply_edit_to_track(&working.id, Haplotype::One, create_allele(200, "T"), None)
+            .unwrap();
+        let error = project
+            .apply_compound_mutation_layer(&working.id, &layer.id)
+            .unwrap_err();
+        assert!(error.to_string().contains("changed after preview"));
+    }
+
     fn test_resource(path: &Path) -> IndexedResource {
         IndexedResource {
             path: path.join("resource.vcf.gz"),
@@ -2800,6 +3760,7 @@ mod tests {
             haplotype1_alt: true,
             haplotype2_alt: false,
             unphased_alt: false,
+            unphased_slot: None,
             source_line: String::new(),
         }
     }
@@ -2836,6 +3797,45 @@ mod tests {
     }
 
     #[test]
+    fn reports_alleles_changed_by_import_normalization() {
+        let mut projected = tempfile::NamedTempFile::new().unwrap();
+        let mut normalized = tempfile::NamedTempFile::new().unwrap();
+        for file in [&mut projected, &mut normalized] {
+            writeln!(file, "##fileformat=VCFv4.2").unwrap();
+            writeln!(
+                file,
+                "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTEST"
+            )
+            .unwrap();
+        }
+        writeln!(projected, "1\t970549\t.\tTGG\tTG\t.\tPASS\t.\tGT\t0/1").unwrap();
+        writeln!(normalized, "1\t970549\t.\tTG\tT\t.\tPASS\t.\tGT\t0/1").unwrap();
+
+        let summary = compare_vcf_normalization(projected.path(), normalized.path()).unwrap();
+        assert_eq!(summary.changed_records, 1);
+        assert_eq!(summary.input_records, 1);
+        assert_eq!(summary.output_records, 1);
+        let warning = summary.warning().unwrap();
+        assert!(warning.contains("normalized 1 selected allele record"));
+        assert!(warning.contains("1:970549 TGG>TG -> 1:970549 TG>T"));
+        assert!(warning.contains("original source VCF was not changed"));
+    }
+
+    #[test]
+    fn does_not_warn_when_import_projection_is_already_normalized() {
+        let mut projected = tempfile::NamedTempFile::new().unwrap();
+        let mut normalized = tempfile::NamedTempFile::new().unwrap();
+        for file in [&mut projected, &mut normalized] {
+            writeln!(file, "##fileformat=VCFv4.2").unwrap();
+            writeln!(file, "1\t100\t.\tA\tT\t.\tPASS\t.\tGT\t0/1").unwrap();
+        }
+
+        let summary = compare_vcf_normalization(projected.path(), normalized.path()).unwrap();
+        assert_eq!(summary.changed_records, 0);
+        assert!(summary.warning().is_none());
+    }
+
+    #[test]
     fn variant_pages_are_capped_and_report_the_remaining_rows() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -2859,6 +3859,67 @@ mod tests {
         assert!(!last.has_more);
         assert_eq!(last.variants.first().unwrap().key.position, 201);
         assert_eq!(last.variants.last().unwrap().key.position, 250);
+    }
+
+    #[test]
+    fn variant_navigation_groups_contigs_and_returns_only_occupied_bins() {
+        let (_temporary, project) = test_project();
+        let mut second_x_allele = observed_variant("X", 50);
+        second_x_allele.key.alternate = "G".into();
+        insert_root_variants(
+            &project,
+            &[
+                observed_variant("10", 500),
+                observed_variant("2", 10),
+                observed_variant("2", 20),
+                observed_variant("2", 90),
+                observed_variant("X", 50),
+                second_x_allele,
+            ],
+        );
+
+        let summaries = project.variant_contig_summaries().unwrap();
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.contig.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2", "10", "X"]
+        );
+        assert_eq!(summaries[0].total, 3);
+        assert_eq!(
+            (summaries[0].min_position, summaries[0].max_position),
+            (10, 90)
+        );
+        assert_eq!(summaries[2].total, 2);
+
+        let bins = project.variant_navigation_bins("2", 4).unwrap();
+        assert_eq!(bins.len(), 2);
+        assert_eq!((bins[0].start, bins[0].end, bins[0].total), (10, 20, 2));
+        assert_eq!((bins[1].start, bins[1].end, bins[1].total), (90, 90, 1));
+        assert_eq!(bins.iter().map(|bin| bin.total).sum::<u64>(), 3);
+
+        let nested = project
+            .variant_navigation_bins_in_region("2", Some(10), Some(20), 4)
+            .unwrap();
+        assert_eq!(nested.len(), 2);
+        assert_eq!((nested[0].start, nested[0].end), (10, 10));
+        assert_eq!((nested[1].start, nested[1].end), (20, 20));
+
+        let single_position = project.variant_navigation_bins("X", 24).unwrap();
+        assert_eq!(single_position.len(), 1);
+        assert_eq!(
+            (
+                single_position[0].start,
+                single_position[0].end,
+                single_position[0].total,
+            ),
+            (50, 50, 2)
+        );
+        assert!(project
+            .variant_navigation_bins("missing", 24)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -2906,6 +3967,10 @@ mod tests {
             .map(|position| observed_variant("1", position))
             .collect();
         insert_root_variants(&project, &variants);
+        insert_root_variants(
+            &project,
+            &[observed_variant("2", 100), observed_variant("X", 200)],
+        );
 
         let interval = project
             .resolve_selection(
@@ -2940,7 +4005,7 @@ mod tests {
                 4,
             )
             .unwrap();
-        assert_eq!(all_track.total, 9);
+        assert_eq!(all_track.total, 11);
         assert!(all_track.truncated);
         assert_eq!(
             all_track
@@ -3592,5 +4657,33 @@ mod tests {
             .find(|track| track.read_only)
             .unwrap();
         assert!(project.consolidate_track(&source.id).is_err());
+    }
+
+    #[test]
+    fn rendered_exact_alt_rows_preserve_unphased_multiallelic_gt_slots() {
+        let mut output = Vec::new();
+        for (alternate, slot) in [("C", 1), ("G", 2)] {
+            let variant = EffectiveVariant {
+                key: VariantKey {
+                    assembly: "b37".into(),
+                    contig: "1".into(),
+                    position: 100,
+                    reference: "A".into(),
+                    alternate: alternate.into(),
+                },
+                haplotype1_alt: false,
+                haplotype2_alt: false,
+                unphased_alt: true,
+                unphased_slot: Some(slot),
+                origin: VariantOrigin::Observed,
+                edit_ids: Vec::new(),
+                source_key: None,
+                source_info: BTreeMap::new(),
+            };
+            write_rendered_variant(&mut output, &variant, None).unwrap();
+        }
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.lines().any(|line| line.ends_with("GT\t1/0")));
+        assert!(rendered.lines().any(|line| line.ends_with("GT\t0/1")));
     }
 }

@@ -1349,6 +1349,7 @@ mod tests {
             haplotype1_alt,
             haplotype2_alt,
             unphased_alt,
+            unphased_slot: unphased_alt.then_some(2),
             origin: VariantOrigin::Observed,
             edit_ids: Vec::new(),
             source_key: Some(key),

@@ -64,7 +64,19 @@ fn parse_key(fields: &[&str], assembly: &str) -> Result<VariantKey> {
     })
 }
 
-fn contig_rank(contig: &str) -> (u16, String) {
+fn alternate_keys(fields: &[&str], assembly: &str) -> Result<Vec<VariantKey>> {
+    let record = parse_key(fields, assembly)?;
+    Ok(record
+        .alternate
+        .split(',')
+        .map(|alternate| VariantKey {
+            alternate: alternate.to_owned(),
+            ..record.clone()
+        })
+        .collect())
+}
+
+pub(crate) fn contig_rank(contig: &str) -> (u16, String) {
     let plain = contig.strip_prefix("chr").unwrap_or(contig);
     let rank = match plain {
         "X" => 23,
@@ -84,6 +96,8 @@ pub fn inspect_vcf(path: impl AsRef<Path>, assembly: &str) -> Result<VcfInspecti
     let mut contigs = BTreeSet::new();
     let mut has_ann = false;
     let mut record_count = 0_u64;
+    let mut pass_record_count = 0_u64;
+    let mut non_pass_record_count = 0_u64;
     let mut supported_record_count = 0_u64;
     let mut skipped_unsupported_record_count = 0_u64;
     let mut biallelic = true;
@@ -109,14 +123,22 @@ pub fn inspect_vcf(path: impl AsRef<Path>, assembly: &str) -> Result<VcfInspecti
             }
         } else if !trimmed.starts_with('#') && !trimmed.is_empty() {
             let fields: Vec<&str> = trimmed.split('\t').collect();
-            let key = parse_key(&fields, assembly)?;
-            if key.alternate.contains(',') {
-                biallelic = false;
-            } else if is_supported_small_variant(&key) {
-                supported_record_count += 1;
-            } else {
-                skipped_unsupported_record_count += 1;
+            if fields.len() < 7 {
+                return Err(DgwError::InvalidVcf(
+                    "record contains fewer than seven required VCF columns".into(),
+                ));
             }
+            let keys = alternate_keys(&fields, assembly)?;
+            if keys.len() > 1 {
+                biallelic = false;
+            }
+            let supported: Vec<&VariantKey> = keys
+                .iter()
+                .filter(|key| is_supported_small_variant(key))
+                .collect();
+            let key = keys
+                .first()
+                .ok_or_else(|| DgwError::InvalidVcf("record has an empty ALT column".into()))?;
             let current_sort_key = (contig_rank(&key.contig), key.position);
             if previous_sort_key
                 .as_ref()
@@ -126,11 +148,21 @@ pub fn inspect_vcf(path: impl AsRef<Path>, assembly: &str) -> Result<VcfInspecti
             }
             previous_sort_key = Some(current_sort_key);
             contigs.insert(key.contig.clone());
-            if is_supported_small_variant(&key) {
-                if first_variant.is_none() {
-                    first_variant = Some(key.clone());
+            if fields[6] == "PASS" {
+                pass_record_count += 1;
+                if !supported.is_empty() {
+                    supported_record_count += 1;
+                } else {
+                    skipped_unsupported_record_count += 1;
                 }
-                last_variant = Some(key);
+                if let Some(supported_key) = supported.first() {
+                    if first_variant.is_none() {
+                        first_variant = Some((*supported_key).clone());
+                    }
+                    last_variant = supported.last().map(|value| (*value).clone());
+                }
+            } else {
+                non_pass_record_count += 1;
             }
             record_count += 1;
         }
@@ -150,6 +182,8 @@ pub fn inspect_vcf(path: impl AsRef<Path>, assembly: &str) -> Result<VcfInspecti
         contigs: contigs.into_iter().collect(),
         has_ann,
         record_count,
+        pass_record_count,
+        non_pass_record_count,
         supported_record_count,
         skipped_unsupported_record_count,
         biallelic,
@@ -199,7 +233,17 @@ fn is_supported_small_variant(key: &VariantKey) -> bool {
     is_snv || is_short_indel
 }
 
-fn parse_gt(format_keys: &[String], sample_values: &[String]) -> Result<(bool, bool, bool)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiploidGt {
+    alleles: [Option<usize>; 2],
+    phased: bool,
+}
+
+fn parse_gt(
+    format_keys: &[String],
+    sample_values: &[String],
+    alternate_count: usize,
+) -> Result<DiploidGt> {
     let gt_index = format_keys
         .iter()
         .position(|key| key == "GT")
@@ -208,7 +252,10 @@ fn parse_gt(format_keys: &[String], sample_values: &[String]) -> Result<(bool, b
         .get(gt_index)
         .ok_or_else(|| DgwError::InvalidVcf("selected sample GT is missing".into()))?;
     if gt == "." || gt == "./." || gt == ".|." {
-        return Ok((false, false, false));
+        return Ok(DiploidGt {
+            alleles: [None, None],
+            phased: gt.contains('|'),
+        });
     }
     let phased = gt.contains('|');
     let alleles: Vec<&str> = gt.split(['|', '/']).collect();
@@ -217,18 +264,63 @@ fn parse_gt(format_keys: &[String], sample_values: &[String]) -> Result<(bool, b
             "v1 requires diploid GT, found {gt}"
         )));
     }
-    if alleles
+    let parsed = alleles
         .iter()
-        .any(|value| !matches!(*value, "0" | "1" | "."))
+        .map(|value| match *value {
+            "." => Ok(None),
+            value => value
+                .parse::<usize>()
+                .map(Some)
+                .map_err(|_| DgwError::InvalidVcf(format!("invalid GT allele in {gt}"))),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if parsed
+        .iter()
+        .any(|value| value.is_some_and(|index| index > alternate_count))
     {
         return Err(DgwError::InvalidVcf(format!(
-            "biallelic GT expected, found {gt}"
+            "GT {gt} refers to an ALT index beyond the {alternate_count} ALT allele{} in the record",
+            if alternate_count == 1 { "" } else { "s" }
         )));
     }
-    if !phased && alleles[0] != alleles[1] {
-        return Ok((false, false, true));
+    if parsed.iter().filter(|value| value.is_none()).count() == 1 {
+        return Err(DgwError::InvalidVcf(format!(
+            "partially missing diploid GT is not supported: {gt}"
+        )));
     }
-    Ok((alleles[0] == "1", alleles[1] == "1", false))
+    Ok(DiploidGt {
+        alleles: [parsed[0], parsed[1]],
+        phased,
+    })
+}
+
+fn project_alt(gt: DiploidGt, alternate_index: usize) -> (bool, bool, bool, Option<u8>) {
+    let first = gt.alleles[0] == Some(alternate_index);
+    let second = gt.alleles[1] == Some(alternate_index);
+    if gt.phased || (first && second) {
+        return (first, second, false, None);
+    }
+    if first {
+        (false, false, true, Some(1))
+    } else if second {
+        (false, false, true, Some(2))
+    } else {
+        (false, false, false, None)
+    }
+}
+
+fn projected_gt(gt: DiploidGt, alternate_index: usize) -> String {
+    let value = |allele: Option<usize>| match allele {
+        Some(index) if index == alternate_index => "1",
+        Some(_) => "0",
+        None => ".",
+    };
+    format!(
+        "{}{}{}",
+        value(gt.alleles[0]),
+        if gt.phased { '|' } else { '/' },
+        value(gt.alleles[1])
+    )
 }
 
 pub fn stream_selected_sample<F>(
@@ -244,7 +336,8 @@ where
     let mut line = String::new();
     let mut headers = Vec::new();
     let mut sample_index = None;
-    let mut previous_sort_key: Option<((u16, String), u64)> = None;
+    let mut excluded_non_pass = 0_u64;
+    let mut non_pass_examples = Vec::new();
     let mut skipped_unsupported = 0_u64;
     let mut skipped_examples = Vec::new();
 
@@ -267,33 +360,27 @@ where
                     "record has no FORMAT/sample columns".into(),
                 ));
             }
-            let key = parse_key(&fields, assembly)?;
-            if key.alternate.contains(',') {
-                return Err(DgwError::InvalidVcf(format!(
-                    "multiallelic record is not supported: {}",
-                    key.display()
-                )));
+            if fields[6] != "PASS" {
+                excluded_non_pass += 1;
+                if non_pass_examples.len() < 3 {
+                    non_pass_examples
+                        .push(format!("{}:{} FILTER={}", fields[0], fields[1], fields[6]));
+                }
+                line.clear();
+                continue;
             }
-            let current_sort_key = (contig_rank(&key.contig), key.position);
-            if previous_sort_key
-                .as_ref()
-                .is_some_and(|previous| previous > &current_sort_key)
-            {
-                return Err(DgwError::InvalidVcf(format!(
-                    "VCF is not sorted before {}",
-                    key.display()
-                )));
-            }
-            previous_sort_key = Some(current_sort_key);
-
+            let keys = alternate_keys(&fields, assembly)?;
+            let record_key = keys
+                .first()
+                .ok_or_else(|| DgwError::InvalidVcf("record has an empty ALT column".into()))?;
             // Unsupported allele classes do not enter the selected-sample
             // projection. Skip them before parsing FORMAT because CNV/SV
             // callers may use fields that do not follow the small-variant GT
             // contract required by DGW.
-            if !is_supported_small_variant(&key) {
-                skipped_unsupported += 1;
+            if keys.iter().all(|key| !is_supported_small_variant(key)) {
+                skipped_unsupported += keys.len() as u64;
                 if skipped_examples.len() < 3 {
-                    skipped_examples.push(key.display());
+                    skipped_examples.push(record_key.display());
                 }
                 line.clear();
                 continue;
@@ -302,33 +389,68 @@ where
             let format_keys: Vec<String> = fields[8].split(':').map(str::to_owned).collect();
             let selected_index = sample_index.expect("#CHROM must precede records");
             let selected = fields.get(selected_index).ok_or_else(|| {
-                DgwError::InvalidVcf(format!("sample column missing at {}", key.display()))
+                DgwError::InvalidVcf(format!("sample column missing at {}", record_key.display()))
             })?;
             let sample_values: Vec<String> = selected.split(':').map(str::to_owned).collect();
-            let (haplotype1_alt, haplotype2_alt, unphased_alt) =
-                parse_gt(&format_keys, &sample_values)?;
-            if !haplotype1_alt && !haplotype2_alt && !unphased_alt {
-                line.clear();
-                continue;
+            let gt = parse_gt(&format_keys, &sample_values, keys.len())?;
+            for (offset, key) in keys.into_iter().enumerate() {
+                if !is_supported_small_variant(&key) {
+                    skipped_unsupported += 1;
+                    if skipped_examples.len() < 3 {
+                        skipped_examples.push(key.display());
+                    }
+                    continue;
+                }
+                let alternate_index = offset + 1;
+                let (haplotype1_alt, haplotype2_alt, unphased_alt, unphased_slot) =
+                    project_alt(gt, alternate_index);
+                if !haplotype1_alt && !haplotype2_alt && !unphased_alt {
+                    continue;
+                }
+                let multiallelic = fields[4].contains(',');
+                let projected_sample_values = if multiallelic {
+                    vec![projected_gt(gt, alternate_index)]
+                } else {
+                    sample_values.clone()
+                };
+                let projected_format_keys = if multiallelic {
+                    vec!["GT".to_owned()]
+                } else {
+                    format_keys.clone()
+                };
+                // A multiallelic source row is frozen as exact biallelic GT-only
+                // projections. Allele-indexed INFO/FORMAT values cannot safely
+                // be copied after decomposition and DGW does not use them.
+                let source_line = if multiallelic {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t.\tGT",
+                        fields[0],
+                        fields[1],
+                        fields[2],
+                        fields[3],
+                        key.alternate,
+                        fields[5],
+                        fields[6]
+                    )
+                } else {
+                    trimmed.to_owned()
+                };
+                let variant = RootVariant {
+                    key,
+                    id: (fields[2] != ".").then(|| fields[2].to_owned()),
+                    quality: (fields[5] != ".").then(|| fields[5].to_owned()),
+                    filter: fields[6].to_owned(),
+                    info: BTreeMap::new(),
+                    format_keys: projected_format_keys,
+                    sample_values: projected_sample_values,
+                    haplotype1_alt,
+                    haplotype2_alt,
+                    unphased_alt,
+                    unphased_slot,
+                    source_line,
+                };
+                on_variant(&variant)?;
             }
-            let variant = RootVariant {
-                key,
-                id: (fields[2] != ".").then(|| fields[2].to_owned()),
-                quality: (fields[5] != ".").then(|| fields[5].to_owned()),
-                filter: fields[6].to_owned(),
-                // Imported INFO is provenance, not live DGW evidence. It may
-                // describe only the source ALT and must never be reused after
-                // an allele edit. The frozen selected-sample VCF remains the
-                // lossless copy of the original record.
-                info: BTreeMap::new(),
-                format_keys,
-                sample_values,
-                haplotype1_alt,
-                haplotype2_alt,
-                unphased_alt,
-                source_line: trimmed.to_owned(),
-            };
-            on_variant(&variant)?;
         }
         line.clear();
     }
@@ -336,15 +458,21 @@ where
     if sample_index.is_none() {
         return Err(DgwError::InvalidVcf("VCF has no #CHROM header".into()));
     }
-    let warnings = if skipped_unsupported == 0 {
-        Vec::new()
-    } else {
-        vec![format!(
-            "Skipped {skipped_unsupported} unsupported source VCF record{} while projecting the selected sample (examples: {}). DGW v1 imports only biallelic, sequence-resolved SNVs and 1–49 bp indels.",
+    let mut warnings = Vec::new();
+    if excluded_non_pass > 0 {
+        warnings.push(format!(
+            "DGW excluded {excluded_non_pass} non-PASS source VCF record{} before selected-sample projection and normalization (examples: {}). Only records whose FILTER field is exactly PASS enter a project.",
+            if excluded_non_pass == 1 { "" } else { "s" },
+            non_pass_examples.join(", ")
+        ));
+    }
+    if skipped_unsupported > 0 {
+        warnings.push(format!(
+            "Skipped {skipped_unsupported} unsupported source VCF allele{} while projecting the selected sample (examples: {}). DGW imports each sequence-resolved SNV or 1–49 bp indel ALT as an exact internal allele.",
             if skipped_unsupported == 1 { "" } else { "s" },
             skipped_examples.join(", ")
-        )]
-    };
+        ));
+    }
     Ok((headers, warnings))
 }
 
@@ -512,15 +640,46 @@ mod tests {
     }
 
     #[test]
+    fn imports_only_strict_pass_records() {
+        let mut file = fixture();
+        writeln!(file, "1\t101\t.\tA\tC\t.\tLowQual\t.\tGT\t0/1").unwrap();
+        writeln!(file, "1\t102\t.\tA\tG\t.\t.\t.\tGT\t0/1").unwrap();
+
+        let inspection = inspect_vcf(file.path(), "b37").unwrap();
+        assert_eq!(inspection.record_count, 3);
+        assert_eq!(inspection.pass_record_count, 1);
+        assert_eq!(inspection.non_pass_record_count, 2);
+        assert_eq!(inspection.supported_record_count, 1);
+
+        let (_, variants, warnings) = extract_selected_sample(file.path(), "b37", "DEMO").unwrap();
+        assert_eq!(variants.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("excluded 2 non-PASS"));
+        assert!(warnings[0].contains("FILTER=LowQual"));
+        assert!(warnings[0].contains("FILTER=."));
+        assert!(warnings[0].contains("exactly PASS"));
+    }
+
+    #[test]
+    fn accepts_unsorted_input_for_project_normalization() {
+        let mut file = fixture();
+        writeln!(file, "1\t99\t.\tA\tC\t.\tPASS\t.\tGT\t0/1").unwrap();
+
+        let inspection = inspect_vcf(file.path(), "b37").unwrap();
+        assert!(!inspection.sorted);
+        let (_, variants, warnings) = extract_selected_sample(file.path(), "b37", "DEMO").unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(variants.len(), 2);
+        assert_eq!(variants[0].key.position, 100);
+        assert_eq!(variants[1].key.position, 99);
+    }
+
+    #[test]
     fn preserves_unphased_heterozygous_calls() {
-        assert_eq!(
-            parse_gt(&["GT".into()], &["0/1".into()]).unwrap(),
-            (false, false, true)
-        );
-        assert_eq!(
-            parse_gt(&["GT".into()], &["1/1".into()]).unwrap(),
-            (true, true, false)
-        );
+        let heterozygous = parse_gt(&["GT".into()], &["0/1".into()], 1).unwrap();
+        assert_eq!(project_alt(heterozygous, 1), (false, false, true, Some(2)));
+        let homozygous = parse_gt(&["GT".into()], &["1/1".into()], 1).unwrap();
+        assert_eq!(project_alt(homozygous, 1), (true, true, false, None));
     }
 
     #[test]
@@ -550,10 +709,56 @@ mod tests {
     }
 
     #[test]
-    fn still_rejects_multiallelic_input() {
+    fn decomposes_phased_multiallelic_input_into_exact_alts() {
         let mut file = fixture();
         writeln!(file, "1\t101\t.\tA\tC,G\t.\tPASS\tANN=.\tGT\t1|2").unwrap();
-        let error = extract_selected_sample(file.path(), "b37", "DEMO").unwrap_err();
-        assert!(error.to_string().contains("multiallelic record"));
+        let inspection = inspect_vcf(file.path(), "b37").unwrap();
+        assert!(!inspection.biallelic);
+        assert_eq!(inspection.supported_record_count, 2);
+
+        let (_, variants, warnings) = extract_selected_sample(file.path(), "b37", "DEMO").unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(variants.len(), 3);
+        let c = variants
+            .iter()
+            .find(|variant| variant.key.position == 101 && variant.key.alternate == "C")
+            .unwrap();
+        let g = variants
+            .iter()
+            .find(|variant| variant.key.position == 101 && variant.key.alternate == "G")
+            .unwrap();
+        assert!(c.haplotype1_alt && !c.haplotype2_alt && !c.unphased_alt);
+        assert!(!g.haplotype1_alt && g.haplotype2_alt && !g.unphased_alt);
+        assert_eq!(c.sample_values, vec!["1|0"]);
+        assert_eq!(g.sample_values, vec!["0|1"]);
+    }
+
+    #[test]
+    fn preserves_both_alleles_of_unphased_one_two_genotype_without_inventing_phase() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "##fileformat=VCFv4.2").unwrap();
+        writeln!(
+            file,
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tDEMO"
+        )
+        .unwrap();
+        writeln!(file, "1\t100\t.\tA\tC,G\t.\tPASS\t.\tGT\t1/2").unwrap();
+
+        let (_, variants, warnings) = extract_selected_sample(file.path(), "b37", "DEMO").unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(variants.len(), 2);
+        let c = variants
+            .iter()
+            .find(|variant| variant.key.alternate == "C")
+            .unwrap();
+        let g = variants
+            .iter()
+            .find(|variant| variant.key.alternate == "G")
+            .unwrap();
+        assert!(c.unphased_alt && g.unphased_alt);
+        assert_eq!(c.unphased_slot, Some(1));
+        assert_eq!(g.unphased_slot, Some(2));
+        assert_eq!(c.sample_values, vec!["1/0"]);
+        assert_eq!(g.sample_values, vec!["0/1"]);
     }
 }

@@ -3,7 +3,10 @@
 ## Local data flow
 
 ```text
-normalized VCF + selected sample
+VCF + selected sample
+                  │
+                  ▼
+     normalize private project copy
                   │
                   ▼
        read-only source genome track
@@ -13,12 +16,12 @@ normalized VCF + selected sample
                   ▼
          experimental genome track
                   │
-        device rack + visible edit blocks
+      device rack + execution strategy
                   │
-       ┌──────────┼──────────────┐
-       ▼          ▼              ▼
- focused DNA   live exact-allele   optional consolidation
-                  evidence        or clean VCF export
+       ┌──────────┼──────────────┬──────────────────┐
+       ▼          ▼              ▼                  ▼
+ focused DNA  interactive       background       live exact-allele
+              edit blocks       aggregate job       evidence
 ```
 
 The app has no server, account, telemetry, or remote patient-data path. Biological resources remain outside the project and are registered by local path. Imported VCF INFO annotations are accepted but ignored by the operational model; every displayed consequence or database result comes through the live exact-allele evidence boundary.
@@ -48,11 +51,13 @@ Consolidation sets `baseStateId = headStateId`, so `edits_for_track` returns no 
 
 ## Device boundary
 
-The Device Browser has three user-facing functional groups. Mutation Generator belongs to Edit; SnpEff, dbNSFP, ClinVar, and COSMIC belong to Evidence; and objective-driven track models such as Genome Optimizer belong to Analyze. A track's Rack contains only applied instances in order, while Genome Optimizer still returns reviewable edit proposals through the host protocol. Device code is distinct from the reference/model/database resource packs it consumes.
+The Device Browser has four user-facing functional groups. Mutation Generator belongs to Edit; SnpEff, dbNSFP, ClinVar, and COSMIC belong to Evidence; objective-driven track models such as Genome Optimizer belong to Analyze; and Variant Map belongs to Visualize. A track's Rack contains only applied instances in order, while Genome Optimizer still returns reviewable edit proposals through the host protocol. Device code is distinct from the reference/model/database resource packs it consumes.
 
 The compatibility boundary is a versioned, structured DGW Device API. “VST-like” describes the rack interaction only; it is not an audio plug-in ABI. A device receives host-prepared genomic input and returns structured proposals or results. It never receives authority to mutate project SQLite or files directly. The host validates proposed edits, owns caching and persistence, and records accepted results.
 
 The built-in Genome Optimizer follows this shape: its core planner is non-mutating, and the Tauri host applies accepted proposals through normal track APIs. SnpEff and the evidence adapters return structured records through the evaluation boundary. The core validates versioned manifests and protocol messages, and the UI obtains its rack catalog from that core contract. External installation, isolation, and third-party execution are not enabled yet. See [Device API and Resource Packs](device-api.md).
+
+One device may use two host execution strategies without appearing twice in the Rack. Small selections use the interactive strategy and may produce individually visible immutable blocks. Larger selections use a persistent background job attached to the same device and track. Background previews return aggregate counts rather than transferring or rendering every change, while the complete proposal set is staged in indexed project storage. Apply adds one reversible compound mutation layer to the selected track; it never creates a track implicitly. Track Profiler then evaluates compound layers in a persistent background job: exact source/current alleles are deduplicated, SnpEff is streamed in 1,000-allele batches through one JVM, and each indexed database is queried once with a BED region file. Jobs are queued through a shared compute slot, report progress, can be cancelled between stages, and remain listed in the project Jobs view. The user-configurable worker-thread value is recorded with each job and is applied by engines that support parallel workers.
 
 The implemented **Genome Optimizer** remains experimental. It accepts a mode, focused interval, selected variants where required, an objective, a direction, weights, active evidence-device IDs, and a maximum edit count:
 
@@ -77,7 +82,7 @@ The Rust `dgw-core` crate has no Tauri dependency. This allows state, VCF, seque
 
 SQLite uses WAL mode and foreign keys. Root variants have indexed allele/region columns plus compatibility payloads, allowing page, region, density, and exact-locus queries without loading the complete VCF. The public project schema remains version 1; additive indexes and backfills are an idempotent schema-1 migration.
 
-The application boundary is bounded: source variants are paged 200 at a time, a detailed track request returns at most 500 marks, and broad regions use 256 density bins. Interval and whole-track selections stay symbolic until the backend resolves them for a device. Genome Optimizer is capped at 100 positions and Mutation Generator at 1,000; an over-limit request fails rather than being silently truncated.
+The application boundary is bounded: source variants are paged 200 at a time, a detailed track request returns at most 500 marks, and broad regions use 256 density bins. Interval and whole-track selections stay symbolic until the backend resolves them for a device. Genome Optimizer is currently capped at 100 interactive positions. Mutation Generator routes selections above the configurable interactive threshold to a background aggregate preview, bounded by a 100,000-position ceiling. Bulk Apply creates one state node and keeps its allele changes in an indexed normalized table, so focused projections and exports remain exact without rendering thousands of blocks.
 
 ## Reference access
 

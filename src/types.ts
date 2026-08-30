@@ -43,6 +43,8 @@ export interface VcfInspection {
   samples: string[];
   contigs: string[];
   recordCount: number;
+  passRecordCount: number;
+  nonPassRecordCount: number;
   supportedRecordCount: number;
   skippedUnsupportedRecordCount: number;
   biallelic: boolean;
@@ -63,6 +65,7 @@ export interface EffectiveVariant {
   haplotype1Alt: boolean;
   haplotype2Alt: boolean;
   unphasedAlt: boolean;
+  unphasedSlot?: number;
   origin: "observed" | "edited" | "created";
   editIds: string[];
   sourceKey?: VariantKey;
@@ -79,7 +82,8 @@ export interface GenomeState {
 
 export type EditKind =
   | { kind: "setAllele"; key: VariantKey; sourceKey?: VariantKey }
-  | { kind: "restoreReference"; sourceKey: VariantKey };
+  | { kind: "restoreReference"; sourceKey: VariantKey }
+  | { kind: "compoundMutationLayer"; layerId: string; positionCount: number; changeCount: number };
 
 export interface EditOperation {
   id: string;
@@ -130,6 +134,69 @@ export interface VariantPage {
   total: number;
   variants: EffectiveVariant[];
   hasMore: boolean;
+}
+
+export interface VariantContigSummary {
+  contig: string;
+  total: number;
+  minPosition: number;
+  maxPosition: number;
+}
+
+export interface VariantNavigationBin {
+  contig: string;
+  start: number;
+  end: number;
+  total: number;
+}
+
+export interface ProcessProgress {
+  operation: string;
+  stage: string;
+  message: string;
+  step: number;
+  totalSteps: number;
+}
+
+export type BackgroundJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface BackgroundJob<TResult = unknown> {
+  id: string;
+  operation: string;
+  deviceId: string;
+  trackId: string;
+  status: BackgroundJobStatus;
+  progress: number;
+  stage: string;
+  message: string;
+  workerThreads: number;
+  request: unknown;
+  result?: TResult;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TrackProfileDeviceCoverage {
+  id: string;
+  evaluated: number;
+  total: number;
+  exactMatches: number;
+  unavailable: number;
+  errors: number;
+}
+
+export interface TrackEvidenceProfileResult {
+  trackId: string;
+  stateId: string;
+  activeMutations: number;
+  evaluatedMutations: number;
+  impactDelta?: number;
+  higherImpactMutations?: number;
+  lowerImpactMutations?: number;
+  unchangedImpactMutations?: number;
+  deviceCoverage: TrackProfileDeviceCoverage[];
+  limitation: string;
 }
 
 export interface VariantDensityBin {
@@ -262,9 +329,34 @@ export interface RandomizerPlan {
   limitation: string;
 }
 
+export interface RandomizerPreviewResult {
+  selectedPositions: number;
+  randomizedPositions: number;
+  transitionPositions: number;
+  transversionPositions: number;
+  generatedEdits: number;
+  excludedPositions: number;
+  changeCount: number;
+  changes: Array<{
+    contig: string;
+    position: number;
+    from: string;
+    to: string;
+    substitutionClass: "transition" | "transversion";
+  }>;
+  noOpReason?: string;
+  limitation: string;
+  compoundLayerId?: string;
+}
+
 export interface RandomizerRunResult {
   plan: RandomizerPlan;
   generatedEditIds: string[];
+  snapshot: ProjectSnapshot;
+}
+
+export interface CompoundLayerApplyResult {
+  generatedEditId: string;
   snapshot: ProjectSnapshot;
 }
 
@@ -334,8 +426,8 @@ export interface EvaluationResult {
   limitation: string;
 }
 
-export type DeviceKind = "analysis" | "evidence" | "editing";
-export type DeviceCapability = "analyzeAllele" | "lookupEvidence" | "proposeEdits";
+export type DeviceKind = "analysis" | "evidence" | "editing" | "visualization";
+export type DeviceCapability = "analyzeAllele" | "lookupEvidence" | "proposeEdits" | "visualizeTrack";
 
 export interface DeviceManifest {
   manifestVersion: string;

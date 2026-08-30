@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const RANDOMIZER_LIMITATION: &str = "Randomization changes selected SNV alleles without predicting whether the result is biologically plausible, viable, or beneficial. Each generated allele must be evaluated independently.";
-pub const MAX_RANDOMIZER_POSITIONS: usize = 1_000;
+pub const MAX_RANDOMIZER_POSITIONS: usize = 100_000;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +327,7 @@ mod tests {
             haplotype1_alt: true,
             haplotype2_alt: false,
             unphased_alt: false,
+            unphased_slot: None,
             origin: VariantOrigin::Observed,
             edit_ids: Vec::new(),
             source_key: None,
@@ -456,12 +457,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_more_than_one_thousand_selected_positions() {
+    fn rejects_more_than_the_experimental_position_ceiling() {
         let variants: Vec<EffectiveVariant> = (1..=MAX_RANDOMIZER_POSITIONS + 1)
             .map(|position| variant(position as u64, "A", "C"))
             .collect();
         let error = plan_randomizer(&variants, &request(&variants, 100, 42)).unwrap_err();
-        assert!(error.to_string().contains("1001 alleles"));
-        assert!(error.to_string().contains("limit is 1000"));
+        assert!(error.to_string().contains("100001 alleles"));
+        assert!(error.to_string().contains("limit is 100000"));
     }
 }

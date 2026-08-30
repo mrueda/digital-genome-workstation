@@ -4,7 +4,7 @@ DGW centers the interface on the biological question currently being edited. The
 
 ## Navigate
 
-Choose an effective sample variant from the left navigator or enter an exact b37 contig/start/end interval. A focus can be at most 50 kb in v0.1; typical edit work uses tens to hundreds of bases.
+The left navigator groups source alleles by contig. Expand a chromosome to see only its occupied genomic bins. A broad bin unfolds into narrower occupied bins; choosing a leaf of at most 50 kb loads that bounded region into the tracks. Alleles from the focused interval appear nested beneath the active leaf and can be opened directly. The tree queries compact counts and bins rather than loading the complete VCF into the interface. You can also enter an exact b37 contig/start/end interval. Typical edit work uses tens to hundreds of bases.
 
 In the track deck, use **Ctrl/Command + wheel** to zoom around the pointer and **Shift + wheel** (or a horizontal trackpad gesture) to pan. The **+**, **−**, and arrow controls provide the same operations, while the navigator beneath the tracks scrolls across the contig. Press **0** or choose **Fit allele** to return to an 81-base window around the selected allele. At close range, one visible lane division represents one reference base. **Height −/+** changes track height without changing the genomic scale.
 

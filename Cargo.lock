@@ -566,11 +566,14 @@ dependencies = [
 name = "dgw-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dgw-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "uuid",
 ]
 
 [[package]]

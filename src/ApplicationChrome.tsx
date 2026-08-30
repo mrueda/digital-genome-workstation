@@ -5,6 +5,7 @@ import {
   type UiScale,
   type UserSettings
 } from "./userSettings";
+import type { BackgroundJob } from "./types";
 
 function closeMenu(event: React.MouseEvent<HTMLElement>) {
   event.currentTarget.closest("details")?.removeAttribute("open");
@@ -27,6 +28,7 @@ export function ApplicationMenu({
   onUndo,
   onRedo,
   onAddDevice,
+  onOpenJobs,
   onOpenSettings,
   onExportTrackVcf,
   onExportFocusFasta,
@@ -46,6 +48,7 @@ export function ApplicationMenu({
   onUndo: () => void;
   onRedo: () => void;
   onAddDevice: () => void;
+  onOpenJobs: () => void;
   onOpenSettings: () => void;
   onExportTrackVcf: () => void;
   onExportFocusFasta: () => void;
@@ -66,7 +69,7 @@ export function ApplicationMenu({
 
   return <>
     <nav className="application-menu" aria-label="Application menu" ref={navRef}>
-      <div className="application-menu-brand"><img src="/dgw-logo.png" alt="" /><b>DGW</b></div>
+      <div className="application-menu-brand"><img src="/dgw-mark.svg" alt="" /><b>DGW</b></div>
       <details>
         <summary>File</summary>
         <div className="application-menu-popover file-menu-popover">
@@ -118,6 +121,7 @@ export function ApplicationMenu({
           >{Math.round(scale * 100)}%</button>)}
         </div>
       </details>
+      <button type="button" className="application-menu-button" disabled={!projectOpen} onClick={onOpenJobs}>Jobs</button>
       <button type="button" className="application-menu-button" onClick={onOpenSettings}>Settings</button>
       <details>
         <summary>Help</summary>
@@ -135,6 +139,50 @@ export function ApplicationMenu({
       </section>
     </div>}
   </>;
+}
+
+export function JobsDialog({
+  open,
+  jobs,
+  loading,
+  onRefresh,
+  onCancel,
+  onClose
+}: {
+  open: boolean;
+  jobs: BackgroundJob[];
+  loading: boolean;
+  onRefresh: () => void;
+  onCancel: (jobId: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
+
+  if (!open) return null;
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="settings-dialog jobs-dialog" role="dialog" aria-modal="true" aria-labelledby="jobs-title">
+      <header>
+        <div><p className="eyebrow">Compute</p><h2 id="jobs-title">Background jobs</h2></div>
+        <button type="button" className="dialog-close" onClick={onClose} aria-label="Close jobs">×</button>
+      </header>
+      <div className="jobs-toolbar"><p>Persistent device operations for this project.</p><button type="button" onClick={onRefresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button></div>
+      <div className="jobs-list">
+        {jobs.length === 0 ? <p className="jobs-empty">No background jobs in this project.</p> : jobs.map((job) => <article className={`job-row is-${job.status}`} key={job.id}>
+          <header><div><b>{job.deviceId.includes("mutation-generator") ? "Mutation Generator" : job.deviceId.includes("track-profiler") ? "Track Profiler" : job.deviceId}</b><small>{job.operation} · thread limit {job.workerThreads}</small></div><span>{job.status}</span></header>
+          <div className="job-progress"><i style={{ width: `${job.progress}%` }} /></div>
+          <p>{job.progress}% · {job.message}</p>
+          <footer><small>{new Date(job.updatedAt).toLocaleString()}</small>{(job.status === "queued" || job.status === "running") && <button type="button" onClick={() => onCancel(job.id)}>Cancel</button>}</footer>
+        </article>)}
+      </div>
+    </section>
+  </div>;
 }
 
 export function ProjectTemplateDialog({
@@ -172,7 +220,7 @@ export function ProjectTemplateDialog({
       <div className="project-template-options">
         <button type="button" disabled={busy} onClick={() => onSelect("standardEvidence")}>
           <b>DGW Starter</b>
-          <span>{busy ? "Creating project…" : "Start with Mutation Generator, the four Evidence devices, and Genome Optimizer applied."}</span>
+          <span>{busy ? "Creating project…" : "Start with Mutation Generator, the four Evidence devices, Genome Optimizer, and Variant Map applied."}</span>
         </button>
         <button type="button" disabled={busy} onClick={() => onSelect("empty")}>
           <b>Empty</b>
@@ -222,6 +270,36 @@ export function SettingsDialog({
             key={scale}
           >{Math.round(scale * 100)}%</button>)}
         </div>
+      </div>
+
+      <div className="settings-section settings-compute">
+        <div><h3>Compute</h3><p>Bulk device operations run as background jobs. Auto reserves one logical CPU for the workstation interface; each engine uses the limit when it supports parallel workers.</p></div>
+        <label>
+          <span>Worker threads</span>
+          <select value={settings.workerThreads} onChange={(event) => onChange({
+            ...settings,
+            workerThreads: event.target.value === "auto" ? "auto" : Number(event.target.value)
+          })}>
+            <option value="auto">Auto ({Math.max(1, (navigator.hardwareConcurrency || 2) - 1)})</option>
+            {Array.from({ length: Math.max(1, navigator.hardwareConcurrency || 4) }, (_, index) => index + 1)
+              .map((threads) => <option value={threads} key={threads}>{threads}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Interactive allele limit</span>
+          <input
+            type="number"
+            min="100"
+            max="1000"
+            step="100"
+            value={settings.interactiveAlleleLimit}
+            onChange={(event) => onChange({
+              ...settings,
+              interactiveAlleleLimit: Math.max(100, Math.min(1_000, Number(event.target.value) || 1_000))
+            })}
+          />
+          <small>Larger selections run in the background and apply as one compact, reversible mutation layer.</small>
+        </label>
       </div>
 
       <label className="settings-check"><input type="checkbox" checked={settings.showVariantBrowser} onChange={(event) => onChange({ ...settings, showVariantBrowser: event.target.checked })} /><span><b>Show Variants panel</b><small>Keep the allele browser visible when a project opens.</small></span></label>

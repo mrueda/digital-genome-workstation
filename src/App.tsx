@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { confirm as confirmDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
-import { ApplicationMenu, ProjectTemplateDialog, SettingsDialog, type ProjectTemplateId } from "./ApplicationChrome";
+import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ProjectTemplateId } from "./ApplicationChrome";
 import {
   TrackDeviceWorkspace,
   type AlleleRandomizerDevice,
@@ -19,7 +19,9 @@ import {
 } from "./TrackDeviceWorkspace";
 import type {
   DeviceManifest,
+  BackgroundJob,
   EditKind,
+  EditOperation,
   EffectiveVariant,
   EvaluationResult,
   EvidenceResult,
@@ -29,11 +31,15 @@ import type {
   GenomeTrackLane,
   Haplotype,
   OptimizerRequest,
+  ProcessProgress,
   ProjectSnapshot,
-  RandomizerPlan,
+  RandomizerPreviewResult,
   RandomizerRequest,
   ResourceBundle,
+  TrackEvidenceProfileResult,
   VariantSelection,
+  VariantContigSummary,
+  VariantNavigationBin,
   VariantDensity,
   VariantKey,
   VcfInspection,
@@ -50,13 +56,13 @@ import {
   selectionEvidenceKey,
   type SelectedAlleleEvidenceCache
 } from "./selectedAlleleEvidence";
-import { buildVariantNavigationEntries } from "./variantNavigation";
 import {
   DEFAULT_USER_SETTINGS,
   USER_SETTINGS_STORAGE_KEY,
   parseUserSettings,
   type UserSettings
 } from "./userSettings";
+import { ALLELE_ROLL_BASES, buildAlleleRoll } from "./alleleRoll";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -68,11 +74,18 @@ const DEVICE_IDS = {
   clinvar: "org.dgw.builtin.clinvar",
   cosmic: "org.dgw.builtin.cosmic",
   randomizer: "org.dgw.builtin.mutation-generator",
-  optimizer: "org.dgw.builtin.genome-optimizer"
+  optimizer: "org.dgw.builtin.genome-optimizer",
+  variantMap: "org.dgw.builtin.variant-map"
 } as const;
 
-const VARIANT_ROW_HEIGHT = 50;
-const VARIANT_LIST_OVERSCAN = 8;
+const VARIANT_NAVIGATION_BIN_COUNT = 24;
+const VARIANT_NAVIGATION_ALLELE_LIMIT = 200;
+const VARIANT_NAVIGATION_LEAF_SPAN = 50_001;
+const AUTOMATIC_TRACK_ANALYSIS_EDIT_LIMIT = 1_000;
+
+function variantNavigationScope(contig: string, start?: number, end?: number): string {
+  return start === undefined || end === undefined ? contig : `${contig}:${start}-${end}`;
+}
 
 const optimizerObjectives: OptimizerObjective[] = [
   {
@@ -102,7 +115,8 @@ function variantKeyId(key: VariantKey) {
 }
 
 const alleleDeviceIds = [DEVICE_IDS.snpeff, DEVICE_IDS.dbnsfp, DEVICE_IDS.clinvar, DEVICE_IDS.cosmic];
-const dgwStarterDeviceIds = [DEVICE_IDS.randomizer, ...alleleDeviceIds, DEVICE_IDS.optimizer];
+const rackCompactDeviceIds = [...alleleDeviceIds, DEVICE_IDS.variantMap];
+const dgwStarterDeviceIds = [DEVICE_IDS.randomizer, ...alleleDeviceIds, DEVICE_IDS.optimizer, DEVICE_IDS.variantMap];
 
 type DeviceEvidenceMap = Record<string, EvidenceResult>;
 
@@ -158,11 +172,6 @@ function sameVariant(left: EffectiveVariant["key"], right: EffectiveVariant["key
     && left.alternate === right.alternate;
 }
 
-function isTransitionSubstitution(reference: string, alternate: string) {
-  const pair = `${reference.toUpperCase()}${alternate.toUpperCase()}`;
-  return pair === "AG" || pair === "GA" || pair === "CT" || pair === "TC";
-}
-
 function evidenceSummary(evidence?: EvidenceResult) {
   if (!evidence) return "Not run for this allele";
   if (evidence.status === "found") {
@@ -208,7 +217,7 @@ function defaultRandomizer(): AlleleRandomizerDevice {
     name: "Mutation Generator",
     bypassed: false,
     status: "ready",
-    settings: { mode: "randomizer", amount: 100, seed: 42, substitutionPattern: "uniform", transitionProbability: 67 },
+    settings: { mode: "randomizer", amount: 100, seed: 42, maximumPositions: 1_000, substitutionPattern: "uniform", transitionProbability: 67 },
     message: "Select visible VCF alleles, preview the changes, then apply them as reversible blocks.",
     rackOrder: 5,
     limitation: "Randomization is not a biological prediction. Version 1 changes canonical SNVs only and each result must be evaluated independently."
@@ -228,6 +237,7 @@ function sameOptimizerSettings(left: GenomeOptimizerSettings, right: GenomeOptim
 function editBlock(lane: GenomeTrackLane, editId: string): GenomeTrackEditBlock | undefined {
   const operation = lane.edits.find((candidate) => candidate.id === editId);
   if (!operation) return undefined;
+  if (operation.edit.kind === "compoundMutationLayer") return undefined;
   const source = operation.edit.kind === "restoreReference" ? operation.edit.sourceKey : operation.edit.key;
   const reference = operation.edit.kind === "restoreReference" ? source.alternate : source.reference;
   const alternate = operation.edit.kind === "restoreReference" ? source.reference : source.alternate;
@@ -248,6 +258,7 @@ function variantForTrackEdit(lane: GenomeTrackLane, editId: string): EffectiveVa
   if (effective) return effective;
   const operation = lane.edits.find((item) => item.id === editId);
   if (!operation) return undefined;
+  if (operation.edit.kind === "compoundMutationLayer") return undefined;
   const key = operation.edit.kind === "restoreReference" ? operation.edit.sourceKey : operation.edit.key;
   return {
     key,
@@ -258,6 +269,15 @@ function variantForTrackEdit(lane: GenomeTrackLane, editId: string): EffectiveVa
     editIds: [editId],
     sourceInfo: {}
   };
+}
+
+function editPrimaryKey(operation: EditOperation): VariantKey | undefined {
+  if (operation.edit.kind === "compoundMutationLayer") return undefined;
+  return operation.edit.kind === "restoreReference" ? operation.edit.sourceKey : operation.edit.key;
+}
+
+function editMutationCount(operation: EditOperation): number {
+  return operation.edit.kind === "compoundMutationLayer" ? operation.edit.changeCount : 1;
 }
 
 function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTemplateId; onOpened: (path: string, snapshot: ProjectSnapshot, created: boolean) => void }) {
@@ -273,6 +293,15 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
   const [warnings, setWarnings] = useState<string[]>([]);
   const [inputWarnings, setInputWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [processSteps, setProcessSteps] = useState<ProcessProgress[]>([]);
+
+  function receiveProgress(progress: ProcessProgress) {
+    setStatus(progress.message);
+    setProcessSteps((current) => [
+      ...current.filter((item) => item.operation !== progress.operation || item.step !== progress.step),
+      progress
+    ].sort((left, right) => left.step - right.step));
+  }
 
   useEffect(() => {
     api.suggestedBundle()
@@ -310,6 +339,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     });
     if (typeof selected !== "string") return;
     setBusy(true);
+    setProcessSteps([]);
     setStatus("Inspecting VCF header and records…");
     try {
       await inspectSelectedVcf(selected);
@@ -324,7 +354,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     selected: string,
     options?: { preferredSample?: string; projectName?: string; projectPath?: string; example?: boolean }
   ): Promise<VcfInspection> {
-    const result = await api.inspectVcf(selected);
+    const result = await api.inspectVcf(selected, receiveProgress);
     const selectedSample = options?.preferredSample && result.samples.includes(options.preferredSample)
       ? options.preferredSample
       : result.samples[0] ?? "";
@@ -337,8 +367,13 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     setName(nextName);
     setProjectPath(options?.projectPath ?? `${parentDirectory(selected)}/${projectSlug(nextName)}.dgw`);
     const nextInputWarnings = [];
+    if (result.nonPassRecordCount > 0) {
+      nextInputWarnings.push(
+        `${result.nonPassRecordCount.toLocaleString()} non-PASS ${result.nonPassRecordCount === 1 ? "record" : "records"} will be excluded before selected-sample projection and normalization.`
+      );
+    }
     if (!result.biallelic) {
-      nextInputWarnings.push("This VCF contains multiallelic records. Split and normalize them before creating a DGW project.");
+      nextInputWarnings.push("This VCF contains multiallelic records. DGW will decompose each supported ALT into an exact internal allele and preserve the selected sample's GT semantics.");
     }
     if (result.skippedUnsupportedRecordCount > 0) {
       nextInputWarnings.push(
@@ -347,7 +382,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     }
     setInputWarnings(nextInputWarnings);
     setStatus(
-      `${options?.example ? "Example ready · " : ""}${result.supportedRecordCount.toLocaleString()} supported small-variant records of ${result.recordCount.toLocaleString()} total · ${result.samples.length.toLocaleString()} ${result.samples.length === 1 ? "sample" : "samples"} · input INFO annotations will be ignored`
+      `${options?.example ? "Example ready · " : ""}${result.supportedRecordCount.toLocaleString()} importable PASS small-variant records of ${result.recordCount.toLocaleString()} total · ${result.nonPassRecordCount.toLocaleString()} non-PASS excluded · ${result.samples.length.toLocaleString()} ${result.samples.length === 1 ? "sample" : "samples"} · input INFO annotations will be ignored`
     );
     return result;
   }
@@ -368,17 +403,18 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         projectPath: example.projectPath,
         example: true
       });
-      if (!result.biallelic || result.supportedRecordCount === 0 || !result.samples.includes(example.sample)) {
+      if (result.supportedRecordCount === 0 || !result.samples.includes(example.sample)) {
         throw new Error("The bundled example does not satisfy the DGW input contract.");
       }
       setStatus("Creating the example project…");
+      setProcessSteps([]);
       const snapshot = await api.createProject({
         projectPath: example.projectPath,
         name: example.projectName,
         sourceVcfPath: example.path,
         selectedSample: example.sample,
         resourceBundle
-      });
+      }, receiveProgress);
       onOpened(example.projectPath, snapshot, true);
     } catch (error) {
       setStatus(messageOf(error));
@@ -397,7 +433,8 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
   async function create() {
     if (!bundle || !sourcePath || !sample || !projectPath) return;
     setBusy(true);
-    setStatus("Fingerprinting the VCF and freezing the selected sample…");
+    setProcessSteps([]);
+    setStatus("Fingerprinting the VCF, normalizing a project copy, and freezing the selected sample…");
     try {
       const snapshot = await api.createProject({
         projectPath,
@@ -405,7 +442,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         sourceVcfPath: sourcePath,
         selectedSample: sample,
         resourceBundle: bundle
-      });
+      }, receiveProgress);
       onOpened(projectPath, snapshot, true);
     } catch (error) {
       setStatus(messageOf(error));
@@ -430,7 +467,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
   return (
     <main className="onboarding-shell">
       <section className="brand-panel">
-        <div className="brand-mark"><img src="/dgw-logo.png" alt="Digital Genome Workstation" /></div>
+        <div className="brand-mark"><img src="/dgw-mark.svg" alt="Digital Genome Workstation" /></div>
         <p className="eyebrow">Digital Genome Workstation</p>
         <h1>Build and compare editable genome tracks.</h1>
         <p className="lede">
@@ -462,13 +499,14 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         <div className="setup-step">
           <span className="step-number">1</span>
           <div className="grow">
-            <label>Normalized biallelic VCF with SNVs/indels</label>
+            <label>VCF with SNVs/indels</label>
             <div className="file-choice-row">
               <button className="file-picker" onClick={chooseVcf} disabled={busy}>
                 <span>{sourcePath || "Choose .vcf or .vcf.gz"}</span><b>Browse</b>
               </button>
               <button className="button secondary load-example" onClick={loadExample} disabled={busy}>{busy ? "Opening…" : "Open example"}</button>
             </div>
+            <small className="fixture-note">DGW normalizes the selected sample against the configured reference inside the project. The source VCF is never changed.</small>
             <small className="fixture-note">Annotations are optional. DGW ignores imported INFO annotations and evaluates selected alleles with the configured resources.</small>
             <small className="fixture-note">10 synthetic variants · chr7 + chr17 · fictional sample DGW_DEMO</small>
           </div>
@@ -498,9 +536,19 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         </div>
 
         <div className="status-line"><span className={busy ? "pulse" : "status-dot"} />{status}</div>
+        {busy && processSteps.length > 0 && <section className="processing-panel" aria-live="polite" aria-label="Processing progress">
+          <div className="processing-progress"><i style={{ width: `${Math.min(100, (processSteps.at(-1)!.step / processSteps.at(-1)!.totalSteps) * 100)}%` }} /></div>
+          <ol>
+            {processSteps.map((progress, index) => <li className={index === processSteps.length - 1 ? "current" : "complete"} key={`${progress.operation}-${progress.step}`}>
+              <span>{index === processSteps.length - 1 ? "Processing" : "Done"}</span>
+              <b>{progress.message}</b>
+              <small>{progress.step}/{progress.totalSteps}</small>
+            </li>)}
+          </ol>
+        </section>}
         {inputWarnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
         {warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
-        <button className="button primary wide" onClick={create} disabled={busy || !bundle || !inspection || !inspection.biallelic || inspection.supportedRecordCount === 0 || !sample || !projectPath}>
+        <button className="button primary wide" onClick={create} disabled={busy || !bundle || !inspection || inspection.supportedRecordCount === 0 || !sample || !projectPath}>
           {busy ? "Working…" : "Open genome workspace"}
         </button>
       </section>
@@ -606,8 +654,188 @@ function EvidenceCard({ evidence }: { evidence: EvidenceResult }) {
   );
 }
 
+interface AlleleRollChoice {
+  base: string;
+  haplotype?: Haplotype;
+  revision: number;
+}
+
+function AlleleRoll({
+  context,
+  referenceSequence,
+  variants,
+  selected,
+  stagedBase,
+  stagedHaplotype,
+  editable,
+  onSelectVariant,
+  onStageBase
+}: {
+  context: FocusContext;
+  referenceSequence?: string;
+  variants: EffectiveVariant[];
+  selected?: EffectiveVariant;
+  stagedBase?: string;
+  stagedHaplotype?: Haplotype;
+  editable: boolean;
+  onSelectVariant: (variant: EffectiveVariant) => void;
+  onStageBase: (base: string, haplotype?: Haplotype) => void;
+}) {
+  const [draggingHaplotype, setDraggingHaplotype] = useState<Haplotype>();
+  const [dragTargetBase, setDragTargetBase] = useState<string>();
+  const columns = useMemo(
+    () => buildAlleleRoll(context, referenceSequence, variants, selected),
+    [context, referenceSequence, variants, selected]
+  );
+  const selectedIsCanonicalSnv = Boolean(
+    selected
+    && /^[ACGT]$/i.test(selected.key.reference)
+    && /^[ACGT]$/i.test(selected.key.alternate)
+  );
+
+  if (columns.length === 0) {
+    return <div className="allele-roll-empty">Reference FASTA is unavailable for this focused region.</div>;
+  }
+
+  const gridStyle = { gridTemplateColumns: `74px repeat(${columns.length}, 30px)` };
+
+  return <section className="allele-roll" aria-label="FASTA-aligned Allele Roll">
+    <div className="allele-roll-toolbar">
+      <div><b>Allele Roll</b><span>A/C/G/T lanes aligned to forward-strand FASTA</span></div>
+      <div className="allele-roll-legend" aria-label="Chromosome-copy legend">
+        <span className="copy-a">A</span> chromosome copy A
+        <span className="copy-b">B</span> chromosome copy B
+        <span className="copy-u">U</span> copy unknown
+      </div>
+    </div>
+    <div className="allele-roll-scroll">
+      <div className="allele-roll-grid allele-roll-positions" style={gridStyle}>
+        <span className="allele-roll-axis">1-based</span>
+        {columns.map((column) => column.variant
+          ? <button
+              type="button"
+              className={column.selected ? "selected" : undefined}
+              title={`Open VCF allele at ${context.contig}:${column.position.toLocaleString()}`}
+              onClick={() => onSelectVariant(column.variant!)}
+              key={column.position}
+            >{String(column.position).slice(-3)}</button>
+          : <span className={column.selected ? "selected" : undefined} key={column.position}>{String(column.position).slice(-3)}</span>)}
+      </div>
+      <div className="allele-roll-grid allele-roll-reference" style={gridStyle}>
+        <span className="allele-roll-axis">REF 5′→3′</span>
+        {columns.map((column) => <span className={column.selected ? "selected" : undefined} key={column.position}>{column.reference}</span>)}
+      </div>
+      {ALLELE_ROLL_BASES.map((base) => <div className="allele-roll-grid allele-roll-lane" style={gridStyle} key={base}>
+        <span className={`allele-roll-axis base-${base.toLowerCase()}`}>{base}</span>
+        {columns.map((column) => {
+          const isCurrentPosition = column.selected;
+          const canStage = isCurrentPosition && column.canonicalSnv && editable;
+          const isReference = column.reference === base;
+          const isStaged = isCurrentPosition && stagedBase === base;
+          const isCurrentCopyBase = (haplotype: Haplotype) => isCurrentPosition && column.canonicalSnv && Boolean(
+            haplotype === "one" ? column.variant?.haplotype1Alt && column.copyA === base
+              : haplotype === "two" ? column.variant?.haplotype2Alt && column.copyB === base
+                : column.variant?.unphasedAlt && (column.effective ? column.unphasedAlternate === base : column.reference === base)
+          );
+          const canDragCopy = (haplotype: Haplotype) => editable && isCurrentCopyBase(haplotype);
+          const hasActiveCopy = isCurrentCopyBase("one") || isCurrentCopyBase("two") || isCurrentCopyBase("unphased");
+          const copyMark = (label: "A" | "B" | "U", haplotype: Haplotype, active: boolean) => {
+            const draggable = canDragCopy(haplotype);
+            return <i
+            className={`copy-${label.toLowerCase()}${active ? " is-note" : ""}${draggable ? " is-draggable" : ""}`}
+            draggable={draggable}
+            title={draggable
+              ? `Drag base ${base} vertically to another lane · ${label === "U" ? "chromosome copy unknown" : `chromosome copy ${label}`}`
+              : active && !editable ? `Base ${base} on the protected source track · duplicate the track to drag it`
+                : label === "U" ? "Chromosome copy is unknown" : `Chromosome copy ${label}`}
+            onDragStart={draggable ? (event) => {
+              event.stopPropagation();
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", haplotype);
+              setDraggingHaplotype(haplotype);
+            } : undefined}
+            onDragEnd={draggable ? () => {
+              setDraggingHaplotype(undefined);
+              setDragTargetBase(undefined);
+            } : undefined}
+          >{active ? <><b>{base}</b><small>{label}</small></> : label}</i>;
+          };
+          const marks = column.variant && column.canonicalSnv
+            ? <span className={`allele-roll-copy-marks${hasActiveCopy ? " has-note" : ""}`}>
+                {!column.variant.unphasedAlt && column.copyA === base && copyMark("A", "one", isCurrentCopyBase("one"))}
+                {!column.variant.unphasedAlt && column.copyB === base && copyMark("B", "two", isCurrentCopyBase("two"))}
+                {column.variant.unphasedAlt
+                  && (column.effective
+                    ? column.unphasedAlternate === base || column.reference === base
+                    : column.reference === base)
+                  && copyMark("U", "unphased", isCurrentCopyBase("unphased"))}
+              </span>
+            : undefined;
+          const stagedMark = isStaged && stagedHaplotype
+            ? <span className="allele-roll-staged-mark">{stagedHaplotype === "one" ? "A" : stagedHaplotype === "two" ? "B" : "U"}</span>
+            : undefined;
+          const className = [
+            "allele-roll-cell",
+            isReference ? "is-reference" : "",
+            column.variant ? "is-vcf-locus" : "is-locked",
+            isCurrentPosition ? "is-selected-position" : "",
+            isStaged ? "is-staged" : "",
+            isCurrentPosition && dragTargetBase === base ? "is-drag-target" : ""
+          ].filter(Boolean).join(" ");
+
+          return canStage
+            ? <button
+                type="button"
+                className={className}
+                title={base === column.reference ? `Stage restoration to REF ${base}` : `Stage ALT ${base}`}
+                aria-label={`${base === column.reference ? "Use reference" : "Change ALT to"} ${base} at ${context.contig}:${column.position}`}
+                onClick={() => onStageBase(base)}
+                onDragEnter={draggingHaplotype ? () => setDragTargetBase(base) : undefined}
+                onDragOver={draggingHaplotype ? (event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                } : undefined}
+                onDrop={draggingHaplotype ? (event) => {
+                  event.preventDefault();
+                  onStageBase(base, draggingHaplotype);
+                  setDraggingHaplotype(undefined);
+                  setDragTargetBase(undefined);
+                } : undefined}
+                key={column.position}
+              ><span>{base}</span>{marks}{stagedMark}</button>
+            : column.variant ? <button
+                type="button"
+                className={className}
+                title={column.canonicalSnv
+                  ? isCurrentPosition && !editable
+                    ? "Duplicate the protected source track before editing"
+                    : "Select this VCF locus before editing it"
+                  : "Indels remain editable in the Mutation editor"}
+                onClick={() => onSelectVariant(column.variant!)}
+                key={column.position}
+              >{isReference && <span>{base}</span>}{marks}</button>
+              : <span
+                  className={className}
+                  title="FASTA context only — this position is not editable from a conventional VCF"
+                  key={column.position}
+                >{isReference && <span>{base}</span>}</span>;
+        })}
+      </div>)}
+    </div>
+    <p className="allele-roll-help">
+      {selectedIsCanonicalSnv
+        ? editable
+          ? "Drag the filled base block vertically to another A/C/G/T lane, or click a destination cell, to stage a reversible mutation; then Apply it in the Mutation editor."
+          : "This source track is protected. Duplicate it before staging a mutation."
+        : "The selected allele is not a canonical SNV. Inspect or change its full sequence in the Mutation editor."}
+      <span> Muted columns are FASTA context, not editable sample calls.</span>
+    </p>
+  </section>;
+}
+
 function EditPanel({
   variant,
+  rollChoice,
   onApply,
   busy,
   editable,
@@ -615,6 +843,7 @@ function EditPanel({
   onDuplicateProtectedTrack
 }: {
   variant?: EffectiveVariant;
+  rollChoice?: AlleleRollChoice;
   onApply: (haplotype: Haplotype, edit: EditKind, note: string) => Promise<void>;
   busy: boolean;
   editable: boolean;
@@ -631,7 +860,7 @@ function EditPanel({
   const alternateIsChanged = Boolean(variant && normalizedAlternate !== variant.key.alternate);
   const alternateIsReference = Boolean(variant && normalizedAlternate === variant.key.reference);
   const placementOptions: Array<{ value: Haplotype; label: string }> = variant?.unphasedAlt
-    ? [{ value: "unphased", label: "Chromosome copy unknown (unphased 0/1)" }]
+    ? [{ value: "unphased", label: "Chromosome copy unknown (unphased GT)" }]
     : [
         ...(variant?.haplotype1Alt ? [{ value: "one" as const, label: "Chromosome copy A" }] : []),
         ...(variant?.haplotype2Alt ? [{ value: "two" as const, label: "Chromosome copy B" }] : [])
@@ -643,10 +872,25 @@ function EditPanel({
 
   useEffect(() => {
     if (!variant) return;
+    setMode("replace");
     setAlternate(variant.key.alternate);
     setHaplotype(variant.unphasedAlt ? "unphased" : variant.haplotype2Alt ? "two" : "one");
     setSaveFeedback(undefined);
   }, [variant]);
+
+  useEffect(() => {
+    if (!variant || !rollChoice) return;
+    if (rollChoice.haplotype && placementOptions.some((option) => option.value === rollChoice.haplotype)) {
+      setHaplotype(rollChoice.haplotype);
+    }
+    if (rollChoice.base === variant.key.reference.toUpperCase()) {
+      setMode("restore");
+    } else {
+      setMode("replace");
+      setAlternate(rollChoice.base);
+    }
+    setSaveFeedback(undefined);
+  }, [rollChoice?.revision]);
 
   function chooseMode(nextMode: "restore" | "replace") {
     setMode(nextMode);
@@ -692,8 +936,8 @@ function EditPanel({
       </div>
       <p className="mode-description">{modeDescription}</p>
       {variant?.unphasedAlt && <div className="phase-lock-notice">
-        <b>Chromosome copy unknown · input genotype 0/1</b>
-        <span>DGW follows the existing ALT without assigning it to chromosome copy A or B. Changing ALT stays unphased; using reference removes the variant from this track.</span>
+        <b>Chromosome copy unknown · input genotype uses /</b>
+        <span>DGW follows this exact ALT in its slash-separated genotype slot without assigning it to chromosome copy A or B. Changing ALT stays unphased; using reference removes this allele from the track.</span>
       </div>}
       <div className="edit-grid">
         <label>Apply to<select value={haplotype} onChange={(event) => setHaplotype(event.target.value as Haplotype)} disabled={placementOptions.length <= 1}>{placementOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
@@ -722,6 +966,7 @@ function AlleleEditorPane({
   busy,
   onApply,
   onDuplicateTrack,
+  onSelectVariant,
   onShowDevices
 }: {
   variant?: EffectiveVariant;
@@ -732,12 +977,19 @@ function AlleleEditorPane({
   busy: boolean;
   onApply: (haplotype: Haplotype, edit: EditKind, note: string) => Promise<void>;
   onDuplicateTrack: () => void;
+  onSelectVariant: (variant: EffectiveVariant) => void;
   onShowDevices: () => void;
 }) {
+  const [detailView, setDetailView] = useState<"roll" | "sequence">("roll");
+  const [rollChoice, setRollChoice] = useState<AlleleRollChoice>();
   const compoundCopyGroups = [
     { label: "chromosome copy A", count: focus?.variants.filter((item) => item.haplotype1Alt).length ?? 0 },
     { label: "chromosome copy B", count: focus?.variants.filter((item) => item.haplotype2Alt).length ?? 0 }
   ].filter((group) => group.count > 1);
+
+  useEffect(() => {
+    setRollChoice(undefined);
+  }, [variant?.key.assembly, variant?.key.contig, variant?.key.position, variant?.key.reference, variant?.key.alternate]);
 
   return <section className="dgw-allele-detail" aria-label="Selected allele editor">
     <header className="dgw-detail-header">
@@ -746,16 +998,33 @@ function AlleleEditorPane({
     </header>
     <div className="dgw-allele-detail-body">
       <div className="dgw-focused-sequence">
-        <VariantChangeLens variant={variant} referenceSequence={focus?.referenceSequence} context={context} snpeffEvidence={snpeffEvidence} />
-        <div className="coordinate-ruler"><span>{context.contig}:{context.start.toLocaleString()}</span><i /><span>{context.end.toLocaleString()}</span></div>
-        <SequenceRow label="REF" sequence={focus?.referenceSequence} tone="reference" context={context} variants={focus?.variants ?? []} track="reference" selected={variant} />
-        <SequenceRow label="CHR COPY A" sequence={focus?.haplotype1Sequence} tone="hap-one" context={context} variants={focus?.variants ?? []} track="one" selected={variant} />
-        <SequenceRow label="CHR COPY B" sequence={focus?.haplotype2Sequence} tone="hap-two" context={context} variants={focus?.variants ?? []} track="two" selected={variant} />
+        <div className="allele-detail-view-switch" role="tablist" aria-label="Allele detail view">
+          <button type="button" role="tab" aria-selected={detailView === "roll"} className={detailView === "roll" ? "active" : undefined} onClick={() => setDetailView("roll")}>Allele Roll</button>
+          <button type="button" role="tab" aria-selected={detailView === "sequence"} className={detailView === "sequence" ? "active" : undefined} onClick={() => setDetailView("sequence")}>Sequence</button>
+        </div>
+        {detailView === "roll" ? <AlleleRoll
+          context={context}
+          referenceSequence={focus?.referenceSequence}
+          variants={focus?.variants ?? []}
+          selected={variant}
+          stagedBase={rollChoice?.base}
+          stagedHaplotype={rollChoice?.haplotype}
+          editable={!track.readOnly}
+          onSelectVariant={onSelectVariant}
+          onStageBase={(base, haplotype) => setRollChoice((current) => ({ base, haplotype, revision: (current?.revision ?? 0) + 1 }))}
+        /> : <>
+          <VariantChangeLens variant={variant} referenceSequence={focus?.referenceSequence} context={context} snpeffEvidence={snpeffEvidence} />
+          <div className="coordinate-ruler"><span>{context.contig}:{context.start.toLocaleString()}</span><i /><span>{context.end.toLocaleString()}</span></div>
+          <SequenceRow label="REF" sequence={focus?.referenceSequence} tone="reference" context={context} variants={focus?.variants ?? []} track="reference" selected={variant} />
+          <SequenceRow label="CHR COPY A" sequence={focus?.haplotype1Sequence} tone="hap-one" context={context} variants={focus?.variants ?? []} track="one" selected={variant} />
+          <SequenceRow label="CHR COPY B" sequence={focus?.haplotype2Sequence} tone="hap-two" context={context} variants={focus?.variants ?? []} track="two" selected={variant} />
+        </>}
         {focus?.variants.some((item) => item.unphasedAlt) && <p className="phase-notice"><b>U</b> The ALT belongs to one chromosome copy, but genotype 0/1 does not identify A or B.</p>}
         {compoundCopyGroups.length > 0 && <p className="compound-notice"><b>Combined effect not calculated</b> {compoundCopyGroups.map((group) => `${group.count} variants on ${group.label}`).join(" · ")}.</p>}
       </div>
       <EditPanel
         variant={variant}
+        rollChoice={rollChoice}
         onApply={onApply}
         busy={busy}
         editable={!track.readOnly}
@@ -775,6 +1044,7 @@ function Workstation({
   historyRequest,
   deviceBrowserRequest,
   initialAppliedDeviceIds = dgwStarterDeviceIds,
+  onShowDeviceRack,
   onHistoryStateChange
 }: {
   projectPath: string;
@@ -785,6 +1055,7 @@ function Workstation({
   historyRequest?: HistoryRequest;
   deviceBrowserRequest?: number;
   initialAppliedDeviceIds?: string[];
+  onShowDeviceRack: () => void;
   onHistoryStateChange: (state: WorkstationHistoryState) => void;
 }) {
   const initial = snapshot.workspace.focus ?? (snapshot.variants[0] ? {
@@ -816,9 +1087,11 @@ function Workstation({
     snapshot.tracks.map((track) => [track.id, [...initialAppliedDeviceIds]])
   ));
   const [trackDeck, setTrackDeck] = useState<GenomeTrackLane[]>([]);
-  const [variantListScrollTop, setVariantListScrollTop] = useState(0);
-  const [variantListHeight, setVariantListHeight] = useState(600);
-  const variantListRef = useRef<HTMLDivElement>(null);
+  const [variantContigs, setVariantContigs] = useState<VariantContigSummary[]>([]);
+  const [expandedVariantContigs, setExpandedVariantContigs] = useState<string[]>([]);
+  const [expandedVariantBins, setExpandedVariantBins] = useState<string[]>([]);
+  const [variantBinsByScope, setVariantBinsByScope] = useState<Record<string, VariantNavigationBin[]>>({});
+  const [variantNavigationLoading, setVariantNavigationLoading] = useState<string[]>([]);
   const [selectedEditId, setSelectedEditId] = useState<string>();
   const [hiddenTrackIds, setHiddenTrackIds] = useState<string[]>([]);
   const [optimizers, setOptimizers] = useState<Record<string, GenomeOptimizerDevice>>({});
@@ -827,6 +1100,7 @@ function Workstation({
   const [notice, setNotice] = useState("Ready");
   const [detailMode, setDetailMode] = useState<"devices" | "allele">("devices");
   const [meterEvaluations, setMeterEvaluations] = useState<Record<string, Record<string, MeterEditEvaluation>>>({});
+  const [bulkProfiles, setBulkProfiles] = useState<Record<string, TrackEvidenceProfileResult>>({});
   const [trackProfilerRuns, setTrackProfilerRuns] = useState<Record<string, TrackProfilerModel>>({});
   const evaluationGeneration = useRef(0);
   const selectedAlleleEvidenceCache = useRef<SelectedAlleleEvidenceCache>(new Map());
@@ -837,17 +1111,23 @@ function Workstation({
   const handledExportRequest = useRef(0);
   const handledHistoryRequest = useRef(0);
   const handledDeviceBrowserRequest = useRef(0);
-  const sourceTrackVariants = trackDeck.find((lane) => lane.track.readOnly)?.variants;
-  const navigationVariants = sourceTrackVariants ?? snapshot.variants;
-  const navigationEntries = useMemo(
-    () => buildVariantNavigationEntries(navigationVariants),
-    [navigationVariants]
-  );
-  const firstRenderedVariant = Math.max(0, Math.floor(variantListScrollTop / VARIANT_ROW_HEIGHT) - VARIANT_LIST_OVERSCAN);
-  const renderedVariantCount = Math.ceil(variantListHeight / VARIANT_ROW_HEIGHT) + VARIANT_LIST_OVERSCAN * 2;
-  const lastRenderedVariant = Math.min(navigationEntries.length, firstRenderedVariant + renderedVariantCount);
-  const renderedNavigationEntries = navigationEntries.slice(firstRenderedVariant, lastRenderedVariant);
   const activeTrack = focus?.activeTrack ?? snapshot.activeTrack;
+  const focusedSourceVariants = trackDeck.find((lane) => lane.track.readOnly)?.variants;
+  const navigationVariantTotal = variantContigs.reduce((total, contig) => total + contig.total, 0);
+  const contextMidpoint = context.start + Math.floor((context.end - context.start) / 2);
+  const navigationVariants = (focusedSourceVariants ?? snapshot.variants)
+    .filter((variant) => variant.key.contig === context.contig
+      && variant.key.position >= context.start
+      && variant.key.position <= context.end)
+    .slice(0, VARIANT_NAVIGATION_ALLELE_LIMIT);
+  const selectedAlleleIdSet = useMemo(() => new Set(selectedAlleleIds), [selectedAlleleIds]);
+  const allTrackSelectionActive = symbolicSelection?.selection.kind === "allTrack"
+    && symbolicSelection.selection.trackId === activeTrack.id;
+  const allTrackSelectionExclusions = useMemo(() => new Set(
+    symbolicSelection?.selection.kind === "allTrack"
+      ? symbolicSelection.selection.exclusions.map(variantKeyId)
+      : []
+  ), [symbolicSelection]);
   const activeBypassedDevices = bypassedDevicesByTrack[activeTrack.id] ?? [];
   const activeAppliedDevices = appliedDevicesByTrack[activeTrack.id] ?? initialAppliedDeviceIds;
   const activeBypassedDeviceSet = useMemo(
@@ -868,13 +1148,47 @@ function Workstation({
   }, [deviceBrowserRequest]);
 
   useEffect(() => {
-    const list = variantListRef.current;
-    if (!list || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setVariantListHeight(list.clientHeight));
-    observer.observe(list);
-    setVariantListHeight(list.clientHeight);
-    return () => observer.disconnect();
-  }, []);
+    let cancelled = false;
+    setVariantContigs([]);
+    setVariantBinsByScope({});
+    setExpandedVariantContigs([context.contig]);
+    setExpandedVariantBins([]);
+    void api.variantContigs(projectPath)
+      .then((contigs) => {
+        if (!cancelled) setVariantContigs(contigs);
+      })
+      .catch((error) => {
+        if (!cancelled) setNotice(`Source variant navigator unavailable: ${messageOf(error)}`);
+      });
+    return () => { cancelled = true; };
+  }, [projectPath]);
+
+  useEffect(() => {
+    if (!variantContigs.some((summary) => summary.contig === context.contig)) return;
+    setExpandedVariantContigs((current) => current.includes(context.contig)
+      ? current
+      : [...current, context.contig]);
+    let start: number | undefined;
+    let end: number | undefined;
+    while (true) {
+      const scope = variantNavigationScope(context.contig, start, end);
+      const bins = variantBinsByScope[scope];
+      if (!bins) {
+        if (!variantNavigationLoading.includes(scope)) {
+          void loadVariantNavigationBins(context.contig, start, end);
+        }
+        return;
+      }
+      const active = bins.find((bin) => bin.start <= contextMidpoint && bin.end >= contextMidpoint);
+      if (!active || active.end - active.start + 1 <= VARIANT_NAVIGATION_LEAF_SPAN) return;
+      const childScope = variantNavigationScope(active.contig, active.start, active.end);
+      setExpandedVariantBins((current) => current.includes(childScope)
+        ? current
+        : [...current, childScope]);
+      start = active.start;
+      end = active.end;
+    }
+  }, [context.contig, contextMidpoint, variantContigs, variantBinsByScope, variantNavigationLoading]);
   const evidenceByDevice = useMemo<Record<string, EvidenceResult | undefined>>(() => ({
     [DEVICE_IDS.snpeff]: deviceEvaluations[DEVICE_IDS.snpeff] ?? evaluation?.snpeff,
     [DEVICE_IDS.dbnsfp]: deviceEvaluations[DEVICE_IDS.dbnsfp] ?? evaluation?.dbnsfp,
@@ -887,13 +1201,20 @@ function Workstation({
       [DEVICE_IDS.snpeff, 10],
       [DEVICE_IDS.dbnsfp, 20],
       [DEVICE_IDS.clinvar, 30],
-      [DEVICE_IDS.cosmic, 40]
+      [DEVICE_IDS.cosmic, 40],
+      [DEVICE_IDS.variantMap, 60]
     ]);
+    const activeLane = trackDeck.find((lane) => lane.track.id === activeTrack.id);
+    const activeEditCount = activeLane?.edits.filter((edit) => !activeTrack.bypassedEditIds.includes(edit.id)).length ?? 0;
+    const visibleVariantCount = activeLane?.variants.length ?? 0;
     return deviceManifests
-      .filter((manifest) => alleleDeviceIds.includes(manifest.id as typeof alleleDeviceIds[number]))
+      .filter((manifest) => rackCompactDeviceIds.includes(manifest.id as typeof rackCompactDeviceIds[number]))
       .map((manifest) => {
         const evidence = evidenceByDevice[manifest.id];
-        const resource = manifest.id === DEVICE_IDS.snpeff
+        const visualization = manifest.id === DEVICE_IDS.variantMap;
+        const resource = visualization
+          ? "Current track state and Track Monitor results"
+          : manifest.id === DEVICE_IDS.snpeff
           ? `${bundle.snpeffGenome} transcript data`
           : manifest.id === DEVICE_IDS.dbnsfp
             ? bundle.dbnsfp.release
@@ -901,7 +1222,9 @@ function Workstation({
               ? bundle.clinvar.release
               : bundle.cosmic.release;
         const version = manifest.id === DEVICE_IDS.snpeff ? `SnpEff ${bundle.snpeffVersion}` : `device ${manifest.version}`;
-        const kind = manifest.id === DEVICE_IDS.snpeff
+        const kind = visualization
+          ? "visualization"
+          : manifest.id === DEVICE_IDS.snpeff
           ? "annotation"
           : manifest.id === DEVICE_IDS.dbnsfp
             ? "prediction"
@@ -914,44 +1237,59 @@ function Workstation({
           id: manifest.id,
           name: manifest.name,
           kind,
-          target: "selectedAllele",
+          target: visualization ? "focusedRegion" : "selectedAllele",
           order: order.get(manifest.id) ?? 100,
           bypassed: activeBypassedDeviceSet.has(manifest.id),
-          status: running ? "running" : evidence?.status ?? "notComputed",
+          status: visualization ? "ready" : running ? "running" : evidence?.status ?? "notComputed",
           resource,
           version,
-          result: evidenceSummary(evidence),
+          result: visualization
+            ? `${visibleVariantCount.toLocaleString()} visible ${visibleVariantCount === 1 ? "allele" : "alleles"} · ${activeEditCount.toLocaleString()} active ${activeEditCount === 1 ? "edit" : "edits"}`
+            : evidenceSummary(evidence),
           limitation: manifest.scientificLimitations[0],
-          canRun: Boolean(selected),
-          runLabel: evidence ? "Refresh" : "Run now",
-          scoreInclusion: activeTrack.readOnly ? undefined : inputState === "excluded" ? "excluded" : "included"
+          canRun: visualization || Boolean(selected),
+          runLabel: visualization ? "Open map" : evidence ? "Refresh" : "Run now",
+          scoreInclusion: visualization || activeTrack.readOnly ? undefined : inputState === "excluded" ? "excluded" : "included"
         } satisfies RackDeviceView;
       });
-  }, [activeBypassedDeviceSet, activeScoringObjective, activeTrack.readOnly, deviceManifests, evidenceByDevice, runningDeviceId, selected, snapshot.manifest.resourceBundle]);
+  }, [activeBypassedDeviceSet, activeScoringObjective, activeTrack, deviceManifests, evidenceByDevice, runningDeviceId, selected, snapshot.manifest.resourceBundle, trackDeck]);
   const trackModels = useMemo<GenomeTrackModel[]>(() => {
     const optimizerManifest = deviceManifests.find((manifest) => manifest.id === DEVICE_IDS.optimizer);
     const randomizerManifest = deviceManifests.find((manifest) => manifest.id === DEVICE_IDS.randomizer);
     return trackDeck.map((lane) => {
       const optimizer = optimizers[lane.track.id] ?? defaultOptimizer(lane.track.id);
       const randomizer = randomizers[lane.track.id] ?? defaultRandomizer();
+      const visibleVariants = (lane.variants ?? [])
+        .filter((variant) => variant.key.contig === context.contig)
+        .filter((variant) => variant.key.position <= context.end && variant.key.position + variant.key.reference.length - 1 >= context.start);
+      const locusCounts = new Map<string, number>();
+      const locusIndexes = new Map<string, number>();
+      for (const variant of visibleVariants) {
+        const locus = `${variant.key.position}:${variant.key.reference}`;
+        locusCounts.set(locus, (locusCounts.get(locus) ?? 0) + 1);
+      }
       return {
         id: lane.track.id,
         name: lane.track.name,
         kind: lane.track.readOnly ? "source" : "candidate",
         visible: !hiddenTrackIds.includes(lane.track.id),
-        totalEditCount: lane.edits.length,
-        alleles: (lane.variants ?? [])
-          .filter((variant) => variant.key.contig === context.contig)
-          .filter((variant) => variant.key.position <= context.end && variant.key.position + variant.key.reference.length - 1 >= context.start)
-          .map((variant) => ({
+        totalEditCount: lane.edits.reduce((total, edit) => total + editMutationCount(edit), 0),
+        alleles: visibleVariants.map((variant) => {
+          const locus = `${variant.key.position}:${variant.key.reference}`;
+          const stackIndex = locusIndexes.get(locus) ?? 0;
+          locusIndexes.set(locus, stackIndex + 1);
+          return {
             id: alleleId(variant),
             position: variant.key.position,
             reference: variant.key.reference,
             alternate: variant.key.alternate,
-            origin: variant.origin
-          })),
+            origin: variant.origin,
+            stackIndex,
+            stackCount: locusCounts.get(locus) ?? 1
+          };
+        }),
         edits: lane.edits
-          .filter((edit) => (edit.edit.kind === "restoreReference" ? edit.edit.sourceKey : edit.edit.key).contig === context.contig)
+          .filter((edit) => editPrimaryKey(edit)?.contig === context.contig)
           .map((edit) => editBlock(lane, edit.id))
           .filter((edit): edit is GenomeTrackEditBlock => Boolean(edit))
           .filter((edit) => edit.position >= context.start && edit.position <= context.end),
@@ -978,6 +1316,20 @@ function Workstation({
     const items = (lane?.edits ?? []).map((operation) => {
       const block = editBlock(lane!, operation.id);
       const enabled = !activeTrack.bypassedEditIds.includes(operation.id);
+      if (operation.edit.kind === "compoundMutationLayer") {
+        return {
+          editId: operation.id,
+          label: `${operation.edit.positionCount.toLocaleString()} positions · ${operation.edit.changeCount.toLocaleString()} changes`,
+          contig: "Multiple contigs",
+          position: 0,
+          reference: "—",
+          alternate: "—",
+          enabled,
+          evaluated: false,
+          mutationCount: operation.edit.changeCount
+        };
+      }
+      const operationKey = operation.edit.kind === "restoreReference" ? operation.edit.sourceKey : operation.edit.key;
       const measured = stored[operation.id];
       const sourceImpact = snpeffImpactSignal(measured?.sourceEvidence[DEVICE_IDS.snpeff]);
       const currentImpact = measured?.currentIsReference
@@ -989,13 +1341,38 @@ function Workstation({
       return {
         editId: operation.id,
         label: block?.label ?? operation.id.slice(0, 8),
+        contig: operationKey.contig,
+        position: block?.position ?? operationKey.position,
+        reference: block?.reference ?? operationKey.reference,
+        alternate: block?.alternate ?? operationKey.alternate,
         enabled,
         evaluated: impactDelta !== undefined,
-        impactDelta
+        impactDelta,
+        mutationCount: 1
       };
     });
     const activeItems = items.filter((item) => item.enabled);
+    const activeMutationCount = activeItems.reduce((total, item) => total + (item.mutationCount ?? 1), 0);
+    const candidateBulkProfile = bulkProfiles[activeTrack.id];
+    const bulkProfile = candidateBulkProfile
+      && candidateBulkProfile.stateId === activeTrack.headStateId
+      && candidateBulkProfile.activeMutations === activeMutationCount
+      ? candidateBulkProfile
+      : undefined;
     const evaluatedItems = activeItems.filter((item) => item.impactDelta !== undefined);
+    const itemDistributionComplete = evaluatedItems.reduce(
+      (total, item) => total + (item.mutationCount ?? 1),
+      0
+    ) === activeMutationCount && activeMutationCount > 0;
+    const itemDistribution = itemDistributionComplete
+      ? evaluatedItems.reduce((counts, item) => {
+        const count = item.mutationCount ?? 1;
+        if ((item.impactDelta ?? 0) > Number.EPSILON) counts.higher += count;
+        else if ((item.impactDelta ?? 0) < -Number.EPSILON) counts.lower += count;
+        else counts.unchanged += count;
+        return counts;
+      }, { higher: 0, lower: 0, unchanged: 0 })
+      : undefined;
     const labels = new Map([
       [DEVICE_IDS.snpeff, "SnpEff"],
       [DEVICE_IDS.dbnsfp, "dbNSFP"],
@@ -1003,15 +1380,17 @@ function Workstation({
       [DEVICE_IDS.cosmic, "COSMIC"]
     ]);
     const deviceCoverage = alleleDeviceIds.filter((deviceId) => activeAppliedDeviceSet.has(deviceId)).map((deviceId) => {
+      const bulkCoverage = bulkProfile?.deviceCoverage.find((coverage) => coverage.id === deviceId);
       const activeEvaluations = activeItems
         .map((item) => stored[item.editId])
         .filter((value): value is MeterEditEvaluation => Boolean(value));
       return {
         id: deviceId,
         label: labels.get(deviceId) ?? deviceId,
-        evaluated: activeEvaluations.filter((value) => value.evaluatedDeviceIds.includes(deviceId)).length,
-        total: activeItems.length,
-        exactMatches: activeEvaluations.reduce((count, value) => {
+        evaluated: bulkCoverage?.evaluated
+          ?? activeEvaluations.filter((value) => value.evaluatedDeviceIds.includes(deviceId)).length,
+        total: activeMutationCount,
+        exactMatches: bulkCoverage?.exactMatches ?? activeEvaluations.reduce((count, value) => {
           const evidence = value.currentIsReference ? undefined : value.currentEvidence[deviceId];
           return count + (evidence?.status === "found" ? evidence.records.length : 0);
         }, 0),
@@ -1025,13 +1404,32 @@ function Workstation({
     const activeOptimizerEdits = [...optimizerEditIds]
       .filter((editId) => !activeTrack.bypassedEditIds.includes(editId)).length;
     return {
-      evaluatedMutations: snpeffEnabled ? evaluatedItems.length : 0,
-      activeMutations: activeItems.length,
-      impactDelta: snpeffEnabled && evaluatedItems.length === activeItems.length && activeItems.length > 0
+      evaluatedMutations: snpeffEnabled
+        ? bulkProfile?.evaluatedMutations ?? evaluatedItems.reduce((total, item) => total + (item.mutationCount ?? 1), 0)
+        : 0,
+      activeMutations: activeMutationCount,
+      impactDelta: snpeffEnabled && bulkProfile
+        ? bulkProfile.impactDelta
+        : snpeffEnabled
+        && evaluatedItems.reduce((total, item) => total + (item.mutationCount ?? 1), 0) === activeItems.reduce((total, item) => total + (item.mutationCount ?? 1), 0)
+        && activeItems.length > 0
         ? evaluatedItems.reduce((sum, item) => sum + (item.impactDelta ?? 0), 0)
         : undefined,
+      higherImpactMutations: snpeffEnabled
+        ? bulkProfile?.higherImpactMutations ?? itemDistribution?.higher
+        : undefined,
+      lowerImpactMutations: snpeffEnabled
+        ? bulkProfile?.lowerImpactMutations ?? itemDistribution?.lower
+        : undefined,
+      unchangedImpactMutations: snpeffEnabled
+        ? bulkProfile?.unchangedImpactMutations ?? itemDistribution?.unchanged
+        : undefined,
       deviceCoverage,
-      items,
+      items: bulkProfile
+        ? items.map((item) => item.mutationCount && item.mutationCount > 1
+          ? { ...item, evaluated: true }
+          : item)
+        : items,
       appliedRun: optimizerResult ? {
         device: optimizer?.name ?? "Genome Optimizer",
         mode: optimizer?.settings.mode === "saturation" ? "Saturation" : "Conservative",
@@ -1050,10 +1448,17 @@ function Workstation({
         scoreUnit: optimizerResult.scoreUnit
       } : undefined
     };
-  }, [activeAppliedDeviceSet, activeBypassedDeviceSet, activeTrack, meterEvaluations, optimizers, trackDeck]);
+  }, [activeAppliedDeviceSet, activeBypassedDeviceSet, activeTrack, bulkProfiles, meterEvaluations, optimizers, trackDeck]);
   const activeAnalyzerDeviceIds = alleleDeviceIds.filter((deviceId) => activeAppliedDeviceSet.has(deviceId) && !activeBypassedDeviceSet.has(deviceId));
   const activeAnalyzerCount = activeAnalyzerDeviceIds.length;
   const storedTrackProfiler = trackProfilerRuns[activeTrack.id];
+  const restoredBulkProfile = bulkProfiles[activeTrack.id];
+  const currentBulkProfile = restoredBulkProfile
+    && restoredBulkProfile.stateId === activeTrack.headStateId
+    && restoredBulkProfile.activeMutations === trackMeter.activeMutations
+    && activeAnalyzerDeviceIds.every((deviceId) => restoredBulkProfile.deviceCoverage.some((coverage) => coverage.id === deviceId))
+    ? restoredBulkProfile
+    : undefined;
   const trackProfiler: TrackProfilerModel = storedTrackProfiler
     && (storedTrackProfiler.status === "running"
       || (storedTrackProfiler.totalMutations === trackMeter.activeMutations
@@ -1061,6 +1466,17 @@ function Workstation({
         && (storedTrackProfiler.activeDeviceIds ?? []).length === activeAnalyzerDeviceIds.length
         && (storedTrackProfiler.activeDeviceIds ?? []).every((deviceId, index) => deviceId === activeAnalyzerDeviceIds[index])))
     ? storedTrackProfiler
+    : currentBulkProfile
+      ? {
+        status: currentBulkProfile.deviceCoverage.some((coverage) => coverage.evaluated < coverage.total || coverage.errors > 0 || coverage.unavailable > 0)
+          ? "partial"
+          : "complete",
+        processedMutations: currentBulkProfile.activeMutations,
+        totalMutations: currentBulkProfile.activeMutations,
+        activeAnalyzers: activeAnalyzerCount,
+        activeDeviceIds: activeAnalyzerDeviceIds,
+        message: `Restored background profile for ${currentBulkProfile.activeMutations.toLocaleString()} mutations.`
+      }
     : {
       status: "idle",
       processedMutations: 0,
@@ -1082,6 +1498,24 @@ function Workstation({
       .then(setDeviceManifests)
       .catch((error) => setNotice(`Device catalog unavailable: ${messageOf(error)}`));
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    api.listBackgroundJobs(projectPath, 200)
+      .then((jobs) => {
+        if (disposed) return;
+        const restored: Record<string, TrackEvidenceProfileResult> = {};
+        for (const job of jobs) {
+          if (job.operation !== "trackEvidenceProfile" || job.status !== "completed" || !job.result) continue;
+          const result = job.result as Partial<TrackEvidenceProfileResult>;
+          if (!result.trackId || !result.stateId || result.activeMutations === undefined || !result.deviceCoverage) continue;
+          if (!restored[result.trackId]) restored[result.trackId] = result as TrackEvidenceProfileResult;
+        }
+        setBulkProfiles(restored);
+      })
+      .catch(() => undefined);
+    return () => { disposed = true; };
+  }, [projectPath]);
 
   useEffect(() => {
     if (trackDeck.length === 0) return;
@@ -1333,7 +1767,7 @@ function Workstation({
         setContext(nextContext);
         if (selected) {
           const refreshedSelection = view.variants.find((item) => item.key.assembly === selected.key.assembly && variantLabel(item.key) === variantLabel(selected.key));
-          if (refreshedSelection) setSelected(refreshedSelection);
+          setSelected(refreshedSelection ?? view.variants[0]);
         } else {
           setSelected(view.variants[0]);
         }
@@ -1347,6 +1781,48 @@ function Workstation({
     } finally {
       if (!background && generation === focusRefreshGeneration.current) setBusy(false);
     }
+  }
+
+  async function loadVariantNavigationBins(contig: string, start?: number, end?: number) {
+    const scope = variantNavigationScope(contig, start, end);
+    if (variantBinsByScope[scope] || variantNavigationLoading.includes(scope)) return;
+    setVariantNavigationLoading((current) => current.includes(scope) ? current : [...current, scope]);
+    try {
+      const bins = await api.variantNavigationBins(
+        projectPath,
+        contig,
+        VARIANT_NAVIGATION_BIN_COUNT,
+        start,
+        end
+      );
+      setVariantBinsByScope((current) => ({ ...current, [scope]: bins }));
+    } catch (error) {
+      setNotice(`Could not load ${scope}: ${messageOf(error)}`);
+    } finally {
+      setVariantNavigationLoading((current) => current.filter((item) => item !== scope));
+    }
+  }
+
+  function toggleVariantContig(contig: string) {
+    const expanded = expandedVariantContigs.includes(contig);
+    setExpandedVariantContigs((current) => expanded
+      ? current.filter((item) => item !== contig)
+      : [...current, contig]);
+    if (!expanded) void loadVariantNavigationBins(contig);
+  }
+
+  async function activateNavigationBin(bin: VariantNavigationBin) {
+    const scope = variantNavigationScope(bin.contig, bin.start, bin.end);
+    if (bin.end - bin.start + 1 > VARIANT_NAVIGATION_LEAF_SPAN) {
+      const expanded = expandedVariantBins.includes(scope);
+      setExpandedVariantBins((current) => expanded
+        ? current.filter((item) => item !== scope)
+        : [...current, scope]);
+      if (!expanded) void loadVariantNavigationBins(bin.contig, bin.start, bin.end);
+      return;
+    }
+    setNotice(`Loading chr${bin.contig}:${bin.start.toLocaleString()}–${bin.end.toLocaleString()}…`);
+    await refresh({ contig: bin.contig, start: bin.start, end: bin.end });
   }
 
   function previewViewport(nextContext: FocusContext) {
@@ -1563,29 +2039,22 @@ function Workstation({
     setNotice(ids.length === 0 ? "No VCF alleles are visible in this region" : `Selected all ${ids.length} visible VCF allele positions`);
   }
 
-  async function selectAllTrackAlleles(trackId: string) {
+  function selectAllTrackAlleles(trackId: string) {
     invalidateSelectedAlleleEvaluation();
     const lane = trackDeck.find((item) => item.track.id === trackId);
     const variants = lane?.variants ?? [];
     const ids = variants.map(alleleId);
     const selection: VariantSelection = { kind: "allTrack", trackId, exclusions: [] };
-    setBusy(true);
-    try {
-      const resolution = await api.resolveVariantSelection(projectPath, selection, 1);
-      setSymbolicSelection({ selection, total: resolution.total });
-      setAlleleSelection(ids, "Select all variants in track", true, true);
-      setSelectedEditId(undefined);
-      setDetailMode("devices");
-      setSelectedDeviceId(DEVICE_IDS.randomizer);
-      if (variants[0]) setSelected(variants[0]);
-      setNotice(resolution.total === 0
-        ? "This track has no active VCF alleles"
-        : `Selected all ${resolution.total.toLocaleString()} active VCF alleles in this track · device run limits are checked before generation`);
-    } catch (error) {
-      setNotice(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
+    const total = navigationVariantTotal || snapshot.variants.length;
+    setSymbolicSelection({ selection, total });
+    setAlleleSelection(ids, "Select all variants in track", true, true);
+    setSelectedEditId(undefined);
+    setDetailMode("devices");
+    setSelectedDeviceId(DEVICE_IDS.randomizer);
+    if (variants[0]) setSelected(variants[0]);
+    setNotice(total === 0
+      ? "This track has no active VCF alleles"
+      : `${total.toLocaleString()} variants selected across all ${variantContigs.length.toLocaleString()} contigs`);
   }
 
   async function selectedVariantKeysForDevice(trackId: string, limit: number, deviceName: string) {
@@ -1774,35 +2243,51 @@ function Workstation({
     });
   }
 
-  async function randomizerRequest(trackId: string, device: AlleleRandomizerDevice): Promise<RandomizerRequest> {
+  function randomizerInvocation(trackId: string, device: AlleleRandomizerDevice): {
+    request: RandomizerRequest;
+    selection?: VariantSelection;
+    selectionLimit?: number;
+  } {
+    const selectionLimit = Math.max(1, Math.min(100_000, Math.trunc(device.settings.maximumPositions || 1_000)));
+    const selection = symbolicSelection?.selection.trackId === trackId
+      ? symbolicSelection.selection
+      : undefined;
+    const symbolicTotal = selection ? (symbolicSelection?.total ?? 0) : 0;
+    if (selection && symbolicTotal > selectionLimit) {
+      throw new Error(
+        `${symbolicTotal.toLocaleString()} alleles are selected. Mutation Generator accepts at most ${selectionLimit.toLocaleString()} positions per run; narrow the selection or raise Maximum positions.`
+      );
+    }
+    const lane = trackDeck.find((item) => item.track.id === trackId);
+    const selectedSet = new Set(selectedAlleleIdsRef.current);
     return {
-      selectedVariants: await selectedVariantKeysForDevice(trackId, 1_000, "Mutation Generator"),
+      request: {
+        selectedVariants: selection
+          ? []
+          : (lane?.variants ?? [])
+            .filter((variant) => selectedSet.has(alleleId(variant)))
+            .map((variant) => variant.key),
       amount: device.settings.amount,
       seed: device.settings.seed,
       substitutionPattern: device.settings.substitutionPattern,
       transitionProbability: device.settings.transitionProbability
+      },
+      selection,
+      selectionLimit: selection ? selectionLimit : undefined
     };
   }
 
-  function randomizerPreview(plan: RandomizerPlan) {
-    const changes = new Map<string, { position: number; from: string; to: string; substitutionClass: "transition" | "transversion" }>();
-    for (const proposal of plan.proposals) {
-      const key = `${proposal.sourceVariant.contig}:${proposal.sourceVariant.position}:${proposal.sourceVariant.alternate}:${proposal.replacementVariant.alternate}`;
-      changes.set(key, {
-        position: proposal.sourceVariant.position,
-        from: proposal.sourceVariant.alternate,
-        to: proposal.replacementVariant.alternate,
-        substitutionClass: isTransitionSubstitution(proposal.sourceVariant.reference, proposal.replacementVariant.alternate) ? "transition" : "transversion"
-      });
-    }
+  function randomizerPreview(plan: RandomizerPreviewResult) {
     return {
       selectedPositions: plan.selectedPositions,
       randomizedPositions: plan.randomizedPositions,
       transitionPositions: plan.transitionPositions,
       transversionPositions: plan.transversionPositions,
       generatedEdits: plan.generatedEdits,
-      excludedPositions: plan.exclusions.length,
-      changes: [...changes.values()],
+      excludedPositions: plan.excludedPositions,
+      changeCount: plan.changeCount,
+      changes: plan.changes,
+      compoundLayerId: plan.compoundLayerId,
       message: plan.noOpReason
     };
   }
@@ -1822,23 +2307,73 @@ function Workstation({
 
   async function previewRandomizer(trackId: string) {
     const device = randomizers[trackId] ?? defaultRandomizer();
-    setBusy(true);
+    const selectionCount = symbolicSelection?.selection.trackId === trackId
+      ? symbolicSelection.total
+      : selectedAlleleIdsRef.current.length;
+    const background = selectionCount > settings.interactiveAlleleLimit;
+    if (!background) setBusy(true);
     setRandomizers((current) => ({
       ...current,
-      [trackId]: { ...(current[trackId] ?? device), status: "running", message: "Building preview…" }
+      [trackId]: {
+        ...(current[trackId] ?? device),
+        status: "running",
+        message: background ? "Submitting background preview…" : "Building interactive preview…"
+      }
     }));
     try {
-      const plan = await api.previewRandomizer(projectPath, trackId, await randomizerRequest(trackId, device));
+      const invocation = randomizerInvocation(trackId, device);
+      let plan: RandomizerPreviewResult;
+      if (background) {
+        const workerThreads = settings.workerThreads === "auto"
+          ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1)
+          : settings.workerThreads;
+        let job = await api.startRandomizerPreviewJob(
+          projectPath,
+          trackId,
+          invocation.request,
+          invocation.selection,
+          invocation.selectionLimit,
+          workerThreads
+        );
+        while (job.status === "queued" || job.status === "running") {
+          setRandomizers((current) => ({
+            ...current,
+            [trackId]: {
+              ...(current[trackId] ?? device),
+              status: "running",
+              message: `Background job · ${job.progress}% · ${job.message}`
+            }
+          }));
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          job = await api.backgroundJob<RandomizerPreviewResult>(projectPath, job.id);
+        }
+        if (job.status !== "completed" || !job.result) {
+          throw new Error(job.error ?? job.message ?? `Background job ${job.status}`);
+        }
+        plan = job.result;
+      } else {
+        plan = await api.previewRandomizer(
+          projectPath,
+          trackId,
+          invocation.request,
+          invocation.selection,
+          invocation.selectionLimit
+        );
+      }
       setRandomizers((current) => ({
         ...current,
         [trackId]: {
           ...(current[trackId] ?? device),
           status: "ready",
           preview: randomizerPreview(plan),
-          message: plan.noOpReason ?? `${plan.randomizedPositions} selected positions ready to apply.`
+          message: plan.noOpReason ?? (background
+            ? `Background preview completed for ${plan.randomizedPositions.toLocaleString()} positions.`
+            : `${plan.randomizedPositions} selected positions ready to apply.`)
         }
       }));
-      setNotice(plan.noOpReason ?? `Preview: ${plan.randomizedPositions} positions become ${plan.generatedEdits} reversible mutation blocks`);
+      setNotice(plan.noOpReason ?? (background
+        ? `Background preview: ${plan.randomizedPositions.toLocaleString()} positions · ${plan.generatedEdits.toLocaleString()} copy-specific changes`
+        : `Preview: ${plan.randomizedPositions} positions become ${plan.generatedEdits} reversible mutation blocks`));
     } catch (error) {
       setRandomizers((current) => ({
         ...current,
@@ -1846,20 +2381,63 @@ function Workstation({
       }));
       setNotice(messageOf(error));
     } finally {
-      setBusy(false);
+      if (!background) setBusy(false);
     }
   }
 
   async function applyRandomizer(trackId: string) {
     const device = randomizers[trackId] ?? defaultRandomizer();
     if (!device.preview || device.preview.generatedEdits === 0) return;
+    const preview = device.preview;
     setBusy(true);
     setRandomizers((current) => ({
       ...current,
       [trackId]: { ...(current[trackId] ?? device), status: "running", message: "Writing reversible mutation blocks…" }
     }));
     try {
-      const result = await api.runRandomizer(projectPath, trackId, await randomizerRequest(trackId, device));
+      if (preview.compoundLayerId) {
+        const applied = await api.applyCompoundMutationLayer(
+          projectPath,
+          trackId,
+          preview.compoundLayerId
+        );
+        const generatedEditIds = [applied.generatedEditId];
+        setSnapshot(applied.snapshot);
+        recordAction({
+          kind: "editBatch",
+          trackId,
+          editIds: generatedEditIds,
+          label: `Randomize ${preview.randomizedPositions.toLocaleString()} positions`
+        });
+        setRandomizers((current) => ({
+          ...current,
+          [trackId]: {
+            ...(current[trackId] ?? device),
+            bypassed: false,
+            status: "ready",
+            generatedEditIds: [...new Set([...(device.generatedEditIds ?? []), ...generatedEditIds])],
+            preview: undefined,
+            message: `${preview.generatedEdits.toLocaleString()} changes applied as one reversible mutation layer.`
+          }
+        }));
+        resetAlleleSelection([]);
+        setSelectedEditId(applied.generatedEditId);
+        setEvaluation(undefined);
+        setDeviceEvaluations({});
+        await refresh(context);
+        setNotice(
+          `Mutation Generator applied ${preview.generatedEdits.toLocaleString()} changes to the selected track as one reversible layer · Track Meter updated`
+        );
+        return;
+      }
+      const invocation = randomizerInvocation(trackId, device);
+      const result = await api.runRandomizer(
+        projectPath,
+        trackId,
+        invocation.request,
+        invocation.selection,
+        invocation.selectionLimit
+      );
       setSnapshot(result.snapshot);
       if (result.generatedEditIds.length > 0) {
         recordAction({
@@ -1886,10 +2464,15 @@ function Workstation({
       setDeviceEvaluations({});
       const refreshed = await refresh(context);
       const lane = refreshed?.lanes?.find((item) => item.track.id === trackId);
-      if (result.generatedEditIds.length > 0 && lane && trackEvidenceDeviceIds(trackId).length > 0) {
+      if (result.generatedEditIds.length > 0
+        && result.generatedEditIds.length <= AUTOMATIC_TRACK_ANALYSIS_EDIT_LIMIT
+        && lane
+        && trackEvidenceDeviceIds(trackId).length > 0) {
         await analyzeTrack(trackId, lane, "automatic");
       } else {
-        setNotice(`Mutation Generator added ${result.generatedEditIds.length} reversible mutation blocks in Randomizer mode`);
+        setNotice(result.generatedEditIds.length > AUTOMATIC_TRACK_ANALYSIS_EDIT_LIMIT
+          ? `Mutation Generator added ${result.generatedEditIds.length.toLocaleString()} reversible blocks · automatic Evidence analysis was skipped for this high-volume performance run`
+          : `Mutation Generator added ${result.generatedEditIds.length} reversible mutation blocks in Randomizer mode`);
       }
     } catch (error) {
       setRandomizers((current) => ({
@@ -2170,6 +2753,7 @@ function Workstation({
     const lane = trackDeck.find((item) => item.track.id === activeTrack.id);
     const operation = lane?.edits.find((item) => item.id === selectedEditId);
     if (!operation) return;
+    if (operation.edit.kind === "compoundMutationLayer") return;
     const sourceKey = operation.edit.kind === "restoreReference"
       ? operation.edit.sourceKey
       : operation.edit.sourceKey ?? operation.edit.key;
@@ -2222,6 +2806,93 @@ function Workstation({
       setNotice("No active Evidence devices are applied to this track");
       return;
     }
+    const compoundChanges = operations
+      .filter((operation) => operation.edit.kind === "compoundMutationLayer")
+      .reduce((total, operation) => total + (operation.edit.kind === "compoundMutationLayer" ? operation.edit.changeCount : 0), 0);
+    if (compoundChanges > 0) {
+      const totalBulkMutations = operations.reduce(
+        (total, operation) => total + editMutationCount(operation),
+        0
+      );
+      setTrackProfilerRuns((current) => ({
+        ...current,
+        [trackId]: {
+          status: "running",
+          processedMutations: 0,
+          totalMutations: totalBulkMutations,
+          activeAnalyzers: activeDeviceIds.length,
+          activeDeviceIds: [...activeDeviceIds],
+          message: `Submitting ${totalBulkMutations.toLocaleString()} mutations to the background Evidence profiler…`
+        }
+      }));
+      setNotice(`Track Profiler submitted ${totalBulkMutations.toLocaleString()} mutations as a background job`);
+      try {
+        const workerThreads = settings.workerThreads === "auto"
+          ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1)
+          : settings.workerThreads;
+        let job = await api.startTrackEvidenceProfileJob(
+          projectPath,
+          trackId,
+          activeDeviceIds,
+          workerThreads
+        );
+        while (job.status === "queued" || job.status === "running") {
+          setTrackProfilerRuns((current) => ({
+            ...current,
+            [trackId]: {
+              status: "running",
+              processedMutations: Math.min(
+                totalBulkMutations,
+                Math.round((job.progress / 100) * totalBulkMutations)
+              ),
+              totalMutations: totalBulkMutations,
+              activeAnalyzers: activeDeviceIds.length,
+              activeDeviceIds: [...activeDeviceIds],
+              progress: job.progress,
+              message: job.message
+            }
+          }));
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+          job = await api.backgroundJob<TrackEvidenceProfileResult>(projectPath, job.id);
+        }
+        if (job.status !== "completed" || !job.result) {
+          throw new Error(job.error ?? job.message ?? `Background Track Profiler ${job.status}`);
+        }
+        const result = job.result;
+        setBulkProfiles((current) => ({ ...current, [trackId]: result }));
+        const incomplete = result.deviceCoverage.some(
+          (coverage) => coverage.evaluated < coverage.total || coverage.errors > 0 || coverage.unavailable > 0
+        );
+        setTrackProfilerRuns((current) => ({
+          ...current,
+          [trackId]: {
+            status: incomplete ? "partial" : "complete",
+            processedMutations: result.activeMutations,
+            totalMutations: result.activeMutations,
+            activeAnalyzers: activeDeviceIds.length,
+            activeDeviceIds: [...activeDeviceIds],
+            message: incomplete
+              ? `Background profile completed with incomplete Evidence coverage across ${result.activeMutations.toLocaleString()} mutations.`
+              : `Background profile completed for ${result.activeMutations.toLocaleString()} mutations with ${activeDeviceIds.length} Evidence devices.`
+          }
+        }));
+        setNotice(incomplete ? "Background Track Profile completed with partial Evidence coverage" : "Background Track Profile is complete");
+      } catch (error) {
+        setTrackProfilerRuns((current) => ({
+          ...current,
+          [trackId]: {
+            status: "partial",
+            processedMutations: 0,
+            totalMutations: totalBulkMutations,
+            activeAnalyzers: activeDeviceIds.length,
+            activeDeviceIds: [...activeDeviceIds],
+            message: messageOf(error)
+          }
+        }));
+        setNotice(messageOf(error));
+      }
+      return;
+    }
 
     const totalMutations = operations.length;
     const activeAnalyzers = activeDeviceIds.length;
@@ -2257,6 +2928,7 @@ function Workstation({
     let failures = 0;
     let lastFailure = "";
     for (const [index, operation] of operations.entries()) {
+      if (operation.edit.kind === "compoundMutationLayer") continue;
       const block = editBlock(lane, operation.id);
       setTrackProfilerRuns((current) => ({
         ...current,
@@ -2649,44 +3321,104 @@ function Workstation({
     .map((deviceId) => evidenceByDevice[deviceId])
     .filter((result): result is EvidenceResult => Boolean(result));
 
+  function renderVariantNavigationBins(bins: VariantNavigationBin[]) {
+    return bins.map((bin) => {
+      const scope = variantNavigationScope(bin.contig, bin.start, bin.end);
+      const leaf = bin.end - bin.start + 1 <= VARIANT_NAVIGATION_LEAF_SPAN;
+      const containsFocus = context.contig === bin.contig
+        && bin.start <= contextMidpoint
+        && bin.end >= contextMidpoint;
+      const expanded = expandedVariantBins.includes(scope);
+      const loading = variantNavigationLoading.includes(scope);
+      const children = variantBinsByScope[scope] ?? [];
+      return (
+        <div className="variant-bin-node" key={scope}>
+          <button
+            type="button"
+            className={`variant-bin-toggle${allTrackSelectionActive ? " selected" : ""}${containsFocus ? " active" : ""}`}
+            aria-expanded={leaf ? undefined : expanded}
+            aria-current={leaf && containsFocus ? "location" : undefined}
+            onClick={() => void activateNavigationBin(bin)}
+          >
+            <span>{leaf ? "•" : expanded ? "▾" : "▸"} {bin.start.toLocaleString()}–{bin.end.toLocaleString()}</span>
+            <small>{bin.total.toLocaleString()}</small>
+          </button>
+          {!leaf && expanded && <div className="variant-bin-children">
+            {loading && <div className="variant-navigation-status">Loading narrower regions…</div>}
+            {!loading && renderVariantNavigationBins(children)}
+          </div>}
+          {leaf && containsFocus && <div className="variant-bin-alleles">
+            {navigationVariants.map((variant) => {
+              const id = alleleId(variant);
+              const selectedByScope = allTrackSelectionActive
+                ? !allTrackSelectionExclusions.has(id)
+                : selectedAlleleIdSet.has(id);
+              const focused = Boolean(selected && variantLabel(selected.key) === variantLabel(variant.key));
+              return (
+                <button
+                  key={variant.key.assembly + variantLabel(variant.key)}
+                  className={`variant-item${selectedByScope ? " selected" : ""}${focused ? " active" : ""}`}
+                  aria-pressed={selectedByScope}
+                  onClick={() => focusVariant(variant)}
+                >
+                  <span>{variant.key.position.toLocaleString()}</span>
+                  <b>{variant.key.reference}<i>›</i>{variant.key.alternate}</b>
+                  <small><em className={variant.origin}>{variant.origin}</em>{variantPhaseLabel(variant)}</small>
+                </button>
+              );
+            })}
+            {navigationVariants.length === 0 && <div className="variant-navigation-status">No source alleles in the focused interval</div>}
+            {focusedSourceVariants && focusedSourceVariants.length > VARIANT_NAVIGATION_ALLELE_LIMIT && <div className="variant-navigation-status">Showing the first {VARIANT_NAVIGATION_ALLELE_LIMIT.toLocaleString()} alleles in this region</div>}
+          </div>}
+        </div>
+      );
+    });
+  }
+
   return (
     <main className={`workstation${settings.showVariantBrowser ? "" : " hide-variants"}${settings.showEvidenceInspector ? "" : " hide-evidence"}`}>
       <header className="app-header">
-        <div className="mini-brand"><img src="/dgw-logo.png" alt="" /></div>
+        <div className="mini-brand"><img src="/dgw-mark.svg" alt="" /></div>
         <div><strong title={projectPath}>{snapshot.manifest.name}</strong><span>{snapshot.manifest.selectedSample} · {snapshot.manifest.assembly}</span></div>
         <div className="header-spacer" />
-        <div className="worker-state"><span className={busy || runningDeviceId ? "pulse" : "status-dot"} />{notice}</div>
+        <div className={`worker-state${busy || runningDeviceId ? " processing" : ""}`}>
+          <span className={busy || runningDeviceId ? "pulse" : "status-dot"} />
+          {busy || runningDeviceId ? <><b>Processing</b><i>·</i></> : null}{notice}
+        </div>
       </header>
 
       <aside className="variant-browser">
-        <div className="section-title"><span>Source Variants</span><small>{navigationVariants.length.toLocaleString()} {navigationVariants.length === 1 ? "variant" : "variants"}</small></div>
-        <div
-          className="variant-list"
-          ref={variantListRef}
-          onScroll={(event) => setVariantListScrollTop(event.currentTarget.scrollTop)}
-        >
-          <div className="variant-list-spacer" style={{ height: `${navigationEntries.length * VARIANT_ROW_HEIGHT}px` }}>
-            <div className="variant-list-window" style={{ transform: `translateY(${firstRenderedVariant * VARIANT_ROW_HEIGHT}px)` }}>
-              {renderedNavigationEntries.map((entry) => {
-                if (entry.kind === "contig") {
-                  return (
-                    <div className="variant-contig-divider" key={`contig-${entry.contig}`}>
-                      <b>CHR {entry.contig}</b>
-                      <span>{entry.variantCount.toLocaleString()} source {entry.variantCount === 1 ? "variant" : "variants"}</span>
-                    </div>
-                  );
-                }
-                const variant = entry.variant;
-                return (
-                  <button key={variant.key.assembly + variantLabel(variant.key)} className={selected && variantLabel(selected.key) === variantLabel(variant.key) ? "variant-item active" : "variant-item"} onClick={() => focusVariant(variant)}>
-                    <span>{variant.key.contig}:{variant.key.position.toLocaleString()}</span>
-                    <b>{variant.key.reference}<i>›</i>{variant.key.alternate}</b>
-                    <small><em className={variant.origin}>{variant.origin}</em>{variantPhaseLabel(variant)}</small>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        <div className="section-title">
+          <span>Source Variants</span>
+          <small>{allTrackSelectionActive
+            ? `✓ ${symbolicSelection?.total.toLocaleString()} selected`
+            : `${variantContigs.length.toLocaleString()} contigs · ${navigationVariantTotal.toLocaleString()}`}</small>
+        </div>
+        <div className="variant-list variant-tree">
+          {variantContigs.map((summary) => {
+            const expanded = expandedVariantContigs.includes(summary.contig);
+            const loading = variantNavigationLoading.includes(summary.contig);
+            const bins = variantBinsByScope[summary.contig] ?? [];
+            return (
+              <section className={`variant-contig-node${allTrackSelectionActive ? " selected" : ""}${context.contig === summary.contig ? " active" : ""}`} key={summary.contig}>
+                <button
+                  type="button"
+                  className="variant-contig-toggle"
+                  aria-expanded={expanded}
+                  onClick={() => toggleVariantContig(summary.contig)}
+                >
+                  <span className="disclosure-mark">{expanded ? "▾" : "▸"}</span>
+                  <b>CHR {summary.contig}</b>
+                  <small>{summary.total.toLocaleString()}</small>
+                </button>
+                {expanded && <div className="variant-bin-list">
+                  {loading && <div className="variant-navigation-status">Loading occupied regions…</div>}
+                  {!loading && renderVariantNavigationBins(bins)}
+                </div>}
+              </section>
+            );
+          })}
+          {variantContigs.length === 0 && <div className="variant-navigation-status">Loading contigs…</div>}
         </div>
       </aside>
 
@@ -2730,6 +3462,8 @@ function Workstation({
             selectedAlleleId={detailMode === "allele" && selected ? alleleId(selected) : undefined}
             selectedAlleleIds={selectedAlleleIds}
             selectedAlleleCount={symbolicSelection?.total ?? selectedAlleleIds.length}
+            interactiveAlleleLimit={settings.interactiveAlleleLimit}
+            allAllelesSelected={allTrackSelectionActive}
             objectives={optimizerObjectives}
             weightControls={optimizerWeights}
             rackDevices={rackDevices}
@@ -2758,7 +3492,11 @@ function Workstation({
                   setDetailMode("allele");
                 });
               }}
-              onShowDevices={() => setDetailMode("devices")}
+              onSelectVariant={(variant) => { void openTrackAllele(activeTrack.id, alleleId(variant)); }}
+              onShowDevices={() => {
+                onShowDeviceRack();
+                setDetailMode("devices");
+              }}
             /> : undefined}
             onViewportChange={previewViewport}
             onSelectTrack={selectTrackAndShowDevices}
@@ -2772,6 +3510,7 @@ function Workstation({
             onSelectVisibleAlleles={selectAllVisibleAlleles}
             onSelectAllAlleles={selectAllTrackAlleles}
             onClearAlleleSelection={clearAlleleSelection}
+            onShowDeviceRack={onShowDeviceRack}
             onUndoAction={() => { void undoLastAction(); }}
             onRedoAction={() => { void redoLastAction(); }}
             onToggleEdit={toggleTrackEdit}
@@ -2795,6 +3534,10 @@ function Workstation({
 
       <aside className="inspector">
         <div className="section-title"><span>Evidence</span><small>selected allele only</small></div>
+        {symbolicSelection && <div className="selection-scope-summary">
+          <b>{symbolicSelection.total.toLocaleString()} active variant alleles selected across every contig</b>
+          <span>{selectedAlleleIds.length.toLocaleString()} are currently shown. Devices receive the complete symbolic selection; Evidence below remains specific to one focused allele.</span>
+        </div>}
         {selected ? <>
           <div className="selected-variant"><p>{selected.key.contig}:{selected.key.position.toLocaleString()}</p><h3>{selected.key.reference}<i>›</i>{selected.key.alternate}</h3><span>{selected.origin} · {variantPhaseLabel(selected)}</span></div>
           <p className="evaluation-scope">Active devices run automatically for this exact allele. Imported VCF annotations are not used.</p>
@@ -2816,6 +3559,9 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<ProjectSnapshot>();
   const [settings, setSettings] = useState<UserSettings>(() => parseUserSettings(localStorage.getItem(USER_SETTINGS_STORAGE_KEY)));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [jobs, setJobs] = useState<BackgroundJob[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
   const [exportRequest, setExportRequest] = useState<ExportRequest>();
   const [historyRequest, setHistoryRequest] = useState<HistoryRequest>();
   const [deviceBrowserRequest, setDeviceBrowserRequest] = useState(0);
@@ -2837,12 +3583,34 @@ export default function App() {
     });
   }, [settings.uiScale]);
 
+  useEffect(() => {
+    if (!jobsOpen || !projectPath) return;
+    let disposed = false;
+    async function refreshJobs() {
+      setJobsLoading(true);
+      try {
+        const next = await api.listBackgroundJobs(projectPath);
+        if (!disposed) setJobs(next);
+      } finally {
+        if (!disposed) setJobsLoading(false);
+      }
+    }
+    void refreshJobs();
+    const timer = window.setInterval(() => { void refreshJobs(); }, 750);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [jobsOpen, projectPath]);
+
   function closeProject() {
     setSnapshot(undefined);
     setProjectPath("");
     setExportRequest(undefined);
     setHistoryRequest(undefined);
     setDeviceBrowserRequest(0);
+    setJobsOpen(false);
+    setJobs([]);
     setHistoryState(EMPTY_HISTORY_STATE);
   }
 
@@ -2906,6 +3674,7 @@ export default function App() {
         setSettings((current) => ({ ...current, showDeviceRack: true }));
         setDeviceBrowserRequest((current) => current + 1);
       }}
+      onOpenJobs={() => setJobsOpen(true)}
       onOpenSettings={() => setSettingsOpen(true)}
       onExportTrackVcf={() => requestExport("trackVcf")}
       onExportFocusFasta={() => requestExport("focusFasta")}
@@ -2923,6 +3692,7 @@ export default function App() {
           historyRequest={historyRequest}
           deviceBrowserRequest={deviceBrowserRequest}
           initialAppliedDeviceIds={initialAppliedDeviceIds}
+          onShowDeviceRack={() => setSettings((current) => ({ ...current, showDeviceRack: true }))}
           onHistoryStateChange={setHistoryState}
         />
         : <Onboarding projectTemplate={projectTemplate} key={projectSetupKey} onOpened={(path, opened, created) => {
@@ -2939,6 +3709,23 @@ export default function App() {
       error={templateCreationError}
       onSelect={(template) => { void selectProjectTemplate(template); }}
       onClose={() => { if (!templateCreationBusy) setProjectTemplateDialogOpen(false); }}
+    />
+    <JobsDialog
+      open={jobsOpen}
+      jobs={jobs}
+      loading={jobsLoading}
+      onRefresh={() => {
+        if (!projectPath) return;
+        setJobsLoading(true);
+        void api.listBackgroundJobs(projectPath).then(setJobs).finally(() => setJobsLoading(false));
+      }}
+      onCancel={(jobId) => {
+        if (!projectPath) return;
+        void api.cancelBackgroundJob(projectPath, jobId).then((cancelled) => {
+          setJobs((current) => current.map((job) => job.id === cancelled.id ? cancelled : job));
+        });
+      }}
+      onClose={() => setJobsOpen(false)}
     />
     <SettingsDialog open={settingsOpen} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />
   </div>;

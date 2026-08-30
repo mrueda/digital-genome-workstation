@@ -1,3 +1,5 @@
+<p align="center"><img src="brand/dgw-mark.svg" width="128" alt="Digital Genome Workstation logo"></p>
+
 # Digital Genome Workstation
 
 Digital Genome Workstation (DGW) is a desktop application for testing changes to one genome without modifying the original VCF. It takes its working model from a digital audio workstation: duplicate a genome track, apply reversible changes through a device, inspect every change, bypass it, and consolidate only when you deliberately want a new baseline. It does not reproduce IGV or treat a genome as audio. The first supported resource profile is human b37/hs37d5, but the workstation model is not inherently human-specific.
@@ -6,11 +8,11 @@ DGW saves project changes immediately inside the active `.dgw` package; there is
 
 A **genome track** is one complete diploid scenario for the selected sample within the calls supplied by the VCF. Chromosome copy A and chromosome copy B are the two homologous chromosomes inside that track; they are not separate tracks, DNA strands, or claims of maternal/paternal origin. An experimental track can be duplicated, renamed, selected, minimized, and archived without changing the read-only source track. A minimized track retains a thin clickable allele/edit overview. Edits remain visible as blocks over the focused region until they are bypassed, removed, or consolidated.
 
-DGW v0.1 supports b37/hs37d5 SNVs and sequence-resolved indels with a 1–49 base length difference. It accepts normalized biallelic VCFs with or without annotations. Any imported INFO annotations are preserved only in the frozen source artifact and are ignored by DGW: they never supply a consequence, score, optimizer input, or edited-allele result. DGW skips unsupported symbolic/CNV, MNV, spanning-deletion, and larger allele records with an explicit warning; selects one sample as a project; reconstructs both genome copies in the region being edited; and evaluates exact alleles against the resources available on the local machine.
+DGW v0.1 supports b37/hs37d5 SNVs and sequence-resolved indels with a 1–49 base length difference. It accepts biallelic and multiallelic VCF records with or without annotations. During import, DGW retains only records whose FILTER field is exactly `PASS`, projects the selected sample, decomposes every supported ALT into an exact allele, and normalizes that private project copy against the configured reference. The selected diploid GT and `/` versus `|` semantics are preserved, and the original VCF is never changed. Imported INFO annotations are ignored by DGW: they never supply a consequence, score, optimizer input, or edited-allele result. DGW reports excluded non-PASS records and skips unsupported symbolic/CNV, MNV, spanning-deletion, and larger alleles with an explicit warning; reconstructs both genome copies in the region being edited; and evaluates exact alleles against the resources available on the local machine.
 
 ## Current capabilities
 
-- Annotation-independent biallelic-VCF inspection and selected-sample projection, preserving phased and unphased genotypes.
+- Annotation-independent VCF inspection, automatic normalization of the selected-sample project copy, exact-ALT decomposition of multiallelic records, and preservation of phased and unphased genotypes.
 - A track-and-device workspace built over an immutable SQLite edit DAG. The DAG remains internal provenance rather than the main user interface.
 - A desktop application menu with persistent user settings for interface scale, panel, Device Rack and Track Monitor visibility, and reduced motion.
 - Track duplication, rename, selection, visibility, archival, and isolated per-track edits.
@@ -18,13 +20,15 @@ DGW v0.1 supports b37/hs37d5 SNVs and sequence-resolved indels with a 1–49 bas
 - An experimental bounded Genome Optimizer with Conservative and selected-position Saturation modes.
 - A Mutation Generator editing device whose first mode is a deterministic Randomizer: select visible VCF positions or the complete track across chromosomes, set an amount and seed, preview new SNV ALTs, and apply them as reversible mutation blocks.
 - Explicit track consolidation: visible blocks become the new baseline while complete edit ancestry and bypassed baseline exclusions remain stored.
-- A Device Browser grouped into Edit, Evidence, and Analyze, plus a per-track Device Rack below the tracks containing compact full panels for the explicitly applied devices. Panels run horizontally in applied order, keep operational controls visible, and fold reference text under **Details**; drag the rack's upper divider to resize it, and choose **Create → Add Device** to open the Browser.
+- A Device Browser grouped into Edit, Evidence, Analyze, and Visualize, plus a per-track Device Rack below the tracks containing compact full panels for the explicitly applied devices. Panels run horizontally in applied order, keep operational controls visible, and fold reference text under **Details**; drag the rack's upper divider to resize it, and choose **Create → Add Device** to open the Browser.
+- A read-only Variant Map visualization device that plots focused-region alleles on the source line and active mutation blocks by source-relative SnpEff molecular-impact delta. Higher, lower, neutral, and unevaluated states remain explicitly distinct, and every plotted mark opens the corresponding allele or edit.
 - Reference-focused genome-copy reconstruction from BGZF FASTA plus FAI/GZI, with visual reference-versus-variant differences.
+- FASTA-aligned Allele Roll with A/C/G/T lanes for staging manual SNV changes while preserving phased chromosome copies and copy-unknown unphased calls.
 - Focused-region FASTA export containing reference, chromosome copy A, and chromosome copy B records; phase-unknown heterozygous alleles are masked and recorded in a companion table.
 - A source-relative Track Meter with explicit SnpEff impact delta, per-edit evaluation state, and device coverage.
 - Automatic exact-allele evaluation on selection, using a persistent SnpEff worker and exact tabix lookups against the configured resources.
 - Per-device evaluation caches tied to exact normalized alleles and resource versions, with distinct found, absent, unavailable, and error states.
-- Paged source-variant access, bounded track marks, broad-view density bins, and explicit cross-chromosome selection without loading every variant into the interface.
+- A foldable source navigator organized as contig → occupied genomic region → focused alleles, plus bounded track marks, broad-view density bins, and explicit cross-chromosome selection without loading every variant into the interface.
 - Clean BGZF/CSI VCF export plus checksummed provenance and compressed live-evidence sidecars.
 - Tauri 2 + React/TypeScript desktop interface for the complete workflow.
 
@@ -76,14 +80,15 @@ The second fixture, `fixtures/1000G-HG00096.public.vcf.gz`, was extracted by sel
 ## Input contract
 
 - Human b37/hs37d5 coordinates and exact reference contig names (`1`, not `chr1`).
-- One ALT per record; no symbolic alleles or gVCF blocks.
-- Sorted, left-aligned, minimal alleles whose REF agrees with the registered reference.
+- `FILTER=PASS`; failed filters and unfiltered `FILTER=.` records do not enter the project.
+- One or more sequence-resolved ALT alleles per record; DGW decomposes multiallelic rows internally. Symbolic alleles and gVCF blocks remain unsupported.
+- REF alleles that agree with the registered reference. Input alleles need not already be left-aligned or minimal; DGW normalizes and sorts its private selected-sample copy during import.
 - Diploid `GT`; imported INFO annotations are optional and ignored.
 - BGZF `.vcf.gz` is the production format; plain VCF remains accepted for small development fixtures.
 
 The project reconstructs reference plus supplied variant calls. Missing VCF records are not evidence that a position was callable or confirmed homozygous reference.
 
-Microarray vendor text files, including direct-to-consumer formats such as 23andMe, are not direct DGW inputs. Convert them first to the same normalized, biallelic, single-sample VCF contract; beacon2-cbi-tools is the recommended preparation route for supported formats. The conversion must resolve build and strand semantics, and missing probes must never become assumed reference calls. Precomputed annotations in the converted VCF are harmless but unused. DGW remains VCF-native rather than maintaining a separate internal microarray representation.
+Microarray vendor text files, including direct-to-consumer formats such as 23andMe, are not direct DGW inputs. Convert them first to a normalized, diploid single-sample VCF; beacon2-cbi-tools is the recommended preparation route for supported formats. The conversion must resolve build and strand semantics, and missing probes must never become assumed reference calls. Precomputed annotations in the converted VCF are harmless but unused. DGW remains VCF-native rather than maintaining a separate internal microarray representation.
 
 ## Scientific boundary
 
@@ -97,11 +102,11 @@ The **Mutation Generator** works on selected VCF alleles. Its first available mo
 
 Scores are simple sums of independently scored allele copies in the explicit selection used by the current optimizer run. Nearby interactions, combined transcript/protein effects, penetrance, and whole-genome effects are not modeled. Controls never mix bases continuously. Generated results are ordinary reversible edit blocks and each allele still requires its own evidence review.
 
-Large selections are represented symbolically rather than copied into browser memory. The backend exposes source pages of 200 rows, a track request returns at most 500 visible allele marks, and broad views use 256 density bins that can be opened into detailed lollipops. Genome Optimizer accepts at most 100 selected positions per run and Mutation Generator accepts at most 1,000. DGW reports an over-limit selection instead of silently truncating it.
+Large selections are represented symbolically rather than copied into browser memory. The source navigator queries contig summaries and at most 24 occupied-region bins per expanded level; broad bins drill down lazily until they fit the 50 kb focused workspace. A track request returns at most 500 visible allele marks, and broad track views use 256 density bins. Genome Optimizer accepts at most 100 selected positions per run. Mutation Generator starts at a 1,000-position user limit that can be raised explicitly to an experimental hard ceiling of 100,000 for performance testing. DGW reports an over-limit selection instead of silently truncating it.
 
 Objective inclusion and device bypass are separate. An active device may display results without being included in the selected objective. If the objective includes a device and the user bypasses it, its effective weight becomes `0` while its configured weight and source data remain unchanged. Enabling it restores the configured contribution. Devices not named by an objective are shown as **Not in objective**, not as bypassed; adding a future device must never silently change an existing score.
 
-**File → New Project** uses the built-in **DGW Starter** project template: Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, and Genome Optimizer are applied in functional order. Mutation Generator and Genome Optimizer remain inert until Preview/Apply or Run, so opening the template does not alter a genome. **File → New from Template** also offers an **Empty** project. When used from an open project, it creates and enters a separate project from the same imported source genome; existing experimental edits are not copied. From project setup, selecting a template still requires a VCF or the bundled example. Templates choose the starting project configuration and do not appear in the Device Browser. Duplicating a Genome Track copies its applied device chain. Available, applied, included, and bypassed are therefore distinct states.
+**File → New Project** uses the built-in **DGW Starter** project template: Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and Variant Map are applied in functional order. Mutation Generator and Genome Optimizer remain inert until Preview/Apply or Run; Variant Map is read-only, so opening the template does not alter a genome. **File → New from Template** also offers an **Empty** project. When used from an open project, it creates and enters a separate project from the same imported source genome; existing experimental edits are not copied. From project setup, selecting a template still requires a VCF or the bundled example. Templates choose the starting project configuration and do not appear in the Device Browser. Duplicating a Genome Track copies its applied device chain. Available, applied, included, and bypassed are therefore distinct states.
 
 Focused FASTA output is a consensus reconstruction from the registered reference plus VCF alleles and DGW edits, not a read-derived assembly or a claim that unreported VCF positions were observed as reference. Unphased heterozygous calls are masked rather than assigned to a genome copy. The Track Meter's red/green, above/below-zero display is a source-relative molecular-impact visualization, not a health or clinical-risk measurement.
 

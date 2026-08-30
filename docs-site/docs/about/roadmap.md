@@ -2,7 +2,7 @@
 
 ## v0.1 foundation — Working engine
 
-- b37 normalized biallelic VCF import, with or without INFO annotations, and one selected sample with phased and unphased GT support.
+- Strict-PASS b37 VCF import with automatic normalization of a private selected-sample copy, internal exact-ALT decomposition of multiallelic rows, optional INFO annotations, and phased or unphased diploid GT support.
 - Focused two-copy DNA reconstruction with explicit copy-unknown alleles.
 - Immutable SNV/short-indel edits, branches, bypass, and internal A/B pointers.
 - Per-allele SnpEff plus exact dbNSFP, ClinVar, and COSMIC evidence.

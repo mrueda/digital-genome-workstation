@@ -6,6 +6,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub fn validate_edit_shape(edit: &EditKind) -> Result<()> {
     match edit {
+        EditKind::CompoundMutationLayer {
+            layer_id,
+            position_count,
+            change_count,
+        } => {
+            if layer_id.trim().is_empty() || *position_count == 0 || *change_count == 0 {
+                return Err(DgwError::InvalidEdit(
+                    "compound mutation layer metadata is incomplete".into(),
+                ));
+            }
+            Ok(())
+        }
         EditKind::RestoreReference { source_key } => validate_key(source_key),
         EditKind::SetAllele { key, source_key } => {
             validate_key(key)?;
@@ -97,6 +109,7 @@ pub fn effective_variants(
                     haplotype1_alt: variant.haplotype1_alt,
                     haplotype2_alt: variant.haplotype2_alt,
                     unphased_alt: variant.unphased_alt,
+                    unphased_slot: variant.unphased_slot,
                     origin: VariantOrigin::Observed,
                     edit_ids: Vec::new(),
                     source_key: Some(variant.key.clone()),
@@ -117,6 +130,11 @@ pub fn effective_variants(
         }
         validate_edit_shape(&operation.edit)?;
         match &operation.edit {
+            EditKind::CompoundMutationLayer { .. } => {
+                return Err(DgwError::InvalidEdit(
+                    "compound mutation layer was not expanded before state projection".into(),
+                ));
+            }
             EditKind::RestoreReference { source_key } => {
                 let source = variants.get_mut(source_key).ok_or_else(|| {
                     DgwError::InvalidEdit(format!(
@@ -129,6 +147,7 @@ pub fn effective_variants(
                 source.origin = VariantOrigin::Edited;
             }
             EditKind::SetAllele { key, source_key } => {
+                let mut inherited_unphased_slot = None;
                 if let Some(source_key) = source_key {
                     let source = variants.get_mut(source_key).ok_or_else(|| {
                         DgwError::InvalidEdit(format!(
@@ -142,6 +161,9 @@ pub fn effective_variants(
                             operation.haplotype
                         )));
                     }
+                    if operation.haplotype == Haplotype::Unphased {
+                        inherited_unphased_slot = source.unphased_slot;
+                    }
                     set_haplotype(source, operation.haplotype, false);
                     source.edit_ids.push(operation.id.clone());
                     source.origin = VariantOrigin::Edited;
@@ -154,6 +176,7 @@ pub fn effective_variants(
                         haplotype1_alt: false,
                         haplotype2_alt: false,
                         unphased_alt: false,
+                        unphased_slot: inherited_unphased_slot,
                         origin: if source_key.is_some() {
                             VariantOrigin::Edited
                         } else {
@@ -167,7 +190,26 @@ pub fn effective_variants(
                 // the source ALT, including when it resolves to an existing
                 // state entry.
                 variant.source_info.clear();
-                set_haplotype(variant, operation.haplotype, true);
+                if operation.haplotype == Haplotype::Unphased
+                    && variant.unphased_alt
+                    && variant.unphased_slot.is_some()
+                    && inherited_unphased_slot.is_some()
+                    && variant.unphased_slot != inherited_unphased_slot
+                {
+                    // Two different `/` slots now carry the same exact ALT,
+                    // e.g. editing C/G to G/G. Phase is irrelevant for a
+                    // homozygous genotype, so promote it to two explicit
+                    // copies instead of collapsing both into one U flag.
+                    variant.unphased_alt = false;
+                    variant.unphased_slot = None;
+                    variant.haplotype1_alt = true;
+                    variant.haplotype2_alt = true;
+                } else {
+                    set_haplotype(variant, operation.haplotype, true);
+                    if operation.haplotype == Haplotype::Unphased {
+                        variant.unphased_slot = inherited_unphased_slot;
+                    }
+                }
                 variant.edit_ids.push(operation.id.clone());
                 if source_key.is_some() {
                     variant.origin = VariantOrigin::Edited;
@@ -197,6 +239,11 @@ pub fn validate_no_overlap(
         return Ok(());
     }
     let (candidate, source_key) = match edit {
+        EditKind::CompoundMutationLayer { .. } => {
+            return Err(DgwError::InvalidEdit(
+                "compound mutation layers must be validated through their allele changes".into(),
+            ));
+        }
         EditKind::RestoreReference { .. } => return Ok(()),
         EditKind::SetAllele { key, source_key } => (key, source_key.as_ref()),
     };
@@ -288,6 +335,17 @@ pub fn materialize_haplotype_masking_unphased(
         .collect();
 
     applicable.sort_by(|(left, _), (right, _)| left.key.position.cmp(&right.key.position));
+    // A decomposed unphased 1/2 genotype has two exact ALT objects at the
+    // same REF span. Both copies are already masked at that span, so apply one
+    // mask while retaining both alleles for evidence and the uncertainty
+    // sidecar.
+    applicable.dedup_by(|(left, _), (right, _)| {
+        left.unphased_alt
+            && right.unphased_alt
+            && left.key.contig == right.key.contig
+            && left.key.position == right.key.position
+            && left.key.reference == right.key.reference
+    });
     for pair in applicable.windows(2) {
         if overlaps(&pair[0].0.key, &pair[1].0.key) {
             return Err(DgwError::InvalidEdit(format!(
@@ -347,6 +405,7 @@ mod tests {
             haplotype1_alt: false,
             haplotype2_alt: true,
             unphased_alt: false,
+            unphased_slot: None,
             source_line: String::new(),
         }
     }
@@ -384,6 +443,7 @@ mod tests {
             haplotype1_alt: true,
             haplotype2_alt: false,
             unphased_alt: false,
+            unphased_slot: None,
             origin: VariantOrigin::Created,
             edit_ids: vec![],
             source_key: None,
@@ -402,6 +462,7 @@ mod tests {
             haplotype1_alt: false,
             haplotype2_alt: false,
             unphased_alt: true,
+            unphased_slot: Some(2),
             origin: VariantOrigin::Observed,
             edit_ids: vec![],
             source_key: None,
@@ -415,6 +476,82 @@ mod tests {
             materialize_haplotype_masking_unphased("ACGT", 1, &variants, Haplotype::Two).unwrap(),
             "ACNT"
         );
+    }
+
+    #[test]
+    fn masks_decomposed_unphased_one_two_alleles_once_at_the_shared_ref_span() {
+        let variants = ["C", "T"].map(|alternate| EffectiveVariant {
+            key: key(3, "G", alternate),
+            haplotype1_alt: false,
+            haplotype2_alt: false,
+            unphased_alt: true,
+            unphased_slot: Some(if alternate == "C" { 1 } else { 2 }),
+            origin: VariantOrigin::Observed,
+            edit_ids: vec![],
+            source_key: None,
+            source_info: BTreeMap::new(),
+        });
+
+        assert_eq!(
+            materialize_haplotype_masking_unphased("ACGT", 1, &variants, Haplotype::One).unwrap(),
+            "ACNT"
+        );
+        assert_eq!(
+            materialize_haplotype_masking_unphased("ACGT", 1, &variants, Haplotype::Two).unwrap(),
+            "ACNT"
+        );
+    }
+
+    #[test]
+    fn merging_unphased_one_two_alts_into_one_alt_produces_two_copies() {
+        let root = [
+            RootVariant {
+                key: key(3, "G", "C"),
+                id: None,
+                quality: None,
+                filter: "PASS".into(),
+                info: BTreeMap::new(),
+                format_keys: vec!["GT".into()],
+                sample_values: vec!["1/0".into()],
+                haplotype1_alt: false,
+                haplotype2_alt: false,
+                unphased_alt: true,
+                unphased_slot: Some(1),
+                source_line: String::new(),
+            },
+            RootVariant {
+                key: key(3, "G", "T"),
+                id: None,
+                quality: None,
+                filter: "PASS".into(),
+                info: BTreeMap::new(),
+                format_keys: vec!["GT".into()],
+                sample_values: vec!["0/1".into()],
+                haplotype1_alt: false,
+                haplotype2_alt: false,
+                unphased_alt: true,
+                unphased_slot: Some(2),
+                source_line: String::new(),
+            },
+        ];
+        let edit = EditOperation {
+            id: "merge".into(),
+            parent_state_id: "root".into(),
+            haplotype: Haplotype::Unphased,
+            edit: EditKind::SetAllele {
+                key: key(3, "G", "T"),
+                source_key: Some(key(3, "G", "C")),
+            },
+            note: None,
+            created_at: Utc::now(),
+        };
+
+        let variants = effective_variants(&root, &[edit], &[]).unwrap();
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].key.alternate, "T");
+        assert!(variants[0].haplotype1_alt && variants[0].haplotype2_alt);
+        assert!(!variants[0].unphased_alt);
+        assert_eq!(variants[0].unphased_slot, None);
     }
 
     #[test]

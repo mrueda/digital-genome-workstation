@@ -19,9 +19,13 @@ Expand **Resource bundle** on the onboarding screen and update the JSON. Paths a
 
 The VCF uses an unphased heterozygous genotype such as `0/1`. DGW accepts and preserves the allele but does not place it on chromosome copy A or B inside the genome track. It is evaluated individually and remains unphased when rendered.
 
-## Import says the VCF is not normalized
+## Import normalization fails
 
-Normalize and split upstream against the same hs37d5 reference, for example with bcftools `norm -f ... -m -both`. Reannotation is not required for DGW.
+DGW normally left-aligns and minimizes the selected-sample project copy automatically. A failure here usually means the VCF build, contig names, or REF alleles do not match the configured reference, or the configured `bcftools` path cannot run. Check those resources; reannotation is not required. The original VCF is never changed.
+
+## Import finds no usable alleles
+
+DGW v0.1 imports only strict `FILTER=PASS` records carried as non-reference genotypes by the selected sample. Records marked with a failed filter or `FILTER=.` are counted but excluded. Apply an appropriate, documented calling/QC filter upstream rather than relabelling unfiltered records as PASS merely to make them importable.
 
 ## Reference rows are empty
 
@@ -37,6 +41,4 @@ DGW warns but tests the index when queried. Rebuild it before relying on the bun
 
 ## The VCF contains `CN0`, `<DEL>`, or another structural allele
 
-DGW v0.1 does not edit copy-number or structural variants. During inspection it counts these records separately, and during project creation it skips them before interpreting their genotype fields. The project warning records the source-record count and example loci. Supported biallelic SNVs and 1–49 bp indels in the same VCF continue to import.
-
-Multiallelic records are different: split and normalize those before import because DGW will not guess how the selected genotype should be decomposed across ALT alleles.
+DGW v0.1 does not edit copy-number or structural variants. During inspection it counts wholly unsupported records separately. During project creation it decomposes multiallelic rows, imports supported sequence-resolved SNVs and 1–49 bp indels, and reports skipped ALT alleles with examples. The selected sample's GT determines which exact ALTs enter the project.

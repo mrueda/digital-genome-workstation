@@ -1,42 +1,41 @@
 :root {
-  --ifm-color-primary: #18794e;
-  --ifm-color-primary-dark: #156d46;
-  --ifm-color-primary-darker: #146742;
-  --ifm-color-primary-darkest: #105536;
-  --ifm-color-primary-light: #1b8556;
-  --ifm-color-primary-lighter: #1c8b5a;
-  --ifm-color-primary-lightest: #209d65;
+  --ifm-color-primary: #247f92;
+  --ifm-color-primary-dark: #207284;
+  --ifm-color-primary-darker: #1e6c7c;
+  --ifm-color-primary-darkest: #195966;
+  --ifm-color-primary-light: #288ca0;
+  --ifm-color-primary-lighter: #2a92a7;
+  --ifm-color-primary-lightest: #36a8bf;
   --ifm-code-font-size: 93%;
   --ifm-font-family-base: Inter, "Segoe UI", system-ui, sans-serif;
   --ifm-font-family-monospace: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --docusaurus-highlighted-code-line-bg: rgba(24,121,78,.1);
+  --docusaurus-highlighted-code-line-bg: rgba(101,197,216,.1);
 }
 
 [data-theme='dark'] {
-  --ifm-color-primary: #7fe0ad;
-  --ifm-color-primary-dark: #60d79a;
-  --ifm-color-primary-darker: #51d392;
-  --ifm-color-primary-darkest: #2bc579;
-  --ifm-color-primary-light: #9ee9c0;
-  --ifm-color-primary-lighter: #adecc8;
-  --ifm-color-primary-lightest: #daf7e7;
-  --ifm-background-color: #08110f;
-  --ifm-background-surface-color: #0c1714;
-  --ifm-navbar-background-color: #09130f;
-  --ifm-footer-background-color: #07100e;
-  --ifm-toc-border-color: #20342c;
-  --ifm-color-emphasis-300: #294238;
-  --docusaurus-highlighted-code-line-bg: rgba(127,224,173,.08);
+  --ifm-color-primary: #65c5d8;
+  --ifm-color-primary-dark: #4cbbd0;
+  --ifm-color-primary-darker: #3eb7cd;
+  --ifm-color-primary-darkest: #2d91a4;
+  --ifm-color-primary-light: #7ecede;
+  --ifm-color-primary-lighter: #8bd3e1;
+  --ifm-color-primary-lightest: #bbe8f0;
+  --ifm-background-color: #141516;
+  --ifm-background-surface-color: #1d1f20;
+  --ifm-navbar-background-color: #101112;
+  --ifm-footer-background-color: #101112;
+  --ifm-toc-border-color: #393c3e;
+  --ifm-color-emphasis-300: #45494b;
+  --docusaurus-highlighted-code-line-bg: rgba(101,197,216,.08);
 }
 
-.navbar { border-bottom: 1px solid rgba(96,125,112,.2); box-shadow: none; }
+.navbar { border-bottom: 1px solid #343738; box-shadow: none; }
 .navbar__logo img { border-radius: 8px; }
-.footer { border-top: 1px solid #20342c; }
+.footer { border-top: 1px solid #393c3e; }
 .theme-doc-markdown h1, .theme-doc-markdown h2 { letter-spacing: -.025em; }
 .theme-doc-markdown table { display: table; width: 100%; }
-.theme-doc-markdown code { border-color: rgba(127,224,173,.16); }
-.button--primary { --ifm-button-background-color: #7fe0ad; --ifm-button-border-color: #7fe0ad; color: #07100e; }
-.button--primary:hover { color: #07100e; }
-.button--secondary { border-color: #48695b; color: #dce9e3; }
+.theme-doc-markdown code { border-color: rgba(101,197,216,.16); }
+.button--primary { --ifm-button-background-color: #65c5d8; --ifm-button-border-color: #65c5d8; color: #141516; }
+.button--primary:hover { color: #141516; }
+.button--secondary { border-color: #596064; color: #e5e6e6; }
 .admonition research-note { border-color: #f4bd68; }
-

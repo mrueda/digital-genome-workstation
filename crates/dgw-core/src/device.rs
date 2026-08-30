@@ -23,6 +23,7 @@ pub const FOCUSED_TRACK_INPUT_SCHEMA_ID: &str = "org.dgw.schema.focused-track.v1
 pub const ANNOTATION_OUTPUT_SCHEMA_ID: &str = "org.dgw.schema.allele-annotations.v1";
 pub const EVIDENCE_OUTPUT_SCHEMA_ID: &str = "org.dgw.schema.allele-evidence.v1";
 pub const EDIT_PROPOSALS_OUTPUT_SCHEMA_ID: &str = "org.dgw.schema.edit-proposals.v1";
+pub const VISUALIZATION_OUTPUT_SCHEMA_ID: &str = "org.dgw.schema.track-visualization.v1";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,7 @@ pub enum DeviceKind {
     Analysis,
     Evidence,
     Editing,
+    Visualization,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +40,7 @@ pub enum DeviceCapability {
     AnalyzeAllele,
     LookupEvidence,
     ProposeEdits,
+    VisualizeTrack,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,6 +221,7 @@ pub fn validate_device_manifest(manifest: &DeviceManifest) -> Result<()> {
         DeviceKind::Analysis => DeviceCapability::AnalyzeAllele,
         DeviceKind::Evidence => DeviceCapability::LookupEvidence,
         DeviceKind::Editing => DeviceCapability::ProposeEdits,
+        DeviceKind::Visualization => DeviceCapability::VisualizeTrack,
     };
     validate_unique("capability", &manifest.capabilities)?;
     if manifest.capabilities.as_slice() != [expected_capability] {
@@ -537,6 +541,19 @@ pub fn mutation_generator_device_manifest() -> DeviceManifest {
     )
 }
 
+pub fn variant_map_device_manifest() -> DeviceManifest {
+    built_in_manifest(
+        "org.dgw.builtin.variant-map",
+        "Variant Map",
+        "Visualize source-relative molecular-impact changes across the focused track region.",
+        DeviceKind::Visualization,
+        FOCUSED_TRACK_INPUT_SCHEMA_ID,
+        VISUALIZATION_OUTPUT_SCHEMA_ID,
+        Vec::new(),
+        vec!["Colors and vertical displacement report source-relative model output only. They do not represent health, disease, penetrance, or a combined biological effect."],
+    )
+}
+
 pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
     vec![
         snpeff_device_manifest(),
@@ -545,6 +562,7 @@ pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
         cosmic_device_manifest(),
         mutation_generator_device_manifest(),
         genome_optimizer_device_manifest(),
+        variant_map_device_manifest(),
     ]
 }
 
@@ -573,6 +591,7 @@ fn built_in_manifest(
         DeviceKind::Analysis => DeviceCapability::AnalyzeAllele,
         DeviceKind::Evidence => DeviceCapability::LookupEvidence,
         DeviceKind::Editing => DeviceCapability::ProposeEdits,
+        DeviceKind::Visualization => DeviceCapability::VisualizeTrack,
     };
     DeviceManifest {
         manifest_version: DGW_DEVICE_MANIFEST_VERSION.into(),
@@ -880,7 +899,7 @@ mod tests {
     #[test]
     fn built_in_catalog_is_valid_and_resource_releases_are_runtime_bindings() {
         let manifests = built_in_device_manifests();
-        assert_eq!(manifests.len(), 6);
+        assert_eq!(manifests.len(), 7);
         let mut ids = BTreeSet::new();
         for manifest in &manifests {
             validate_device_manifest(manifest).unwrap();
@@ -897,10 +916,11 @@ mod tests {
         assert!(manifests[1..4]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Evidence));
-        assert!(manifests[4..]
+        assert!(manifests[4..6]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Editing));
         assert_eq!(manifests[4].kind, DeviceKind::Editing);
+        assert_eq!(manifests[6].kind, DeviceKind::Visualization);
         assert!(manifests[4].resource_requirements.is_empty());
         assert!(manifests[..4].iter().all(|manifest| manifest
             .resource_requirements

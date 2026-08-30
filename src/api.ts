@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   DeviceManifest,
+  BackgroundJob,
+  CompoundLayerApplyResult,
   CreatedProject,
   EditKind,
   ExampleFixture,
@@ -14,16 +16,20 @@ import type {
   Haplotype,
   OptimizerRequest,
   OptimizerRunResult,
+  ProcessProgress,
   ProjectSnapshot,
-  RandomizerPlan,
+  RandomizerPreviewResult,
   RandomizerRequest,
   RandomizerRunResult,
   ResourceBundle,
   VariantKey,
+  VariantContigSummary,
+  VariantNavigationBin,
   VariantDensity,
   VariantPage,
   VariantSelection,
   SelectionResolution,
+  TrackEvidenceProfileResult,
   VcfInspection,
   WorkspaceSnapshot
 } from "./types";
@@ -34,15 +40,22 @@ export const api = {
   exampleFixture: () => invoke<ExampleFixture>("example_fixture"),
   validateBundle: (bundle: ResourceBundle) =>
     invoke<string[]>("validate_bundle", { bundle }),
-  inspectVcf: (path: string) =>
-    invoke<VcfInspection>("inspect_vcf_file", { path, assembly: "b37" }),
+  inspectVcf: (path: string, onProgress?: (progress: ProcessProgress) => void) => {
+    const channel = new Channel<ProcessProgress>();
+    channel.onmessage = (progress) => onProgress?.(progress);
+    return invoke<VcfInspection>("inspect_vcf_file", { path, assembly: "b37", onProgress: channel });
+  },
   createProject: (request: {
     projectPath: string;
     name: string;
     sourceVcfPath: string;
     selectedSample: string;
     resourceBundle: ResourceBundle;
-  }) => invoke<ProjectSnapshot>("create_project", { request }),
+  }, onProgress?: (progress: ProcessProgress) => void) => {
+    const channel = new Channel<ProcessProgress>();
+    channel.onmessage = (progress) => onProgress?.(progress);
+    return invoke<ProjectSnapshot>("create_project", { request, onProgress: channel });
+  },
   createProjectFromCurrent: (currentProjectPath: string, templateId: "standardEvidence" | "empty") =>
     invoke<CreatedProject>("create_project_from_current", { currentProjectPath, templateId }),
   openProject: (path: string) => invoke<ProjectSnapshot>("open_project", { path }),
@@ -63,6 +76,10 @@ export const api = {
     invoke<GenomeTrackLane[]>("track_deck", { projectPath, context }),
   variantPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
     invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
+  variantContigs: (projectPath: string) =>
+    invoke<VariantContigSummary[]>("variant_contigs", { projectPath }),
+  variantNavigationBins: (projectPath: string, contig: string, bins = 16, start?: number, end?: number) =>
+    invoke<VariantNavigationBin[]>("variant_navigation_bins", { projectPath, contig, bins, start, end }),
   variantDensity: (projectPath: string, trackId: string, context: FocusContext) =>
     invoke<VariantDensity>("variant_density", { projectPath, trackId, context }),
   resolveVariantSelection: (projectPath: string, selection: VariantSelection, limit: number) =>
@@ -81,10 +98,66 @@ export const api = {
     invoke<ProjectSnapshot>("consolidate_track", { projectPath, trackId }),
   runOptimizer: (projectPath: string, trackId: string, focus: FocusContext, request: OptimizerRequest) =>
     invoke<OptimizerRunResult>("run_optimizer", { projectPath, trackId, focus, request }),
-  previewRandomizer: (projectPath: string, trackId: string, request: RandomizerRequest) =>
-    invoke<RandomizerPlan>("preview_randomizer", { projectPath, trackId, request }),
-  runRandomizer: (projectPath: string, trackId: string, request: RandomizerRequest) =>
-    invoke<RandomizerRunResult>("run_randomizer", { projectPath, trackId, request }),
+  previewRandomizer: (
+    projectPath: string,
+    trackId: string,
+    request: RandomizerRequest,
+    selection?: VariantSelection,
+    selectionLimit?: number
+  ) => invoke<RandomizerPreviewResult>("preview_randomizer", {
+    projectPath,
+    trackId,
+    request,
+    selection,
+    selectionLimit
+  }),
+  runRandomizer: (
+    projectPath: string,
+    trackId: string,
+    request: RandomizerRequest,
+    selection?: VariantSelection,
+    selectionLimit?: number
+  ) => invoke<RandomizerRunResult>("run_randomizer", {
+    projectPath,
+    trackId,
+    request,
+    selection,
+    selectionLimit
+  }),
+  applyCompoundMutationLayer: (projectPath: string, trackId: string, layerId: string) =>
+    invoke<CompoundLayerApplyResult>("apply_compound_mutation_layer", { projectPath, trackId, layerId }),
+  startRandomizerPreviewJob: (
+    projectPath: string,
+    trackId: string,
+    request: RandomizerRequest,
+    selection: VariantSelection | undefined,
+    selectionLimit: number | undefined,
+    workerThreads: number
+  ) => invoke<BackgroundJob<RandomizerPreviewResult>>("start_randomizer_preview_job", {
+    projectPath,
+    trackId,
+    request,
+    selection,
+    selectionLimit,
+    workerThreads
+  }),
+  backgroundJob: <TResult = unknown>(projectPath: string, jobId: string) =>
+    invoke<BackgroundJob<TResult>>("background_job", { projectPath, jobId }),
+  listBackgroundJobs: (projectPath: string, limit = 50) =>
+    invoke<BackgroundJob[]>("list_background_jobs", { projectPath, limit }),
+  cancelBackgroundJob: (projectPath: string, jobId: string) =>
+    invoke<BackgroundJob>("cancel_background_job", { projectPath, jobId }),
+  startTrackEvidenceProfileJob: (
+    projectPath: string,
+    trackId: string,
+    deviceIds: string[],
+    workerThreads: number
+  ) => invoke<BackgroundJob<TrackEvidenceProfileResult>>("start_track_evidence_profile_job", {
+    projectPath,
+    trackId,
+    deviceIds,
+    workerThreads
+  }),
   setTrackEditBypass: (projectPath: string, trackId: string, editId: string, bypassed: boolean) =>
     invoke<ProjectSnapshot>("set_track_edit_bypass", { projectPath, trackId, editId, bypassed }),
   setTrackEditsBypass: (projectPath: string, trackId: string, editIds: string[], bypassed: boolean) =>

@@ -14,17 +14,28 @@ describe("user settings", () => {
       showEvidenceInspector: true,
       showDeviceRack: false,
       showTrackMonitor: false,
-      reduceMotion: true
+      reduceMotion: true,
+      workerThreads: 8,
+      interactiveAlleleLimit: 800
     }))).toEqual({
       uiScale: 1.5,
       showVariantBrowser: false,
       showEvidenceInspector: true,
       showDeviceRack: false,
       showTrackMonitor: false,
-      reduceMotion: true
+      reduceMotion: true,
+      workerThreads: 8,
+      interactiveAlleleLimit: 800
     });
 
     expect(parseUserSettings(JSON.stringify({ uiScale: 7, defaultWorkspace: "allele" }))).toMatchObject({ uiScale: 1.1 });
+  });
+
+  it("repairs invalid compute limits", () => {
+    expect(parseUserSettings(JSON.stringify({ workerThreads: 999, interactiveAlleleLimit: 2 }))).toMatchObject({
+      workerThreads: 256,
+      interactiveAlleleLimit: 100
+    });
   });
 
   it("migrates the former Mixer visibility preference", () => {

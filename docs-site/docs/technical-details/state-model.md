@@ -24,12 +24,15 @@ A track represents a complete diploid scenario. Chromosome copies A and B are pr
 
 - `SetAllele { key, sourceKey? }`
 - `RestoreReference { sourceKey }`
+- `CompoundMutationLayer { layerId, positionCount, changeCount }`
+
+The compound form is a small history marker. Its chromosome-copy-specific `SetAllele` and `RestoreReference` children live in an indexed normalized table, not in the marker JSON. This is the bulk equivalent of ordinary edit blocks: one visible operation can represent tens of thousands of exact allele changes.
 
 ## Effective state
 
-To construct an effective track, DGW loads the selected sample’s root calls, walks the ancestry from root to the track's head state, skips bypassed operation IDs, then applies each remaining operation. Alleles with neither genome copy active disappear from the effective set.
+To construct an effective track, DGW loads the selected sample’s root calls, walks the ancestry from root to the track's head state, expands compound markers only for the requested loci, skips bypassed operation IDs, then applies each remaining operation. Every child of a compound layer inherits its marker ID, so bypass and undo affect the layer atomically. Alleles with neither genome copy active disappear from the effective set.
 
-Operations may not overlap another active allele on the same genome copy, except when `sourceKey` explicitly identifies the allele being replaced. Different alleles at one locus on different copies remain separate biallelic records when rendered.
+Operations may not overlap another active allele on the same genome copy, except when `sourceKey` explicitly identifies the allele being replaced. Different alleles from a multiallelic locus remain separate exact-ALT objects. A phased `1|2` assigns them to copies A/B; an unphased `1/2` retains complementary unknown-copy genotype slots, and both remain separate biallelic records when rendered.
 
 ## Track operations
 

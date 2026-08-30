@@ -92,6 +92,11 @@ pub struct RootVariant {
     pub haplotype2_alt: bool,
     #[serde(default)]
     pub unphased_alt: bool,
+    /// One-based GT slot carrying this ALT when a heterozygous genotype uses
+    /// `/`. This preserves decomposed 1/2 as local 1/0 + 0/1 records without
+    /// claiming that either slot is a known chromosome copy.
+    #[serde(default)]
+    pub unphased_slot: Option<u8>,
     pub source_line: String,
 }
 
@@ -114,6 +119,17 @@ pub enum EditKind {
     RestoreReference {
         #[serde(rename = "sourceKey", alias = "source_key")]
         source_key: VariantKey,
+    },
+    /// One visible, reversible history operation backed by normalized allele
+    /// changes in `compound_mutation_changes`. The payload stays small even
+    /// when a device changes tens of thousands of positions.
+    CompoundMutationLayer {
+        #[serde(rename = "layerId", alias = "layer_id")]
+        layer_id: String,
+        #[serde(rename = "positionCount", alias = "position_count")]
+        position_count: u32,
+        #[serde(rename = "changeCount", alias = "change_count")]
+        change_count: u32,
     },
 }
 
@@ -198,6 +214,8 @@ pub struct VcfInspection {
     pub contigs: Vec<String>,
     pub has_ann: bool,
     pub record_count: u64,
+    pub pass_record_count: u64,
+    pub non_pass_record_count: u64,
     pub supported_record_count: u64,
     pub skipped_unsupported_record_count: u64,
     pub biallelic: bool,
@@ -214,6 +232,8 @@ pub struct EffectiveVariant {
     pub haplotype2_alt: bool,
     #[serde(default)]
     pub unphased_alt: bool,
+    #[serde(default)]
+    pub unphased_slot: Option<u8>,
     pub origin: VariantOrigin,
     pub edit_ids: Vec<String>,
     pub source_key: Option<VariantKey>,
@@ -313,6 +333,120 @@ pub struct VariantPage {
     pub has_more: bool,
 }
 
+/// A bounded source-variant navigation row. Counts come from indexed SQLite
+/// columns and do not materialize variant payloads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantContigSummary {
+    pub contig: String,
+    pub total: u64,
+    pub min_position: u64,
+    pub max_position: u64,
+}
+
+/// One occupied genomic interval nested beneath a contig in the source
+/// browser. Empty equal-width intervals are omitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantNavigationBin {
+    pub contig: String,
+    pub start: u64,
+    pub end: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessProgress {
+    pub operation: String,
+    pub stage: String,
+    pub message: String,
+    pub step: u32,
+    pub total_steps: u32,
+}
+
+impl ProcessProgress {
+    pub fn new(
+        operation: impl Into<String>,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        step: u32,
+        total_steps: u32,
+    ) -> Self {
+        Self {
+            operation: operation.into(),
+            stage: stage.into(),
+            message: message.into(),
+            step,
+            total_steps,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundJobStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// A persistent compute operation attached to one device and genome track.
+/// Request/result payloads are device-owned protocol envelopes so new devices
+/// can share the job infrastructure without changing the project schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundJob {
+    pub id: String,
+    pub operation: String,
+    pub device_id: String,
+    pub track_id: String,
+    pub status: BackgroundJobStatus,
+    pub progress: u8,
+    pub stage: String,
+    pub message: String,
+    pub worker_threads: u16,
+    pub request: serde_json::Value,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompoundMutationChange {
+    pub haplotype: Haplotype,
+    pub edit: EditKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompoundMutationLayer {
+    pub id: String,
+    pub track_id: String,
+    pub source_state_id: String,
+    pub device_id: String,
+    pub position_count: u32,
+    pub change_count: u32,
+    pub note: Option<String>,
+    pub applied_edit_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One independently evaluated allele-copy change from visible track history.
+/// Compound layers expand to these records only inside the Rust backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMutation {
+    pub edit_id: String,
+    pub haplotype: Haplotype,
+    pub source_variant: VariantKey,
+    pub current_variant: Option<VariantKey>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct VariantDensityBin {
@@ -335,7 +469,11 @@ pub struct VariantDensity {
 /// gestures; interval/all-track selections stay compact even for very large
 /// projects. Exclusions are exact normalized allele keys.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum VariantSelection {
     Explicit {
         track_id: String,
@@ -364,4 +502,43 @@ pub struct SelectionResolution {
     pub limit: u32,
     pub variants: Vec<VariantKey>,
     pub truncated: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variant_selection_protocol_uses_camel_case_for_nested_fields() {
+        let selection = VariantSelection::AllTrack {
+            track_id: "working-track".into(),
+            exclusions: Vec::new(),
+        };
+        let value = serde_json::to_value(&selection).unwrap();
+        assert_eq!(value["kind"], "allTrack");
+        assert_eq!(value["trackId"], "working-track");
+        assert!(value.get("track_id").is_none());
+        assert_eq!(
+            serde_json::from_value::<VariantSelection>(value).unwrap(),
+            selection
+        );
+
+        for value in [
+            serde_json::json!({
+                "kind": "explicit",
+                "trackId": "working-track",
+                "variants": []
+            }),
+            serde_json::json!({
+                "kind": "interval",
+                "trackId": "working-track",
+                "contig": "1",
+                "start": 1,
+                "end": 10,
+                "exclusions": []
+            }),
+        ] {
+            serde_json::from_value::<VariantSelection>(value).unwrap();
+        }
+    }
 }

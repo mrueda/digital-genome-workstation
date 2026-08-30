@@ -10,7 +10,7 @@ use flate2::read::MultiGzDecoder;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -132,6 +132,13 @@ fn hash_path_identity(hasher: &mut Sha256, label: &str, path: &Path) {
 
 pub struct EvaluationService {
     worker: Mutex<Option<SnpeffWorker>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchEvidenceSignal {
+    pub status: EvidenceStatus,
+    pub exact_match_count: u32,
+    pub impact_signal: Option<f64>,
 }
 
 impl Default for EvaluationService {
@@ -288,6 +295,120 @@ impl EvaluationService {
         Ok(result)
     }
 
+    /// Evaluate many exact alleles while retaining only the compact signal
+    /// required by Track Profiler. SnpEff reuses its persistent JVM; indexed
+    /// databases use bounded region-file queries rather than one tabix process
+    /// per allele. Detailed single-allele inspection remains available separately.
+    pub fn evaluate_device_signals<F>(
+        &self,
+        project: &Project,
+        variants: &[VariantKey],
+        device_id: &str,
+        mut on_progress: F,
+    ) -> Result<BTreeMap<VariantKey, BatchEvidenceSignal>>
+    where
+        F: FnMut(usize, usize) -> Result<()>,
+    {
+        let total = variants.len();
+        if device_id == "org.dgw.builtin.snpeff" {
+            let mut signals = BTreeMap::new();
+            let bundle = &project.manifest().resource_bundle;
+            let unavailable = snpeff_resource_unavailable(bundle);
+            let resource_fingerprint = if unavailable.is_none() {
+                Some(device_resource_fingerprint(
+                    bundle,
+                    &project.manifest().resource_bundle_fingerprint,
+                    device_id,
+                )?)
+            } else {
+                None
+            };
+            for (chunk_index, chunk) in variants.chunks(1_000).enumerate() {
+                let evidence_batch = if unavailable.is_some() {
+                    vec![
+                        EvidenceResult {
+                            source: "SnpEff".into(),
+                            status: EvidenceStatus::ResourceUnavailable,
+                            records: Vec::new(),
+                            message: unavailable.clone(),
+                        };
+                        chunk.len()
+                    ]
+                } else {
+                    match self.annotate_snpeff_batch(
+                        bundle,
+                        resource_fingerprint
+                            .as_deref()
+                            .expect("available SnpEff has a resource fingerprint"),
+                        chunk,
+                    ) {
+                        Ok(records) => records
+                            .into_iter()
+                            .map(|records| EvidenceResult {
+                                source: "SnpEff".into(),
+                                status: if records.is_empty() {
+                                    EvidenceStatus::NoExactMatch
+                                } else {
+                                    EvidenceStatus::Found
+                                },
+                                records,
+                                message: None,
+                            })
+                            .collect(),
+                        Err(error) => vec![
+                            EvidenceResult {
+                                source: "SnpEff".into(),
+                                status: EvidenceStatus::Error,
+                                records: Vec::new(),
+                                message: Some(error.to_string()),
+                            };
+                            chunk.len()
+                        ],
+                    }
+                };
+                for (variant, evidence) in chunk.iter().zip(evidence_batch) {
+                    signals.insert(
+                        variant.clone(),
+                        BatchEvidenceSignal {
+                            impact_signal: snpeff_impact_signal(&evidence),
+                            exact_match_count: evidence.records.len() as u32,
+                            status: evidence.status,
+                        },
+                    );
+                }
+                on_progress(((chunk_index + 1) * 1_000).min(total), total)?;
+            }
+            return Ok(signals);
+        }
+
+        let bundle = &project.manifest().resource_bundle;
+        let (resource, kind) = match device_id {
+            "org.dgw.builtin.dbnsfp" => (&bundle.dbnsfp, ResourceKind::Dbnsfp),
+            "org.dgw.builtin.clinvar" => (&bundle.clinvar, ResourceKind::Vcf),
+            "org.dgw.builtin.cosmic" => (&bundle.cosmic, ResourceKind::Vcf),
+            _ => {
+                return Err(DgwError::InvalidDevice(format!(
+                    "device {device_id} cannot evaluate a track"
+                )))
+            }
+        };
+        const INDEXED_RESOURCE_BATCH_SIZE: usize = 2_000;
+        let mut signals = BTreeMap::new();
+        for (chunk_index, chunk) in variants.chunks(INDEXED_RESOURCE_BATCH_SIZE).enumerate() {
+            signals.extend(query_resource_signals_batch(
+                &bundle.tabix_path,
+                resource,
+                chunk,
+                kind,
+            )?);
+            on_progress(
+                ((chunk_index + 1) * INDEXED_RESOURCE_BATCH_SIZE).min(total),
+                total,
+            )?;
+        }
+        Ok(signals)
+    }
+
     fn annotate_snpeff(
         &self,
         bundle: &ResourceBundle,
@@ -319,6 +440,57 @@ impl EvaluationService {
             }
         }
     }
+
+    fn annotate_snpeff_batch(
+        &self,
+        bundle: &ResourceBundle,
+        bundle_fingerprint: &str,
+        variants: &[VariantKey],
+    ) -> Result<Vec<Vec<BTreeMap<String, String>>>> {
+        let mut guard = self
+            .worker
+            .lock()
+            .map_err(|_| DgwError::Tool("SnpEff worker lock is poisoned".into()))?;
+        let needs_worker = guard
+            .as_ref()
+            .is_none_or(|worker| worker.bundle_id != bundle_fingerprint);
+        if needs_worker {
+            *guard = Some(SnpeffWorker::spawn(bundle, bundle_fingerprint)?);
+        }
+        let first = guard
+            .as_mut()
+            .expect("worker was initialized")
+            .annotate_many(variants);
+        match first {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                *guard = Some(SnpeffWorker::spawn(bundle, bundle_fingerprint)?);
+                guard
+                    .as_mut()
+                    .expect("worker was restarted")
+                    .annotate_many(variants)
+            }
+        }
+    }
+}
+
+fn snpeff_impact_signal(evidence: &EvidenceResult) -> Option<f64> {
+    if evidence.status != EvidenceStatus::Found {
+        return None;
+    }
+    evidence
+        .records
+        .iter()
+        .map(
+            |record| match record.get("impact").map(|value| value.to_ascii_uppercase()) {
+                Some(value) if value == "HIGH" => 1.0,
+                Some(value) if value == "MODERATE" => 0.67,
+                Some(value) if value == "LOW" => 0.33,
+                Some(value) if value == "MODIFIER" => 0.1,
+                _ => 0.0,
+            },
+        )
+        .reduce(f64::max)
 }
 
 fn is_durable_evidence(evidence: &EvidenceResult) -> bool {
@@ -546,6 +718,57 @@ impl SnpeffWorker {
                 .collect::<Vec<_>>());
         }
     }
+
+    fn annotate_many(
+        &mut self,
+        variants: &[VariantKey],
+    ) -> Result<Vec<Vec<BTreeMap<String, String>>>> {
+        if self.child.try_wait()?.is_some() {
+            return Err(DgwError::Tool("SnpEff worker exited".into()));
+        }
+        if variants.is_empty() {
+            return Ok(Vec::new());
+        }
+        let batch = format!("DGWB_{}", Uuid::new_v4().simple());
+        let mut tokens = BTreeMap::new();
+        for (index, variant) in variants.iter().enumerate() {
+            let token = format!("{batch}_{index}");
+            tokens.insert(token.clone(), index);
+            writeln!(
+                self.stdin,
+                "{}\t{}\t{}\t{}\t{}\t.\tPASS\t.\tGT\t0|1",
+                variant.contig, variant.position, token, variant.reference, variant.alternate
+            )?;
+        }
+        self.stdin.flush()?;
+
+        let mut results = vec![Vec::new(); variants.len()];
+        let mut received = 0_usize;
+        while received < variants.len() {
+            let line = self
+                .records
+                .recv_timeout(Duration::from_secs(60))
+                .map_err(|_| {
+                    DgwError::Timeout(format!(
+                        "SnpEff returned {received} of {} records in the current batch",
+                        variants.len()
+                    ))
+                })?;
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() < 8 {
+                continue;
+            }
+            let Some(index) = tokens.remove(fields[2]) else {
+                continue;
+            };
+            let info = parse_info(fields[7]);
+            if let Some(annotation) = info.get("ANN") {
+                results[index] = annotation.split(',').map(parse_ann_record).collect();
+            }
+            received += 1;
+        }
+        Ok(results)
+    }
 }
 
 impl Drop for SnpeffWorker {
@@ -696,6 +919,147 @@ fn query_resource(
         records,
         message: None,
     }
+}
+
+fn query_resource_signals_batch(
+    tabix_path: &Path,
+    resource: &IndexedResource,
+    variants: &[VariantKey],
+    kind: ResourceKind,
+) -> Result<BTreeMap<VariantKey, BatchEvidenceSignal>> {
+    let unavailable = if !tabix_path.is_file() {
+        Some(format!(
+            "tabix executable is missing: {}",
+            tabix_path.display()
+        ))
+    } else if !resource.path.is_file() || !resource.index_path.is_file() {
+        Some("data or index file is missing".into())
+    } else {
+        None
+    };
+    if unavailable.is_some() {
+        return Ok(variants
+            .iter()
+            .cloned()
+            .map(|variant| {
+                (
+                    variant,
+                    BatchEvidenceSignal {
+                        status: EvidenceStatus::ResourceUnavailable,
+                        exact_match_count: 0,
+                        impact_signal: None,
+                    },
+                )
+            })
+            .collect());
+    }
+
+    let mut regions = tempfile::Builder::new()
+        .prefix("dgw-track-profile-")
+        .suffix(".bed")
+        .tempfile()?;
+    let mut loci = std::collections::BTreeSet::new();
+    let mut candidates: BTreeMap<(String, u64), Vec<usize>> = BTreeMap::new();
+    for (index, variant) in variants.iter().enumerate() {
+        loci.insert((variant.contig.clone(), variant.position));
+        candidates
+            .entry((variant.contig.clone(), variant.position))
+            .or_default()
+            .push(index);
+    }
+    for (contig, position) in loci {
+        // BED input makes coordinate semantics explicit for tabix -R.
+        writeln!(
+            regions,
+            "{contig}\t{}\t{position}",
+            position.saturating_sub(1)
+        )?;
+    }
+    regions.flush()?;
+
+    let mut child = Command::new(tabix_path)
+        .arg("-R")
+        .arg(regions.path())
+        .arg(&resource.path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| DgwError::Tool("tabix batch stdout is unavailable".into()))?;
+    let stderr = child.stderr.take();
+    let stderr_reader = thread::spawn(move || {
+        let mut message = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_string(&mut message);
+        }
+        message
+    });
+
+    let mut signals: BTreeMap<VariantKey, BatchEvidenceSignal> = variants
+        .iter()
+        .cloned()
+        .map(|variant| {
+            (
+                variant,
+                BatchEvidenceSignal {
+                    status: EvidenceStatus::NoExactMatch,
+                    exact_match_count: 0,
+                    impact_signal: None,
+                },
+            )
+        })
+        .collect();
+    for line in BufReader::new(stdout)
+        .lines()
+        .map_while(std::result::Result::ok)
+    {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 4 {
+            continue;
+        }
+        let Some(position) = fields.get(1).and_then(|value| value.parse::<u64>().ok()) else {
+            continue;
+        };
+        let Some(indexes) = candidates.get(&(fields[0].to_owned(), position)) else {
+            continue;
+        };
+        for index in indexes {
+            let variant = &variants[*index];
+            let exact = match kind {
+                ResourceKind::Vcf => {
+                    fields.len() >= 8
+                        && fields[3].eq_ignore_ascii_case(&variant.reference)
+                        && fields[4]
+                            .split(',')
+                            .any(|alternate| alternate.eq_ignore_ascii_case(&variant.alternate))
+                }
+                ResourceKind::Dbnsfp => {
+                    fields[0].trim_start_matches("chr") == variant.contig.trim_start_matches("chr")
+                        && fields[2].eq_ignore_ascii_case(&variant.reference)
+                        && fields[3].eq_ignore_ascii_case(&variant.alternate)
+                }
+            };
+            if exact {
+                if let Some(signal) = signals.get_mut(variant) {
+                    signal.status = EvidenceStatus::Found;
+                    signal.exact_match_count = signal.exact_match_count.saturating_add(1);
+                }
+            }
+        }
+    }
+    let status = child.wait()?;
+    let stderr = stderr_reader.join().unwrap_or_default();
+    if !status.success() {
+        let message = stderr.trim();
+        return Err(DgwError::Tool(if message.is_empty() {
+            "tabix batch query failed".into()
+        } else {
+            format!("tabix batch query failed: {message}")
+        }));
+    }
+    Ok(signals)
 }
 
 fn dbnsfp_columns(path: &std::path::Path) -> Result<Vec<String>> {
@@ -945,5 +1309,35 @@ mod tests {
         );
         assert_eq!(parsed.get("geneName").map(String::as_str), Some("BRAF"));
         assert_eq!(parsed.get("hgvsP").map(String::as_str), Some("p.Val600Glu"));
+    }
+
+    #[test]
+    fn snpeff_batch_signal_uses_the_strongest_transcript_impact() {
+        let evidence = EvidenceResult {
+            source: "SnpEff".into(),
+            status: EvidenceStatus::Found,
+            records: vec![
+                BTreeMap::from([("impact".into(), "LOW".into())]),
+                BTreeMap::from([("impact".into(), "HIGH".into())]),
+            ],
+            message: None,
+        };
+        assert_eq!(snpeff_impact_signal(&evidence), Some(1.0));
+    }
+
+    #[test]
+    fn batch_database_lookup_reports_resource_unavailable_per_exact_allele() {
+        let variants = vec![variant()];
+        let signals = query_resource_signals_batch(
+            Path::new("/missing/tabix"),
+            &indexed_resource("clinvar"),
+            &variants,
+            ResourceKind::Vcf,
+        )
+        .unwrap();
+        assert_eq!(
+            signals.get(&variants[0]).unwrap().status,
+            EvidenceStatus::ResourceUnavailable
+        );
     }
 }

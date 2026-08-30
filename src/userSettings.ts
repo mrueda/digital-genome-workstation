@@ -9,6 +9,8 @@ export interface UserSettings {
   showDeviceRack: boolean;
   showTrackMonitor: boolean;
   reduceMotion: boolean;
+  workerThreads: "auto" | number;
+  interactiveAlleleLimit: number;
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -17,7 +19,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   showEvidenceInspector: true,
   showDeviceRack: true,
   showTrackMonitor: true,
-  reduceMotion: false
+  reduceMotion: false,
+  workerThreads: "auto",
+  interactiveAlleleLimit: 1_000
 };
 
 export const USER_SETTINGS_STORAGE_KEY = "dgw.user-settings.v2";
@@ -46,7 +50,15 @@ export function parseUserSettings(value: string | null): UserSettings {
           : DEFAULT_USER_SETTINGS.showTrackMonitor,
       reduceMotion: typeof candidate.reduceMotion === "boolean"
         ? candidate.reduceMotion
-        : DEFAULT_USER_SETTINGS.reduceMotion
+        : DEFAULT_USER_SETTINGS.reduceMotion,
+      workerThreads: candidate.workerThreads === "auto"
+        ? "auto"
+        : typeof candidate.workerThreads === "number" && Number.isFinite(candidate.workerThreads)
+          ? Math.max(1, Math.min(256, Math.trunc(candidate.workerThreads)))
+          : DEFAULT_USER_SETTINGS.workerThreads,
+      interactiveAlleleLimit: typeof candidate.interactiveAlleleLimit === "number" && Number.isFinite(candidate.interactiveAlleleLimit)
+        ? Math.max(100, Math.min(1_000, Math.trunc(candidate.interactiveAlleleLimit)))
+        : DEFAULT_USER_SETTINGS.interactiveAlleleLimit
     };
   } catch {
     return { ...DEFAULT_USER_SETTINGS };

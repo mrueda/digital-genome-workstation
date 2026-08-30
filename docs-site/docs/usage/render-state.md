@@ -12,7 +12,7 @@ Consolidation does not merge per-allele annotations into a combined biological i
 
 Choose **File → Export VCF…**. Its scope is **Current genome track**, analogous to a DAW's whole-song export. DGW materializes the selected track as a BGZF-compressed, CSI-indexed, single-sample VCF. A track does not have to be consolidated before export. Track-based rendering combines private baseline exclusions with currently visible bypass choices, so its genotype matches the same effective state shown in the workspace.
 
-The output is sorted, normalized, and biallelic. Known phase is written with `|`; phase-unknown heterozygous alleles remain `0/1`. Loci restored to reference are omitted. Unchanged observed alleles may preserve valid source ID, QUAL, and FILTER values. Imported consequence/evidence INFO is not copied, and edited or created records never inherit source-ALT annotations or read measurements such as DP or AD.
+The output is sorted, normalized, and exact-ALT biallelic. Known phase is written with `|`. A phase-unknown single ALT uses `/`; when an imported `1/2` remains two different ALTs, complementary `1/0` and `0/1` rows preserve the two genotype slots without claiming known chromosome copies. Loci restored to reference are omitted. Unchanged observed alleles may preserve valid source ID, QUAL, and FILTER values. Imported consequence/evidence INFO is not copied, and edited or created records never inherit source-ALT annotations or read measurements such as DP or AD.
 
 DGW adds:
 

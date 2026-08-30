@@ -27,7 +27,7 @@ Candidate B         ─────[A→G]────────────�
 
 - **Variants** chooses an allele in the focused region.
 - **Genome tracks** selects, duplicates, renames, compares, or removes a complete genome scenario.
-- **Allele editor** opens below the tracks when an allele mark or edit block is selected. It shows the focused sequence and mutation controls.
+- **Allele editor** opens below the tracks when an allele mark or edit block is selected. Its Allele Roll aligns FASTA positions with A/C/G/T lanes for manual SNV staging; Sequence shows the reconstructed reference and chromosome-copy strings, and the Mutation editor applies the staged reversible change.
 - **Device rack** contains the tools that add or generate reversible changes.
 - **Edit blocks** show where those changes affect the focused region and remain selectable until consolidation.
 - **Evidence** predicts molecular consequences and looks for exact records for the selected allele.
@@ -37,7 +37,7 @@ Tracks, persistent edit blocks, the device rack, and consolidation are now the p
 ## The v0.1 workflow
 
 1. Register a local b37/hs37d5 reference and any optional Evidence resources.
-2. Open a sorted, normalized, biallelic VCF. INFO annotations may be present, but DGW ignores them.
+2. Open a VCF. DGW retains strict `FILTER=PASS` records, accepts biallelic and multiallelic small variants, normalizes its selected-sample project copy, and ignores imported INFO annotations.
 3. Select one sample as the project genome.
 4. Focus a variant or reference interval.
 5. Duplicate the source track and rename the experimental track.
@@ -55,12 +55,13 @@ The rack has three device roles:
 - **Edit** devices propose reversible changes. Mutation Generator is the first built-in example.
 - **Evidence** devices report allele annotations, predictions, classifications, or observations. SnpEff, dbNSFP, ClinVar, and COSMIC fill this group.
 - **Analyze** devices apply an explicit model to one or more track inputs. Genome Optimizer is the first built-in example and emits ordinary reversible proposals.
+- **Visualize** devices present track state and available results without proposing edits or contributing to an objective. Variant Map is the first built-in example.
 
 Device code is separate from its resource pack. For example, the SnpEff device is behavior, while the configured JAR, model, and reference data are resources. The VST-like analogy describes how devices fit into a rack; actual compatibility will use the structured, versioned [DGW Device API](technical-details/device-api.md).
 
 All built-ins appear in the function-grouped Device Browser, opened through **Create → Add Device** or the rack's add button. The selected track's Device Rack remains below the tracks and shows the full panels of only the instances applied to that track, arranged horizontally in order. The grouping describes purpose; it does not imply that outputs flow through an audio-like signal chain.
 
-The built-in **DGW Starter** project template pre-applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, and Genome Optimizer in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
+The built-in **DGW Starter** project template pre-applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and Variant Map in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them; Variant Map is read-only. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
 
 The **Genome Optimizer** is an implemented experimental device with two modes:
 
