@@ -492,7 +492,7 @@ async function createBundledExampleProject(
   return { projectPath: example.projectPath, snapshot };
 }
 
-function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTemplateId; onOpened: (path: string, snapshot: ProjectSnapshot, created: boolean) => void }) {
+function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTemplateId; onOpened: (path: string, snapshot: ProjectSnapshot, created: boolean, unsavedExample?: boolean) => void }) {
   const [bundles, setBundles] = useState<ResourceBundle[]>([]);
   const [bundle, setBundle] = useState<ResourceBundle>();
   const [bundleText, setBundleText] = useState("");
@@ -610,25 +610,21 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     return result;
   }
 
-  async function loadExample() {
-    const assembly = bundle?.assembly;
-    if (assembly !== "b37" && assembly !== "hg38") {
-      setStatus("Choose a supported reference profile before opening an example.");
-      return;
-    }
+  async function loadExample(exampleId: ExampleProjectId) {
+    const assembly = exampleId === "alleleEditingHg38" ? "hg38" : "b37";
     setBusy(true);
     setProcessSteps([]);
     const assemblyLabel = assembly === "hg38" ? "GRCh38" : "GRCh37";
     setStatus(`Opening the prepared ${assemblyLabel} example project…`);
     try {
       const example = await createBundledExampleProject(
-        assembly === "hg38" ? "alleleEditingHg38" : "alleleEditingB37",
+        exampleId,
         (message, progress) => {
         setStatus(message);
         if (progress) receiveProgress(progress);
         }
       );
-      onOpened(example.projectPath, example.snapshot, true);
+      onOpened(example.projectPath, example.snapshot, true, true);
     } catch (error) {
       setStatus(messageOf(error));
     } finally {
@@ -718,9 +714,26 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
 
       <section className="setup-panel">
         <div className="setup-heading">
-          <div><p className="eyebrow">Start a project</p><h2>Load a genome</h2><small>{projectTemplate === "standardEvidence" ? "DGW Starter template" : "Empty template"}</small></div>
+          <div><p className="eyebrow">Start a project</p><h2>Open or create a genome workspace</h2><small>{projectTemplate === "standardEvidence" ? "DGW Starter template" : "Empty template"}</small></div>
           <button className="button ghost" onClick={openExisting} disabled={busy}>Open .dgw</button>
         </div>
+
+        <section className="example-projects" aria-label="Example projects">
+          <header><b>Open an example</b><small>Start with a fresh, unsaved copy</small></header>
+          <div>
+            <button type="button" aria-label="Open GRCh37 example project" onClick={() => { void loadExample("alleleEditingB37"); }} disabled={busy}>
+              <b>Allele Editing</b><span>GRCh37</span><small>Synthetic · 3 prepared tracks</small>
+            </button>
+            <button type="button" aria-label="Open GRCh38 example project" onClick={() => { void loadExample("alleleEditingHg38"); }} disabled={busy}>
+              <b>Allele Editing</b><span>GRCh38</span><small>Synthetic · 3 prepared tracks</small>
+            </button>
+            <button type="button" aria-label="Open HG00103 exome example" onClick={() => { void loadExample("hg00103Wes"); }} disabled={busy}>
+              <b>HG00103 exome</b><span>GRCh37</span><small>1000 Genomes WES · 19.6K alleles</small>
+            </button>
+          </div>
+        </section>
+
+        <div className="start-divider"><span>or import a VCF</span></div>
 
         <div className="reference-profile-choice">
           <label htmlFor="reference-profile">Reference profile</label>
@@ -742,16 +755,12 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
           <span className="step-number">1</span>
           <div className="grow">
             <label>VCF with SNVs/indels</label>
-            <div className="file-choice-row">
-              <button className="file-picker" onClick={chooseVcf} disabled={busy}>
-                <span>{sourcePath || "Choose .vcf or .vcf.gz"}</span><b>Browse</b>
-              </button>
-              <button className="button secondary load-example" onClick={loadExample} disabled={busy}>{busy ? "Opening…" : `Open ${bundle?.assembly === "hg38" ? "GRCh38" : "GRCh37"} example project`}</button>
-            </div>
+            <button className="file-picker" onClick={chooseVcf} disabled={busy}>
+              <span>{sourcePath || "Choose .vcf or .vcf.gz"}</span><b>Browse</b>
+            </button>
             <details className="input-guidance">
               <summary>Input details</summary>
               <small>DGW normalizes a project copy against the configured reference; the source VCF is never changed. Imported INFO annotations are optional and ignored.</small>
-              <small>Example project: 10 synthetic {bundle?.assembly === "hg38" ? "GRCh38" : "GRCh37"} variants · three prepared tracks · chromosomes 7 + 17 · fictional sample DGW_DEMO</small>
             </details>
           </div>
         </div>
@@ -4846,6 +4855,7 @@ export default function App() {
   const [projectSetupKey, setProjectSetupKey] = useState(0);
   const [historyState, setHistoryState] = useState<WorkstationHistoryState>(EMPTY_HISTORY_STATE);
   const [projectSaveState, setProjectSaveState] = useState<ProjectSaveState>();
+  const [projectNeedsSaveAs, setProjectNeedsSaveAs] = useState(false);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(() => parseRecentProjects(localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY)));
   const sessionSaverRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
@@ -4914,18 +4924,23 @@ export default function App() {
     setRecentProjects((current) => [recent, ...current.filter((item) => item.path !== path)].slice(0, 8));
   }
 
-  function enterProject(path: string, opened: ProjectSnapshot, created: boolean, template = projectTemplate) {
+  function enterProject(path: string, opened: ProjectSnapshot, created: boolean, template = projectTemplate, unsavedExample = false) {
     setProjectPath(path);
+    setProjectNeedsSaveAs(unsavedExample);
     setInitialAppliedDeviceIds(created && template === "empty" ? [] : [...dgwStarterDeviceIds]);
     setSnapshot(opened);
     setHistoryState(EMPTY_HISTORY_STATE);
-    setProjectSaveState({ status: "saved", message: created ? "Project created and autosaved" : "Project opened" });
-    rememberProject(path, opened);
+    setProjectSaveState({
+      status: "saved",
+      message: unsavedExample ? "Unsaved example · temporary autosave" : created ? "Project created and autosaved" : "Project opened"
+    });
+    if (!unsavedExample) rememberProject(path, opened);
   }
 
   function resetProject() {
     setSnapshot(undefined);
     setProjectPath("");
+    setProjectNeedsSaveAs(false);
     setExportRequest(undefined);
     setHistoryRequest(undefined);
     setDeviceBrowserRequest(0);
@@ -4939,6 +4954,35 @@ export default function App() {
   async function saveCurrentProject() {
     if (!snapshot || !sessionSaverRef.current) return;
     await sessionSaverRef.current();
+  }
+
+  async function saveProject() {
+    if (!snapshot || !projectPath) return;
+    if (!projectNeedsSaveAs) {
+      await saveCurrentProject();
+      return;
+    }
+
+    const selected = await save({
+      title: "Save Example as a DGW Project",
+      defaultPath: `${projectSlug(snapshot.manifest.name)}.dgw`,
+      filters: [{ name: "DGW Project", extensions: ["dgw"] }]
+    });
+    if (typeof selected !== "string") return;
+    const destination = selected.toLowerCase().endsWith(".dgw") ? selected : `${selected}.dgw`;
+    try {
+      await saveCurrentProject();
+      setProjectSaveState({ status: "saving", message: "Saving example as a project…" });
+      const saved = await api.saveProjectCopy(projectPath, destination);
+      setProjectPath(saved.projectPath);
+      setSnapshot(saved.snapshot);
+      setProjectNeedsSaveAs(false);
+      setHistoryState(EMPTY_HISTORY_STATE);
+      rememberProject(saved.projectPath, saved.snapshot);
+      setProjectSaveState({ status: "saved", message: `Project saved: ${saved.projectPath}` });
+    } catch (error) {
+      setProjectSaveState({ status: "error", message: `Save failed: ${messageOf(error)}` });
+    }
   }
 
   async function closeProject(): Promise<boolean> {
@@ -4976,7 +5020,7 @@ export default function App() {
       const example = await createBundledExampleProject(exampleId, (message) => {
         setProjectSaveState({ status: "saving", message });
       });
-      enterProject(example.projectPath, example.snapshot, true, "standardEvidence");
+      enterProject(example.projectPath, example.snapshot, true, "standardEvidence", true);
     } catch (error) {
       const detail = messageOf(error);
       setProjectSaveState({ status: "error", message: `Example failed: ${detail}` });
@@ -5049,7 +5093,7 @@ export default function App() {
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key.toLowerCase() === "s" && snapshot) {
         event.preventDefault();
-        void saveCurrentProject();
+        void saveProject();
       } else if (event.key.toLowerCase() === "o") {
         event.preventDefault();
         void chooseExistingProject();
@@ -5064,6 +5108,7 @@ export default function App() {
       projectOpen={Boolean(snapshot)}
       projectName={snapshot?.manifest.name}
       projectPath={snapshot ? projectPath : undefined}
+      projectNeedsSaveAs={projectNeedsSaveAs}
       resourceBundle={snapshot?.manifest.resourceBundle}
       settings={settings}
       canUndo={historyState.canUndo}
@@ -5079,7 +5124,7 @@ export default function App() {
       onOpenExampleProject={(assembly) => { void openExampleProject(assembly); }}
       recentProjects={recentProjects}
       onOpenRecent={(path) => { void openProjectAt(path); }}
-      onSaveProject={() => { void saveCurrentProject(); }}
+      onSaveProject={() => { void saveProject(); }}
       onSaveProjectCopy={() => { void saveProjectCopy(); }}
       saveStatus={projectSaveState?.status}
       saveMessage={projectSaveState?.message}
@@ -5121,8 +5166,8 @@ export default function App() {
           onSessionSaverChange={registerSessionSaver}
           onSaveStateChange={setProjectSaveState}
         />
-        : <Onboarding projectTemplate={projectTemplate} key={projectSetupKey} onOpened={(path, opened, created) => {
-          enterProject(path, opened, created);
+        : <Onboarding projectTemplate={projectTemplate} key={projectSetupKey} onOpened={(path, opened, created, unsavedExample) => {
+          enterProject(path, opened, created, projectTemplate, unsavedExample);
         }} />}
     </div>
     <ProjectTemplateDialog

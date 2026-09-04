@@ -19,6 +19,7 @@ export function ApplicationMenu({
   projectOpen,
   projectName,
   projectPath,
+  projectNeedsSaveAs,
   resourceBundle,
   settings,
   canUndo,
@@ -48,6 +49,7 @@ export function ApplicationMenu({
   projectOpen: boolean;
   projectName?: string;
   projectPath?: string;
+  projectNeedsSaveAs: boolean;
   resourceBundle?: ResourceBundle;
   settings: UserSettings;
   canUndo: boolean;
@@ -185,7 +187,9 @@ export function ApplicationMenu({
         <summary>File</summary>
         <div className="application-menu-popover file-menu-popover">
           {projectOpen
-            ? <div className="file-menu-project"><b>{projectName}</b><span title={projectPath}>{projectPath}</span><small>All changes are saved automatically in this .dgw project folder.</small></div>
+            ? <div className="file-menu-project"><b>{projectName}</b>{projectNeedsSaveAs
+              ? <><span>Unsaved example</span><small>Changes are retained temporarily. Save the example as a project to keep them.</small></>
+              : <><span title={projectPath}>{projectPath}</span><small>All changes are saved automatically in this .dgw project folder.</small></>}</div>
             : <p>No project open</p>}
           <button type="button" onClick={(event) => { closeMenu(event); onNewProject(); }}><span>New Project…</span><small>Default setup</small></button>
           <button type="button" onClick={(event) => { closeMenu(event); onNewFromTemplate(); }}><span>New from Template…</span><small>Choose setup</small></button>
@@ -211,7 +215,7 @@ export function ApplicationMenu({
             </button>)}
           </>}
           <hr />
-          <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProject(); }}><span>{saveStatus === "saving" ? "Saving Project…" : "Save Project"}</span><kbd>⌘ S</kbd></button>
+          <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProject(); }}><span>{saveStatus === "saving" ? "Saving Project…" : projectNeedsSaveAs ? "Save Example as Project…" : "Save Project"}</span><kbd>⌘ S</kbd></button>
           <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProjectCopy(); }}><span>Save a Copy…</span><small>Complete .dgw project</small></button>
           <hr />
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onExportTrackVcf(); }}><span>Export VCF…</span><small>Current genome track</small></button>
@@ -272,7 +276,7 @@ export function ApplicationMenu({
           <button type="button" onClick={(event) => { closeMenu(event); setAboutOpen(true); }}>About DGW</button>
         </div>
       </details>
-      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${saveMessage ?? "autosaved"}` : "Project setup"}</span>
+      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
     </nav>
     {aboutOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}>
       <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">

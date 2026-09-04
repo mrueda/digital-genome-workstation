@@ -257,7 +257,7 @@ impl Project {
         }
         let project = Self { root, manifest };
         // Opening an older package also performs the small, idempotent track migration.
-        drop(project.connection()?);
+        project.ensure_schema()?;
         Ok(project)
     }
 
@@ -270,13 +270,18 @@ impl Project {
     }
 
     fn connection(&self) -> Result<Connection> {
-        let mut connection = Connection::open(self.root.join(DATABASE_FILE))?;
-        connection.busy_timeout(Duration::from_secs(5))?;
+        let connection = Connection::open(self.root.join(DATABASE_FILE))?;
+        connection.busy_timeout(Duration::from_secs(30))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(connection)
+    }
+
+    fn ensure_schema(&self) -> Result<()> {
+        let mut connection = self.connection()?;
         self.ensure_variant_schema(&mut connection)?;
         self.ensure_track_schema(&mut connection)?;
         self.ensure_job_schema(&mut connection)?;
-        Ok(connection)
+        Ok(())
     }
 
     /// Keep the public project format at v1 while adding queryable columns to
@@ -316,8 +321,17 @@ impl Project {
                 )?;
             }
         }
-        connection.execute_batch(
-            "UPDATE root_variants
+        let needs_backfill: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM root_variants
+                 WHERE contig IS NULL OR position IS NULL OR end_position IS NULL
+            )",
+            [],
+            |row| row.get(0),
+        )?;
+        if needs_backfill {
+            connection.execute_batch(
+                "UPDATE root_variants
                 SET assembly = json_extract(payload, '$.key.assembly'),
                     contig = json_extract(payload, '$.key.contig'),
                     position = json_extract(payload, '$.key.position'),
@@ -325,8 +339,11 @@ impl Project {
                         + length(json_extract(payload, '$.key.reference')) - 1,
                     reference = json_extract(payload, '$.key.reference'),
                     alternate = json_extract(payload, '$.key.alternate')
-              WHERE contig IS NULL OR position IS NULL OR end_position IS NULL;
-             CREATE INDEX IF NOT EXISTS root_variants_region_idx
+              WHERE contig IS NULL OR position IS NULL OR end_position IS NULL;",
+            )?;
+        }
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS root_variants_region_idx
                 ON root_variants(contig, position, end_position);
              CREATE INDEX IF NOT EXISTS root_variants_locus_idx
                 ON root_variants(assembly, contig, position, reference, alternate);",
@@ -364,33 +381,42 @@ impl Project {
         let track_count: i64 =
             connection.query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))?;
 
-        let transaction = connection.transaction()?;
         if track_count == 0 {
+            let transaction = connection.transaction()?;
             let source = self.seed_source_track();
             let working =
                 self.seed_working_track(&workspace.current_state_id, &workspace.bypassed_edit_ids);
             insert_track(&transaction, &source)?;
             insert_track(&transaction, &working)?;
             workspace.active_track_id = working.id;
+            transaction.execute(
+                "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+                [serde_json::to_string(&workspace)?],
+            )?;
+            transaction.commit()?;
         } else {
             let active = if workspace.active_track_id.is_empty() {
-                first_available_track(&transaction, Some(&working_track_id(&self.manifest)))?
+                first_available_track(connection, Some(&working_track_id(&self.manifest)))?
             } else {
-                track_from_connection(&transaction, &workspace.active_track_id)
+                track_from_connection(connection, &workspace.active_track_id)
                     .ok()
                     .filter(|track| !track.archived)
-                    .or(first_available_track(&transaction, None)?)
+                    .or(first_available_track(connection, None)?)
             }
             .ok_or_else(|| DgwError::Project("project has no available genome tracks".into()))?;
-            workspace.active_track_id = active.id.clone();
-            workspace.current_state_id = active.head_state_id;
-            workspace.bypassed_edit_ids = active.bypassed_edit_ids;
+            let changed = workspace.active_track_id != active.id
+                || workspace.current_state_id != active.head_state_id
+                || workspace.bypassed_edit_ids != active.bypassed_edit_ids;
+            if changed {
+                workspace.active_track_id = active.id.clone();
+                workspace.current_state_id = active.head_state_id;
+                workspace.bypassed_edit_ids = active.bypassed_edit_ids;
+                connection.execute(
+                    "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+                    [serde_json::to_string(&workspace)?],
+                )?;
+            }
         }
-        transaction.execute(
-            "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
-            [serde_json::to_string(&workspace)?],
-        )?;
-        transaction.commit()?;
         Ok(())
     }
 
@@ -523,6 +549,9 @@ impl Project {
              CREATE INDEX IF NOT EXISTS root_variants_locus_idx
                ON root_variants(assembly, contig, position, reference, alternate);",
         )?;
+        self.ensure_variant_schema(&mut connection)?;
+        self.ensure_track_schema(&mut connection)?;
+        self.ensure_job_schema(&mut connection)?;
         let transaction = connection.transaction()?;
         for variant in variants {
             transaction.execute(
@@ -4551,6 +4580,22 @@ mod tests {
         selected_vcf.finish().unwrap();
         project.write_manifest().unwrap();
         (temporary, project)
+    }
+
+    #[test]
+    fn runtime_database_connections_do_not_repeat_schema_writes() {
+        let (_temporary, project) = test_project();
+
+        let connection = project.connection().unwrap();
+
+        assert_eq!(connection.total_changes(), 0);
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM tracks", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
     }
 
     fn create_allele(position: u64, alternate: &str) -> EditKind {

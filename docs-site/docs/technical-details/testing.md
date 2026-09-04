@@ -25,6 +25,18 @@ The device runner selects all synthetic variants across chromosomes, generates a
 
 Use `fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz` and select `SRR1596639` to test a realistic public 1000 Genomes exome. It spans the autosomes and chromosome X and imports as 19,598 exact alleles after multiallelic decomposition. Its provenance and extraction command are recorded in `fixtures/README.md`; private samples are never fixtures.
 
+Track Profiler has a reproducible local parallel benchmark. It creates one randomized track, warms the registered resources, runs the same four Evidence devices twice at 1, 2 and 4 threads, and fails if the scientific result changes. Indexed-resource batches use the same bounded pool, so this covers both resource- and variant-level parallelism:
+
+```bash
+BENCHMARK_DIR=$(mktemp -d /tmp/dgw-profile-benchmark.XXXXXX)
+cargo run -p dgw-desktop --release --example profile_parallel_benchmark -- \
+  fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz \
+  SRR1596639 "$BENCHMARK_DIR/profile.dgw" \
+  config/local-hs37d5.development.json
+```
+
+The pool is local to the desktop process. It parallelizes independent Evidence devices and 2,000-allele indexed-resource batches; it is not a service or persistent worker system. Variant Consequences remains one complete batch, and project mutations remain serial.
+
 CI runs core/frontend tests and production builds. A separate Linux/macOS job compile-checks the Tauri shell; Linux installs the official GTK/WebKit prerequisites first. The local acceptance workflow adds the real reference, bcftools, Ensembl and indexed Evidence-resource boundary that public CI cannot reproduce without the external bundle.
 
 ## Browser interaction checks

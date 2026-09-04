@@ -11,6 +11,8 @@ test("keeps the project purpose and primary starting actions visible", async ({ 
   await expect(page.getByText("Load one sample from a VCF and test allele changes on independent tracks without changing the source.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Open .dgw" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open GRCh38 example project" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open HG00103 exome example" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toBeInViewport();
   await expect(page.getByRole("button", { name: "Open genome workspace" })).toBeVisible();
 });
@@ -63,12 +65,15 @@ test("opens the synthetic example into the complete genome workspace", async ({ 
   await expect(page.locator(".app-header strong")).toHaveText("DGW Allele Editing Demo");
   await expect(page.getByLabel("Track Monitor")).toBeVisible();
   await expect(page.getByLabel("Mutation Generator")).toBeVisible();
+  await expect(page.locator(".application-menu-context")).toContainText("unsaved example");
+
+  await page.getByText("File", { exact: true }).click();
+  await expect(page.getByRole("button", { name: /Save Example as Project/ })).toBeVisible();
+  await expect(page.getByText("Changes are retained temporarily")).toBeVisible();
 });
 
-test("opens the public GRCh37 exome example from the File menu", async ({ page }) => {
-  await page.getByText("File", { exact: true }).click();
-  await page.getByText("Open Example Project", { exact: true }).click();
-  await page.getByRole("button", { name: /HG00103 exome — GRCh37/ }).click();
+test("opens the public GRCh37 exome example directly from the landing page", async ({ page }) => {
+  await page.getByRole("button", { name: "Open HG00103 exome example" }).click();
 
   await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
   await expect(page.locator(".app-header strong")).toHaveText("HG00103 exome — GRCh37");

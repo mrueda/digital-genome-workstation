@@ -226,7 +226,22 @@ label > input, label > select { margin-top: 6px; }
 
 .setup-panel { min-height: 0; padding: clamp(28px, 4vh, 56px) clamp(45px, 6vw, 90px); display: flex; flex-direction: column; justify-content: flex-start; gap: 16px; overflow-y: auto; background: var(--theme-surface-low); }
 .setup-heading { display: flex; align-items: flex-start; gap: 20px; }
+.setup-heading > div { min-width: 0; flex: 1; }
 .setup-heading h2 { margin: 7px 0 0; font-size: 28px; }
+.example-projects { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.example-projects > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.example-projects > header b { color: var(--theme-text); font-size: 11px; }
+.example-projects > header small { color: var(--muted); font-size: 8px; }
+.example-projects > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.example-projects button { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--theme-text); background: var(--surface-raised); text-align: left; cursor: pointer; }
+.example-projects button:hover:not(:disabled) { border-color: var(--cyan); background: var(--surface-active); }
+.example-projects button:disabled { opacity: .5; cursor: wait; }
+.example-projects button b, .example-projects button span, .example-projects button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.example-projects button b { font-size: 10px; }
+.example-projects button span { margin-top: 3px; color: var(--cyan); font: 8px "DM Mono", ui-monospace, monospace; }
+.example-projects button small { margin-top: 5px; color: var(--muted); font-size: 7px; }
+.start-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font: 8px "DM Mono", ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.start-divider::before, .start-divider::after { content: ""; height: 1px; flex: 1; background: var(--line); }
 .resource-editor { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 13px; }
 .resource-editor summary { display: flex; justify-content: space-between; cursor: pointer; }
 .resource-editor summary small { color: var(--muted); }
@@ -236,8 +251,6 @@ label > input, label > select { margin-top: 6px; }
 .file-picker { width: 100%; margin-top: 6px; padding: 12px; display: flex; justify-content: space-between; gap: 15px; background: var(--surface); border: 1px dashed var(--theme-border-strong); border-radius: 7px; cursor: pointer; text-align: left; }
 .file-picker span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .file-picker b { color: var(--cyan); }
-.file-choice-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch; }
-.file-choice-row .load-example { margin-top: 6px; white-space: nowrap; }
 .fixture-note { display: block; margin-top: 7px; color: var(--muted); font-size: 10px; }
 .project-location-note { display: block; margin-top: 5px; color: var(--muted); font-size: 8px; font-weight: 400; line-height: 1.4; }
 .project-location-note code { color: var(--cyan); font: inherit; }

@@ -1,3 +1,5 @@
+mod local_compute;
+
 use dgw_core::evaluation::{normalize_variant, BatchEvidenceSignal};
 use dgw_core::{
     built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
@@ -20,8 +22,11 @@ use std::sync::{Arc, Mutex};
 use tauri::{ipc::Channel, Manager};
 use uuid::Uuid;
 
+use local_compute::{merge_track_profile_results, LocalComputePool};
+
 struct AppState {
     evaluation: Arc<EvaluationService>,
+    compute_pool: Arc<LocalComputePool>,
     job_lock: Arc<Mutex<()>>,
     cancelled_jobs: Arc<Mutex<BTreeSet<String>>>,
 }
@@ -776,18 +781,18 @@ fn example_fixture(
         ));
     }
 
-    let projects_dir = app
+    let unsaved_examples_dir = app
         .path()
-        .document_dir()
+        .app_cache_dir()
         .or_else(|_| app.path().app_data_dir())
         .map_err(error_text)?
-        .join("DGW Projects");
+        .join("unsaved-examples");
 
     Ok(ExampleFixture {
         path,
         sample: sample.into(),
         project_name: project_name.into(),
-        project_path: available_project_path(projects_dir, project_stem),
+        project_path: unsaved_examples_dir.join(format!("{project_stem}-{}.dgw", Uuid::new_v4())),
     })
 }
 
@@ -1485,6 +1490,7 @@ fn start_randomizer_preview_job(
     selection_limit: Option<u32>,
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
+    let _ = worker_threads;
     let project = Project::open(&project_path).map_err(error_text)?;
     let source_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
     let now = chrono::Utc::now();
@@ -1503,7 +1509,7 @@ fn start_randomizer_preview_job(
         progress: 0,
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
-        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        worker_threads: 1,
         request: request_payload,
         result: None,
         error: None,
@@ -1669,6 +1675,7 @@ fn start_optimizer_job(
     selection_limit: Option<u32>,
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
+    let _ = worker_threads;
     let project = Project::open(&project_path).map_err(error_text)?;
     let track = project.track(&track_id).map_err(error_text)?;
     if track.read_only {
@@ -1685,7 +1692,7 @@ fn start_optimizer_job(
         progress: 0,
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
-        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        worker_threads: 1,
         request: serde_json::json!({
             "optimizer": &request,
             "selection": &selection,
@@ -2230,6 +2237,7 @@ fn start_track_morph_preview_job(
     request: TrackMorphRequest,
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
+    let _ = worker_threads;
     if track_id == target_track_id {
         return Err("Genome Morph requires another track as its target".into());
     }
@@ -2249,7 +2257,7 @@ fn start_track_morph_preview_job(
         progress: 0,
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
-        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        worker_threads: 1,
         request: serde_json::json!({
             "sourceStateId": &source_track.head_state_id,
             "targetTrackId": &target_track_id,
@@ -2511,6 +2519,7 @@ fn start_track_evidence_profile_job(
         .track_profile_input_fingerprint(&track_id, &device_ids)
         .map_err(error_text)?;
     let now = chrono::Utc::now();
+    let effective_threads = worker_threads.unwrap_or(1).clamp(1, 256);
     let mut job = BackgroundJob {
         id: Uuid::new_v4().to_string(),
         operation: "trackEvidenceProfile".into(),
@@ -2520,7 +2529,7 @@ fn start_track_evidence_profile_job(
         progress: 0,
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
-        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        worker_threads: effective_threads,
         request: serde_json::json!({
             "stateId": &captured_track.head_state_id,
             "bypassedEditIds": &captured_track.bypassed_edit_ids,
@@ -2536,6 +2545,7 @@ fn start_track_evidence_profile_job(
 
     let returned_job = job.clone();
     let evaluation = Arc::clone(&state.evaluation);
+    let compute_pool = Arc::clone(&state.compute_pool);
     let job_lock = Arc::clone(&state.job_lock);
     let cancelled_jobs = Arc::clone(&state.cancelled_jobs);
     tauri::async_runtime::spawn_blocking(move || {
@@ -2580,30 +2590,54 @@ fn start_track_evidence_profile_job(
         }
 
         let mut last_reported = BTreeMap::<String, usize>::new();
-        let outcome = dgw_core::profile_track(
-            &evaluation,
-            &project,
-            &track_id,
-            &device_ids,
-            |device_id, processed, total| {
-                if job_was_cancelled(&cancelled_jobs, &job.id) {
-                    return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
-                }
-                let device_index = device_ids
-                    .iter()
-                    .position(|candidate| candidate == device_id)
-                    .unwrap_or(0);
-                let last = last_reported.entry(device_id.into()).or_default();
-                if processed == 0 || processed == total || processed.saturating_sub(*last) >= 250 {
+        let mut device_progress = BTreeMap::<String, (usize, usize)>::new();
+        let job_id = job.id.clone();
+        let profile_track_id = track_id.clone();
+        let profile_worker_threads = usize::from(job.worker_threads);
+        let outcome = compute_pool
+            .parallel_map_with_progress(
+                job.worker_threads,
+                device_ids.clone(),
+                |device_id, progress| {
+                    dgw_core::profile_track_with_threads(
+                        &evaluation,
+                        &project,
+                        &profile_track_id,
+                        std::slice::from_ref(&device_id),
+                        profile_worker_threads,
+                        |reported_device, processed, total| {
+                            if job_was_cancelled(&cancelled_jobs, &job_id) {
+                                return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
+                            }
+                            progress
+                                .send((reported_device.to_owned(), processed, total))
+                                .map_err(|error| dgw_core::DgwError::Tool(error.to_string()))
+                        },
+                    )
+                    .map_err(error_text)
+                },
+                |(device_id, processed, total)| {
+                    device_progress.insert(device_id.clone(), (processed, total));
+                    let last = last_reported.entry(device_id.clone()).or_default();
+                    if processed != 0 && processed != total && processed.saturating_sub(*last) < 250
+                    {
+                        return Ok(());
+                    }
                     *last = processed;
-                    let completed = device_index as f64
-                        + if total == 0 {
-                            1.0
-                        } else {
-                            processed as f64 / total as f64
-                        };
+                    let completed: f64 = device_ids
+                        .iter()
+                        .map(|candidate| {
+                            device_progress.get(candidate).map_or(0.0, |(done, count)| {
+                                if *count == 0 {
+                                    1.0
+                                } else {
+                                    *done as f64 / *count as f64
+                                }
+                            })
+                        })
+                        .sum();
                     let progress = 5 + ((completed / device_ids.len() as f64) * 90.0).round() as u8;
-                    let label = evidence_device_label(device_id);
+                    let label = evidence_device_label(&device_id);
                     let message = if processed == 0 {
                         format!("{label}: preparing {total} unique alleles")
                     } else {
@@ -2617,18 +2651,32 @@ fn start_track_evidence_profile_job(
                         "evidence",
                         message,
                     )
-                    .map_err(dgw_core::DgwError::Project)?;
+                },
+            )
+            .and_then(|results| {
+                let current_fingerprint = project
+                    .track_profile_input_fingerprint(&track_id, &device_ids)
+                    .map_err(error_text)?;
+                if current_fingerprint != profile_input_fingerprint {
+                    return Err(
+                        "the track changed while Evidence profiling was running; run it again"
+                            .into(),
+                    );
                 }
-                Ok(())
-            },
-        )
-        .map_err(|error| {
-            if error.to_string().contains("__cancelled__") {
-                "__cancelled__".into()
-            } else {
-                error_text(error)
-            }
-        });
+                merge_track_profile_results(
+                    track_id.clone(),
+                    captured_track.head_state_id.clone(),
+                    profile_input_fingerprint.clone(),
+                    results,
+                )
+            })
+            .map_err(|error| {
+                if error.contains("__cancelled__") {
+                    "__cancelled__".into()
+                } else {
+                    error
+                }
+            });
 
         match outcome {
             Ok(result) => {
@@ -2910,6 +2958,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             evaluation: Arc::new(EvaluationService::new()),
+            compute_pool: Arc::new(LocalComputePool::new()),
             job_lock: Arc::new(Mutex::new(())),
             cancelled_jobs: Arc::new(Mutex::new(BTreeSet::new())),
         })

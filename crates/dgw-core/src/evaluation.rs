@@ -8,12 +8,14 @@ use crate::project::Project;
 use crate::vcf::{parse_info, translate_contig_style};
 use chrono::Utc;
 use flate2::read::MultiGzDecoder;
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::UNIX_EPOCH;
@@ -297,10 +299,27 @@ impl EvaluationService {
         project: &Project,
         variants: &[VariantKey],
         device_id: &str,
+        on_progress: F,
+    ) -> Result<BTreeMap<VariantKey, BatchEvidenceSignal>>
+    where
+        F: FnMut(usize, usize) -> Result<()> + Send,
+    {
+        self.evaluate_device_signals_with_threads(project, variants, device_id, 1, on_progress)
+    }
+
+    /// Evaluate indexed-resource batches on the caller's current Rayon pool.
+    /// Consequence prediction remains one complete batch so its transcript
+    /// model is loaded once. A thread limit of one preserves the serial path.
+    pub fn evaluate_device_signals_with_threads<F>(
+        &self,
+        project: &Project,
+        variants: &[VariantKey],
+        device_id: &str,
+        worker_threads: usize,
         mut on_progress: F,
     ) -> Result<BTreeMap<VariantKey, BatchEvidenceSignal>>
     where
-        F: FnMut(usize, usize) -> Result<()>,
+        F: FnMut(usize, usize) -> Result<()> + Send,
     {
         let total = variants.len();
         let device_id = canonical_device_id(device_id);
@@ -364,6 +383,29 @@ impl EvaluationService {
             }
         };
         const INDEXED_RESOURCE_BATCH_SIZE: usize = 2_000;
+        if worker_threads > 1 && variants.len() > INDEXED_RESOURCE_BATCH_SIZE {
+            let completed = AtomicUsize::new(0);
+            let progress = Mutex::new(&mut on_progress);
+            let chunks = variants
+                .par_chunks(INDEXED_RESOURCE_BATCH_SIZE)
+                .map(|chunk| {
+                    let result = query_resource_signals_batch(
+                        &bundle.tabix_path,
+                        resource,
+                        &bundle.contig_style,
+                        chunk,
+                        kind,
+                    )?;
+                    let processed =
+                        completed.fetch_add(chunk.len(), Ordering::Relaxed) + chunk.len();
+                    progress.lock().map_err(|_| {
+                        DgwError::Tool("Evidence progress lock is poisoned".into())
+                    })?(processed.min(total), total)?;
+                    Ok(result)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(chunks.into_iter().flatten().collect());
+        }
         let mut signals = BTreeMap::new();
         for (chunk_index, chunk) in variants.chunks(INDEXED_RESOURCE_BATCH_SIZE).enumerate() {
             signals.extend(query_resource_signals_batch(

@@ -59,10 +59,31 @@ pub fn profile_track<F>(
     project: &Project,
     track_id: &str,
     requested_device_ids: &[String],
+    on_progress: F,
+) -> Result<TrackEvidenceProfileResult>
+where
+    F: FnMut(&str, usize, usize) -> Result<()> + Send,
+{
+    profile_track_with_threads(
+        evaluation,
+        project,
+        track_id,
+        requested_device_ids,
+        1,
+        on_progress,
+    )
+}
+
+pub fn profile_track_with_threads<F>(
+    evaluation: &EvaluationService,
+    project: &Project,
+    track_id: &str,
+    requested_device_ids: &[String],
+    worker_threads: usize,
     mut on_progress: F,
 ) -> Result<TrackEvidenceProfileResult>
 where
-    F: FnMut(&str, usize, usize) -> Result<()>,
+    F: FnMut(&str, usize, usize) -> Result<()> + Send,
 {
     let device_ids = normalized_track_profile_devices(requested_device_ids);
     if device_ids.is_empty() {
@@ -98,10 +119,11 @@ where
 
     for device_id in &device_ids {
         on_progress(device_id, 0, variants.len())?;
-        let signals = evaluation.evaluate_device_signals(
+        let signals = evaluation.evaluate_device_signals_with_threads(
             project,
             &variants,
             device_id,
+            worker_threads,
             |processed, total| on_progress(device_id, processed, total),
         )?;
 
