@@ -1,9 +1,11 @@
 use dgw_core::{
     AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind, EffectiveVariant,
-    EvaluationService, GeneSearchHit, GenomeState, GenomeTrack, Haplotype, LocalComputePool,
-    Project, RandomizerPreviewResult, RandomizerRequest, SubstitutionPattern, VariantContigSummary,
-    VariantKey, VariantPage, VariantSelection, MAX_RANDOMIZER_POSITIONS,
-    TRACK_PROFILE_EVIDENCE_DEVICES,
+    EvaluationService, FocusContext, GeneSearchHit, GenomeState, GenomeTrack, Haplotype,
+    LocalComputePool, OptimizerDirection, OptimizerMode, OptimizerObjective,
+    OptimizerPreviewResult, OptimizerRequest, OptimizerWeights, Project, RandomizerPreviewResult,
+    RandomizerRequest, SubstitutionPattern, VariantContigSummary, VariantKey, VariantPage,
+    VariantSelection, CONSEQUENCE_DEVICE_ID, MAX_OPTIMIZER_EDITS, MAX_RANDOMIZER_POSITIONS,
+    MAX_SATURATION_POSITIONS, TRACK_PROFILE_EVIDENCE_DEVICES,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -207,6 +209,58 @@ pub struct ApplyMutationGeneratorPreviewRequest {
     pub job_id: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GenomeOptimizerMode {
+    Saturation,
+    Conservative,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GenomeOptimizerDirection {
+    Minimize,
+    Maximize,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct StartGenomeOptimizerPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable target track identifier")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    pub selection: MutationSelection,
+    #[schemars(
+        description = "Saturation compares all non-reference SNV bases; Conservative only uses alleles present in the source genome"
+    )]
+    pub mode: GenomeOptimizerMode,
+    pub direction: GenomeOptimizerDirection,
+    #[schemars(description = "Maximum selected positions to change, from 1 to 100000")]
+    pub max_changes: u32,
+    #[schemars(description = "Maximum selected positions to resolve; defaults to 100000")]
+    pub max_positions: Option<u32>,
+    #[schemars(
+        description = "Positive transcript-consequence weight for Saturation; defaults to 1 and is ignored by Conservative"
+    )]
+    pub impact_weight: Option<f64>,
+    #[schemars(description = "Bounded local worker count; omit for available CPUs minus one")]
+    pub worker_threads: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ApplyGenomeOptimizerPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Target track identifier used by the preview job")]
+    pub track_id: String,
+    #[schemars(description = "Track head captured when the preview job was started")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Completed Genome Optimizer preview job identifier")]
+    pub job_id: String,
+}
+
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct StartTrackProfilerRequest {
     #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
@@ -337,6 +391,18 @@ struct AppliedMutationGeneratorResult {
     job_id: String,
     applied: bool,
     preview: RandomizerPreviewResult,
+    state: Option<GenomeState>,
+    track: GenomeTrack,
+    active_mutation_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppliedGenomeOptimizerResult {
+    project_path: String,
+    job_id: String,
+    applied: bool,
+    preview: OptimizerPreviewResult,
     state: Option<GenomeState>,
     track: GenomeTrack,
     active_mutation_count: usize,
@@ -786,6 +852,187 @@ impl DgwMcpServer {
     }
 
     #[tool(
+        description = "Start a persistent Genome Optimizer preview for an explicit track head. Saturation compares live-predicted non-reference SNV alleles with a fixed ClinVar pathogenicity guard; Conservative only adds or removes alleles already present in the source genome. Poll with get_job; no track alleles change until apply_genome_optimizer_preview."
+    )]
+    async fn start_genome_optimizer_preview(
+        &self,
+        Parameters(request): Parameters<StartGenomeOptimizerPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(error) = validate_genome_optimizer_request(&request) {
+            return Ok(tool_error(error));
+        }
+        let path = match self.resolve_project_path(request.project_path.clone()) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let display_path = path.display().to_string();
+        let worker_path = path.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let project = Project::open(&path).map_err(|error| error.to_string())?;
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            if track.read_only {
+                return Err(String::from(
+                    "the source genome track is read-only; duplicate it before optimizing",
+                ));
+            }
+            if track.head_state_id != request.expected_head_state_id {
+                return Err("the selected track head changed; inspect the track and retry".into());
+            }
+            let optimizer = optimizer_request_from_mcp(&request);
+            let selection =
+                mutation_selection_from_request(&project, &request.track_id, request.selection)?;
+            let focus = optimizer_focus(&project, &selection)?;
+            let max_positions = request
+                .max_positions
+                .unwrap_or(MAX_SATURATION_POSITIONS as u32);
+            let worker_threads = request
+                .worker_threads
+                .unwrap_or_else(default_worker_threads);
+            let now = chrono::Utc::now();
+            let job = BackgroundJob {
+                id: Uuid::new_v4().to_string(),
+                operation: "genomeOptimizer".into(),
+                device_id: "org.dgw.builtin.genome-optimizer".into(),
+                track_id: request.track_id,
+                status: BackgroundJobStatus::Queued,
+                progress: 0,
+                stage: "queued".into(),
+                message: "Waiting for the MCP background compute slot".into(),
+                worker_threads,
+                request: json!({
+                    "optimizer": optimizer,
+                    "selection": selection,
+                    "selectionLimit": max_positions,
+                    "focus": focus,
+                    "sourceStateId": request.expected_head_state_id,
+                    "bypassedEditIds": track.bypassed_edit_ids,
+                    "host": "mcp"
+                }),
+                result: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            };
+            project
+                .save_background_job(&job)
+                .map_err(|error| error.to_string())?;
+            Ok(job)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let job = match outcome {
+            Ok(job) => job,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let job_id = job.id.clone();
+        let job_lock = Arc::clone(&self.job_lock);
+        let evaluation = Arc::clone(&self.evaluation);
+        let compute_pool = Arc::clone(&self.compute_pool);
+        tokio::task::spawn_blocking(move || {
+            let _guard = job_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = execute_optimizer_job(&worker_path, &job_id, &evaluation, &compute_pool);
+        });
+        structured(StartedBackgroundJobResult {
+            project_path: display_path,
+            job,
+        })
+    }
+
+    #[tool(
+        description = "Apply a completed Genome Optimizer preview as one compact reversible mutation layer. A no-op preview returns applied=false. Stale, already-applied, or cross-track previews are rejected."
+    )]
+    async fn apply_genome_optimizer_preview(
+        &self,
+        Parameters(request): Parameters<ApplyGenomeOptimizerPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty()
+            || request.expected_head_state_id.trim().is_empty()
+            || request.job_id.trim().is_empty()
+        {
+            return Ok(tool_error(
+                "track_id, expected_head_state_id, and job_id must not be empty",
+            ));
+        }
+        self.run_project(request.project_path, move |project, project_path| {
+            let job = project
+                .background_job(&request.job_id)
+                .map_err(|error| error.to_string())?;
+            if job.operation != "genomeOptimizer" {
+                return Err("job is not a Genome Optimizer preview".into());
+            }
+            if job.track_id != request.track_id {
+                return Err("preview job belongs to a different track".into());
+            }
+            let source_state_id = job
+                .request
+                .get("sourceStateId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "preview job has no source state".to_owned())?;
+            if source_state_id != request.expected_head_state_id {
+                return Err("expected_head_state_id does not match the preview job".into());
+            }
+            if job.status != BackgroundJobStatus::Completed {
+                return Err(format!(
+                    "preview job is {:?}; wait for completion before applying it",
+                    job.status
+                ));
+            }
+            let current_track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            let captured_bypasses: Vec<String> = serde_json::from_value(
+                job.request
+                    .get("bypassedEditIds")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            )
+            .map_err(|error| error.to_string())?;
+            if current_track.head_state_id != request.expected_head_state_id
+                || current_track.bypassed_edit_ids != captured_bypasses
+            {
+                return Err(
+                    "the target track changed after the optimizer preview; run it again".into(),
+                );
+            }
+            let preview: OptimizerPreviewResult = serde_json::from_value(
+                job.result
+                    .clone()
+                    .ok_or_else(|| "completed preview job has no result".to_owned())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let state = match preview.compound_layer_id.as_deref() {
+                Some(layer_id) => Some(
+                    project
+                        .apply_compound_mutation_layer(&request.track_id, layer_id)
+                        .map_err(|error| error.to_string())?,
+                ),
+                None => None,
+            };
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            let active_mutation_count = project
+                .active_track_mutations(&request.track_id)
+                .map_err(|error| error.to_string())?
+                .len();
+            Ok(AppliedGenomeOptimizerResult {
+                project_path,
+                job_id: request.job_id,
+                applied: state.is_some(),
+                preview,
+                state,
+                track,
+                active_mutation_count,
+            })
+        })
+        .await
+    }
+
+    #[tool(
         description = "Start persistent Track Profiler analysis for an explicit track head. The job evaluates active mutations with selected exact-allele Evidence devices on a bounded local Rayon pool. Omit device_ids to use all four supported Evidence devices and poll progress with get_job."
     )]
     async fn start_track_profiler(
@@ -1037,7 +1284,7 @@ impl ServerHandler for DgwMcpServer {
                 ),
             },
             instructions: Some(
-                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator uses start_mutation_generator_preview, get_job until completed, then apply_mutation_generator_preview. Analyze the resulting head with start_track_profiler and poll get_job for the Track Monitor result."
+                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator and Genome Optimizer each use a background preview, get_job until completed, and an explicit apply tool. Analyze an applied head with start_track_profiler and poll get_job for the Track Monitor result."
                     .into(),
             ),
             ..Default::default()
@@ -1219,6 +1466,118 @@ fn validate_mutation_generator_request(
         ));
     }
     Ok(())
+}
+
+fn validate_genome_optimizer_request(
+    request: &StartGenomeOptimizerPreviewRequest,
+) -> Result<(), String> {
+    if request.track_id.trim().is_empty() || request.expected_head_state_id.trim().is_empty() {
+        return Err("track_id and expected_head_state_id must not be empty".into());
+    }
+    if request.max_changes == 0 || request.max_changes > MAX_OPTIMIZER_EDITS {
+        return Err(format!(
+            "max_changes must be between 1 and {MAX_OPTIMIZER_EDITS}"
+        ));
+    }
+    if request
+        .max_positions
+        .is_some_and(|value| value == 0 || value as usize > MAX_SATURATION_POSITIONS)
+    {
+        return Err(format!(
+            "max_positions must be between 1 and {MAX_SATURATION_POSITIONS}"
+        ));
+    }
+    if request
+        .worker_threads
+        .is_some_and(|threads| threads == 0 || threads > 256)
+    {
+        return Err("worker_threads must be between 1 and 256".into());
+    }
+    if let Some(weight) = request.impact_weight {
+        if !weight.is_finite() || !(0.0..=1_000.0).contains(&weight) {
+            return Err("impact_weight must be finite and between 0 and 1000".into());
+        }
+        if matches!(request.mode, GenomeOptimizerMode::Saturation) && weight == 0.0 {
+            return Err("Saturation requires a positive impact_weight".into());
+        }
+    }
+    Ok(())
+}
+
+fn optimizer_request_from_mcp(request: &StartGenomeOptimizerPreviewRequest) -> OptimizerRequest {
+    let mode = match request.mode {
+        GenomeOptimizerMode::Saturation => OptimizerMode::Saturation,
+        GenomeOptimizerMode::Conservative => OptimizerMode::Conservative,
+    };
+    let direction = match request.direction {
+        GenomeOptimizerDirection::Minimize => OptimizerDirection::Minimize,
+        GenomeOptimizerDirection::Maximize => OptimizerDirection::Maximize,
+    };
+    let saturation = mode == OptimizerMode::Saturation;
+    OptimizerRequest {
+        mode,
+        objective: if saturation {
+            OptimizerObjective::PredictedImpactBurden
+        } else {
+            OptimizerObjective::AlternateAlleleBurden
+        },
+        direction,
+        max_edits: request.max_changes,
+        weights: OptimizerWeights {
+            impact: if saturation {
+                request.impact_weight.unwrap_or(1.0)
+            } else {
+                0.0
+            },
+            clinvar: 0.0,
+            source_evidence: 0.0,
+        },
+        selected_variants: Vec::new(),
+        evidence_device_ids: if saturation {
+            vec![
+                CONSEQUENCE_DEVICE_ID.into(),
+                "org.dgw.builtin.clinvar".into(),
+            ]
+        } else if direction == OptimizerDirection::Maximize {
+            vec!["org.dgw.builtin.clinvar".into()]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn optimizer_focus(
+    project: &Project,
+    selection: &VariantSelection,
+) -> Result<FocusContext, String> {
+    match selection {
+        VariantSelection::Explicit { variants, .. } => variants
+            .first()
+            .map(|variant| FocusContext {
+                contig: variant.contig.clone(),
+                start: variant.position,
+                end: variant.end(),
+            })
+            .ok_or_else(|| "explicit selection must contain at least one variant".into()),
+        VariantSelection::Interval {
+            contig, start, end, ..
+        } => Ok(FocusContext {
+            contig: contig.clone(),
+            start: *start,
+            end: *end,
+        }),
+        VariantSelection::AllTrack { .. } => project
+            .variant_contig_summaries()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .next()
+            .map(|contig| FocusContext {
+                contig: contig.contig,
+                start: contig.min_position,
+                end: contig.max_position,
+            })
+            .ok_or_else(|| "the project contains no selectable variants".into()),
+    }
 }
 
 fn substitution_pattern(pattern: MutationSubstitutionPattern) -> SubstitutionPattern {
@@ -1439,6 +1798,114 @@ fn execute_mutation_generator_job(project_path: &PathBuf, job_id: &str) -> Resul
     }
 }
 
+fn execute_optimizer_job(
+    project_path: &PathBuf,
+    job_id: &str,
+    evaluation: &EvaluationService,
+    compute_pool: &LocalComputePool,
+) -> Result<(), String> {
+    let project = Project::open(project_path).map_err(|error| error.to_string())?;
+    let mut job = project
+        .background_job(job_id)
+        .map_err(|error| error.to_string())?;
+    let request: OptimizerRequest = serde_json::from_value(
+        job.request
+            .get("optimizer")
+            .cloned()
+            .ok_or_else(|| "optimizer job has no request".to_owned())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let selection: VariantSelection = serde_json::from_value(
+        job.request
+            .get("selection")
+            .cloned()
+            .ok_or_else(|| "optimizer job has no variant selection".to_owned())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let focus: FocusContext = serde_json::from_value(
+        job.request
+            .get("focus")
+            .cloned()
+            .ok_or_else(|| "optimizer job has no focus context".to_owned())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let source_state_id = job
+        .request
+        .get("sourceStateId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "optimizer job has no source state".to_owned())?;
+    let bypassed_edit_ids: Vec<String> = serde_json::from_value(
+        job.request
+            .get("bypassedEditIds")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .map_err(|error| error.to_string())?;
+    let selection_limit = job
+        .request
+        .get("selectionLimit")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let track_id = job.track_id.clone();
+    let worker_threads = job.worker_threads;
+    let outcome = compute_pool.run(worker_threads, || {
+        dgw_core::prepare_optimizer_preview(
+            evaluation,
+            &project,
+            &track_id,
+            &source_state_id,
+            &bypassed_edit_ids,
+            &focus,
+            request,
+            Some(&selection),
+            selection_limit,
+            usize::from(worker_threads),
+            |progress, stage, message| {
+                update_persistent_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Running,
+                    progress,
+                    stage,
+                    message,
+                )
+            },
+            || false,
+        )
+    });
+    match outcome {
+        Ok(preview) => {
+            let message = preview.no_op_reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Optimizer prepared {} changes across {} positions",
+                    preview.generated_edits, preview.changed_positions
+                )
+            });
+            job.result = Some(serde_json::to_value(preview).map_err(|error| error.to_string())?);
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Completed,
+                100,
+                "completed",
+                message,
+            )
+        }
+        Err(error) => {
+            job.error = Some(error.clone());
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+    }
+}
+
 fn default_worker_threads() -> u16 {
     std::thread::available_parallelism()
         .map(|count| count.get().saturating_sub(1).max(1))
@@ -1641,6 +2108,7 @@ mod tests {
             names,
             vec![
                 "apply_allele_edit",
+                "apply_genome_optimizer_preview",
                 "apply_mutation_generator_preview",
                 "duplicate_track",
                 "get_job",
@@ -1654,6 +2122,7 @@ mod tests {
                 "rename_track",
                 "search_genes",
                 "select_track",
+                "start_genome_optimizer_preview",
                 "start_mutation_generator_preview",
                 "start_track_profiler",
             ]

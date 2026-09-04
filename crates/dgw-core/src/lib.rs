@@ -5,6 +5,7 @@ pub mod gene;
 pub mod model;
 pub mod morph;
 pub mod optimizer;
+pub mod optimizer_execution;
 pub mod profiling;
 pub mod project;
 pub mod randomizer;
@@ -18,6 +19,7 @@ pub use gene::*;
 pub use model::*;
 pub use morph::*;
 pub use optimizer::*;
+pub use optimizer_execution::*;
 pub use profiling::*;
 pub use project::{
     CreateProjectRequest, Project, MAX_SEQUENCE_FOCUS_BASES, MAX_TRACK_REGION_VARIANTS,

@@ -64,6 +64,22 @@ impl LocalComputePool {
         Self
     }
 
+    /// Run one coordinator inside a bounded Rayon pool. Code invoked by the
+    /// coordinator can use Rayon internally without escaping the job's worker
+    /// limit.
+    pub fn run<R, F>(&self, thread_limit: u16, operation: F) -> std::result::Result<R, String>
+    where
+        R: Send,
+        F: FnOnce() -> std::result::Result<R, String> + Send,
+    {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(usize::from(thread_limit.max(1)))
+            .thread_name(|index| format!("dgw-job-{index}"))
+            .build()
+            .map_err(|error| format!("could not create the local worker pool: {error}"))?;
+        pool.install(operation)
+    }
+
     pub fn parallel_map_with_progress<T, R, P, F, G>(
         &self,
         thread_limit: u16,

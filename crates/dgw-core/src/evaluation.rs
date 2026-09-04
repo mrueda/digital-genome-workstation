@@ -555,7 +555,10 @@ impl EvaluationService {
     }
 }
 
-fn evidence_from_batch_signal(source: &str, signal: &BatchEvidenceSignal) -> EvidenceResult {
+pub(crate) fn evidence_from_batch_signal(
+    source: &str,
+    signal: &BatchEvidenceSignal,
+) -> EvidenceResult {
     let mut record = BTreeMap::new();
     if let Some(impact) = &signal.impact_label {
         record.insert("impact".into(), impact.clone());
@@ -571,7 +574,7 @@ fn evidence_from_batch_signal(source: &str, signal: &BatchEvidenceSignal) -> Evi
     }
 }
 
-fn evidence_status_label(status: &EvidenceStatus) -> &'static str {
+pub(crate) fn evidence_status_label(status: &EvidenceStatus) -> &'static str {
     match status {
         EvidenceStatus::Found => "found",
         EvidenceStatus::NoExactMatch => "noExactMatch",

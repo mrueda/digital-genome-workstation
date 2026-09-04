@@ -1,17 +1,16 @@
-use dgw_core::evaluation::{normalize_variant, BatchEvidenceSignal};
+use dgw_core::evaluation::normalize_variant;
 use dgw_core::{
     built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
     plan_randomizer, plan_track_morph, validate_resource_bundle, BackgroundJob,
-    BackgroundJobStatus, CompoundMutationChange, CreateProjectRequest, DeviceManifest,
-    DeviceRunRecord, DeviceRunStatus, EditKind, EditOperation, EffectiveVariant, EvaluationResult,
-    EvaluationService, EvidenceResult, EvidenceStatus, FocusContext, FocusFastaExport, FocusView,
-    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, LocalComputePool,
-    OptimizerAlleleEvidenceInput, OptimizerDirection, OptimizerMode, OptimizerObjective,
-    OptimizerPlan, OptimizerRequest, ProcessProgress, Project, ProjectSnapshot, RandomizerPlan,
-    RandomizerPreviewResult, RandomizerRequest, ResourceBundle, SaturationAlleleInput,
-    SelectionResolution, TrackMorphRequest, TransportTargetRequest, TransportTargetResult,
-    VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage, VariantSelection,
-    VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
+    BackgroundJobStatus, CreateProjectRequest, DeviceManifest, DeviceRunRecord, DeviceRunStatus,
+    EditKind, EditOperation, EffectiveVariant, EvaluationResult, EvaluationService, EvidenceResult,
+    EvidenceStatus, FocusContext, FocusFastaExport, FocusView, GeneSearchHit, GenomeState,
+    GenomeTrack, Haplotype, LocalComputePool, OptimizerAlleleEvidenceInput, OptimizerDirection,
+    OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest, ProcessProgress, Project,
+    ProjectSnapshot, RandomizerPlan, RandomizerPreviewResult, RandomizerRequest, ResourceBundle,
+    SaturationAlleleInput, SelectionResolution, TrackMorphRequest, TransportTargetRequest,
+    TransportTargetResult, VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage,
+    VariantSelection, VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -215,36 +214,6 @@ struct OptimizerRunResult {
     snapshot: ProjectSnapshot,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OptimizerBackgroundResult {
-    mode: OptimizerMode,
-    direction: OptimizerDirection,
-    considered_positions: u32,
-    evaluated_candidates: u32,
-    excluded_positions: u32,
-    improving_positions: u32,
-    unchanged_or_tied_positions: u32,
-    deferred_by_change_limit: u32,
-    changed_positions: u32,
-    generated_edits: u32,
-    score_before: f64,
-    score_after: f64,
-    score_description: String,
-    limitation: String,
-    no_op_reason: Option<String>,
-    candidate_comparisons_retained: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    compound_layer_id: Option<String>,
-}
-
-struct BulkOptimizerGroup {
-    source_variant: dgw_core::VariantKey,
-    changes: Vec<CompoundMutationChange>,
-    score_delta: f64,
-    improvement: f64,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RandomizerRunResult {
@@ -310,120 +279,6 @@ fn resolve_randomizer_request(
         .effective_variants_for_track_at_loci(track_id, &request.selected_variants)
         .map_err(error_text)?;
     Ok((request, current))
-}
-
-fn resolve_optimizer_request(
-    project: &Project,
-    track_id: &str,
-    mut request: OptimizerRequest,
-    selection: Option<VariantSelection>,
-    selection_limit: Option<u32>,
-) -> Result<OptimizerRequest, String> {
-    if let Some(selection) = selection {
-        let limit = selection_limit
-            .unwrap_or(dgw_core::MAX_SATURATION_POSITIONS as u32)
-            .min(dgw_core::MAX_SATURATION_POSITIONS as u32)
-            .max(1);
-        let resolution = project
-            .resolve_selection(&selection, limit)
-            .map_err(error_text)?;
-        if resolution.track_id != track_id {
-            return Err("Genome Optimizer selection belongs to a different track".into());
-        }
-        if resolution.truncated {
-            return Err(format!(
-                "{} alleles are selected; Genome Optimizer accepts at most {} positions for this run",
-                resolution.total, limit
-            ));
-        }
-        request.selected_variants = resolution.variants;
-    }
-    if request.selected_variants.is_empty() {
-        return Err("Select at least one active allele before running Genome Optimizer".into());
-    }
-    if request.selected_variants.len() > dgw_core::MAX_SATURATION_POSITIONS {
-        return Err(format!(
-            "Genome Optimizer accepts at most {} positions per run",
-            dgw_core::MAX_SATURATION_POSITIONS
-        ));
-    }
-    if request.max_edits == 0 || request.max_edits > dgw_core::MAX_OPTIMIZER_EDITS {
-        return Err(format!(
-            "Genome Optimizer changes must be between 1 and {} positions",
-            dgw_core::MAX_OPTIMIZER_EDITS
-        ));
-    }
-    Ok(request)
-}
-
-fn evidence_from_batch_signal(source: &str, signal: &BatchEvidenceSignal) -> EvidenceResult {
-    let mut record = BTreeMap::new();
-    if let Some(impact) = &signal.impact_label {
-        record.insert("impact".into(), impact.clone());
-    }
-    if let Some(classification) = &signal.clinvar_classification {
-        record.insert("CLNSIG".into(), classification.clone());
-    }
-    EvidenceResult {
-        source: source.into(),
-        status: signal.status.clone(),
-        records: (!record.is_empty()).then_some(record).into_iter().collect(),
-        message: None,
-    }
-}
-
-fn optimizer_candidate_variants(selected: &[dgw_core::VariantKey]) -> Vec<dgw_core::VariantKey> {
-    let mut candidates = BTreeMap::new();
-    for source in selected {
-        if source.reference.len() != 1
-            || source.alternate.len() != 1
-            || !matches!(
-                source.reference.as_bytes()[0].to_ascii_uppercase(),
-                b'A' | b'C' | b'G' | b'T'
-            )
-        {
-            continue;
-        }
-        let reference = source.reference.as_bytes()[0].to_ascii_uppercase();
-        for alternate in [b'A', b'C', b'G', b'T']
-            .into_iter()
-            .filter(|alternate| *alternate != reference)
-        {
-            let candidate = dgw_core::VariantKey {
-                assembly: source.assembly.clone(),
-                contig: source.contig.clone(),
-                position: source.position,
-                reference: char::from(reference).to_string(),
-                alternate: char::from(alternate).to_string(),
-            };
-            candidates
-                .entry(candidate.stable_key())
-                .or_insert(candidate);
-        }
-    }
-    candidates.into_values().collect()
-}
-
-fn optimizer_groups_from_plan(plan: &OptimizerPlan) -> Vec<BulkOptimizerGroup> {
-    let mut grouped: BTreeMap<String, BulkOptimizerGroup> = BTreeMap::new();
-    for proposal in &plan.proposals {
-        let key = proposal.source_variant.stable_key();
-        let group = grouped.entry(key).or_insert_with(|| BulkOptimizerGroup {
-            source_variant: proposal.source_variant.clone(),
-            changes: Vec::new(),
-            score_delta: 0.0,
-            improvement: 0.0,
-        });
-        group.changes.push(CompoundMutationChange {
-            haplotype: proposal.haplotype,
-            edit: proposal.edit.clone(),
-        });
-        group.score_delta += proposal.score_delta;
-    }
-    for group in grouped.values_mut() {
-        group.improvement = group.score_delta.abs();
-    }
-    grouped.into_values().collect()
 }
 
 fn update_job(
@@ -1220,16 +1075,6 @@ fn evaluate_saturation_candidates(
         .map_err(error_text)
 }
 
-fn evidence_status_label(status: &EvidenceStatus) -> &'static str {
-    match status {
-        EvidenceStatus::Found => "found",
-        EvidenceStatus::NoExactMatch => "noExactMatch",
-        EvidenceStatus::NotComputed => "notComputed",
-        EvidenceStatus::ResourceUnavailable => "resourceUnavailable",
-        EvidenceStatus::Error => "error",
-    }
-}
-
 #[tauri::command]
 async fn preview_randomizer(
     project_path: PathBuf,
@@ -1411,13 +1256,14 @@ fn start_optimizer_job(
     selection_limit: Option<u32>,
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
-    let _ = worker_threads;
     let project = Project::open(&project_path).map_err(error_text)?;
     let track = project.track(&track_id).map_err(error_text)?;
     if track.read_only {
         return Err("Duplicate the read-only source track before running Genome Optimizer".into());
     }
     let source_state_id = track.head_state_id.clone();
+    let bypassed_edit_ids = track.bypassed_edit_ids.clone();
+    let worker_threads = worker_threads.unwrap_or(1).clamp(1, 256);
     let now = chrono::Utc::now();
     let mut job = BackgroundJob {
         id: Uuid::new_v4().to_string(),
@@ -1428,12 +1274,13 @@ fn start_optimizer_job(
         progress: 0,
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
-        worker_threads: 1,
+        worker_threads,
         request: serde_json::json!({
             "optimizer": &request,
             "selection": &selection,
             "selectionLimit": selection_limit,
             "sourceStateId": &source_state_id,
+            "bypassedEditIds": &bypassed_edit_ids,
         }),
         result: None,
         error: None,
@@ -1446,6 +1293,7 @@ fn start_optimizer_job(
     let job_lock = Arc::clone(&state.job_lock);
     let cancelled_jobs = Arc::clone(&state.cancelled_jobs);
     let evaluation = Arc::clone(&state.evaluation);
+    let compute_pool = Arc::clone(&state.compute_pool);
     tauri::async_runtime::spawn_blocking(move || {
         let lock = match job_lock.lock() {
             Ok(lock) => lock,
@@ -1466,459 +1314,31 @@ fn start_optimizer_job(
         let _lock = lock;
         let job_id = job.id.clone();
         let cancelled = || job_was_cancelled(&cancelled_jobs, &job_id);
-        let outcome = (|| -> Result<OptimizerBackgroundResult, String> {
-            if cancelled() {
-                return Err("__cancelled__".into());
-            }
-            update_job(
-                &project,
-                &mut job,
-                BackgroundJobStatus::Running,
-                3,
-                "selection",
-                "Resolving the selected genome positions",
-            )?;
-            let request = resolve_optimizer_request(
+        let outcome = compute_pool.run(worker_threads, || {
+            dgw_core::prepare_optimizer_preview(
+                &evaluation,
                 &project,
                 &track_id,
-                request,
-                selection,
+                &source_state_id,
+                &bypassed_edit_ids,
+                &focus,
+                request.clone(),
+                selection.as_ref(),
                 selection_limit,
-            )?;
-            let has_consequence = request
-                .evidence_device_ids
-                .iter()
-                .any(|device_id| device_id == CONSEQUENCE_DEVICE_ID);
-            let has_clinvar = request
-                .evidence_device_ids
-                .iter()
-                .any(|device_id| device_id == "org.dgw.builtin.clinvar");
-            if request.mode == OptimizerMode::Saturation && (!has_consequence || !has_clinvar) {
-                return Err(
-                    "Saturation requires applied, active Variant Consequences and ClinVar devices"
-                        .into(),
-                );
-            }
-            if request.mode == OptimizerMode::Conservative
-                && request.objective == OptimizerObjective::PredictedImpactBurden
-                && request.weights.impact > 0.0
-                && !has_consequence
-            {
-                return Err(
-                    "Weighted annotation burden requires applied, active Variant Consequences"
-                        .into(),
-                );
-            }
-            if request.mode == OptimizerMode::Conservative
-                && request.direction == OptimizerDirection::Maximize
-                && !has_clinvar
-            {
-                return Err(
-                    "Conservative Maximize requires an applied, active ClinVar guard".into(),
-                );
-            }
-            let considered_positions = request.selected_variants.len() as u32;
-            let mut groups = Vec::new();
-            let mut score_before = 0.0;
-            let mut evaluated_candidates = 0_u32;
-            let mut excluded_positions = 0_u32;
-            let mut score_description = match request.mode {
-                OptimizerMode::Saturation => "Comparable normalized transcript-consequence impact per allele copy across all non-reference SNV bases at the selected positions.".into(),
-                OptimizerMode::Conservative => "Number of alternate allele copies in the selected scope; this measures distance from the reference, not biological burden.".into(),
-            };
-            let mut limitation = dgw_core::ADDITIVE_SCORE_LIMITATION.to_owned();
-
-            match request.mode {
-                OptimizerMode::Saturation => {
-                    const POSITION_CHUNK_SIZE: usize = 100_000;
-                    let chunk_count = request
-                        .selected_variants
-                        .len()
-                        .div_ceil(POSITION_CHUNK_SIZE)
-                        .max(1);
-                    for (chunk_index, selected_chunk) in request
-                        .selected_variants
-                        .chunks(POSITION_CHUNK_SIZE)
-                        .enumerate()
-                    {
-                        if cancelled() {
-                            return Err("__cancelled__".into());
-                        }
-                        let current = project
-                            .effective_variants_for_track_at_loci(&track_id, selected_chunk)
-                            .map_err(error_text)?;
-                        let candidates = optimizer_candidate_variants(selected_chunk);
-                        evaluated_candidates = evaluated_candidates
-                            .saturating_add(candidates.len().min(u32::MAX as usize) as u32);
-                        let chunk_base = 8.0 + (chunk_index as f64 / chunk_count as f64) * 74.0;
-                        let chunk_span = 74.0 / chunk_count as f64;
-                        update_job(
-                            &project,
-                            &mut job,
-                            BackgroundJobStatus::Running,
-                            chunk_base.round() as u8,
-                            "consequences",
-                            format!(
-                                "Predicting consequence batch {} of {} · {} alleles",
-                                chunk_index + 1,
-                                chunk_count,
-                                candidates.len()
-                            ),
-                        )?;
-                        let consequence = evaluation
-                            .evaluate_device_signals(
-                                &project,
-                                &candidates,
-                                CONSEQUENCE_DEVICE_ID,
-                                |processed, total| {
-                                    let fraction = if total == 0 {
-                                        1.0
-                                    } else {
-                                        processed as f64 / total as f64
-                                    };
-                                    let progress = chunk_base + chunk_span * 0.58 * fraction;
-                                    let _ = update_job(
-                                        &project,
-                                        &mut job,
-                                        BackgroundJobStatus::Running,
-                                        progress.round() as u8,
-                                        "consequences",
-                                        format!(
-                                            "Variant Consequences batch {} of {} · {}/{} candidate alleles",
-                                            chunk_index + 1,
-                                            chunk_count,
-                                            processed,
-                                            total
-                                        ),
-                                    );
-                                    Ok(())
-                                },
-                            )
-                            .map_err(error_text)?;
-                        if cancelled() {
-                            return Err("__cancelled__".into());
-                        }
-                        let clinvar = evaluation
-                            .evaluate_device_signals(
-                                &project,
-                                &candidates,
-                                "org.dgw.builtin.clinvar",
-                                |processed, total| {
-                                    let fraction = if total == 0 {
-                                        1.0
-                                    } else {
-                                        processed as f64 / total as f64
-                                    };
-                                    let progress = chunk_base
-                                        + chunk_span * (0.58 + 0.30 * fraction);
-                                    let _ = update_job(
-                                        &project,
-                                        &mut job,
-                                        BackgroundJobStatus::Running,
-                                        progress.round() as u8,
-                                        "clinvar",
-                                        format!(
-                                            "ClinVar guard batch {} of {} · {}/{} candidate alleles",
-                                            chunk_index + 1,
-                                            chunk_count,
-                                            processed,
-                                            total
-                                        ),
-                                    );
-                                    Ok(())
-                                },
-                            )
-                            .map_err(error_text)?;
-                        let mut evaluated = Vec::with_capacity(candidates.len());
-                        for source in selected_chunk {
-                            for candidate in candidates.iter().filter(|candidate| {
-                                candidate.assembly == source.assembly
-                                    && candidate.contig == source.contig
-                                    && candidate.position == source.position
-                                    && candidate.reference.eq_ignore_ascii_case(&source.reference)
-                            }) {
-                                let consequence_signal =
-                                    consequence.get(candidate).ok_or_else(|| {
-                                        format!(
-                                            "Variant Consequences omitted candidate {}",
-                                            candidate.display()
-                                        )
-                                    })?;
-                                let clinvar_signal = clinvar.get(candidate).ok_or_else(|| {
-                                    format!("ClinVar omitted candidate {}", candidate.display())
-                                })?;
-                                let clinvar_evidence = evidence_from_batch_signal(
-                                    &project.manifest().resource_bundle.clinvar.release,
-                                    clinvar_signal,
-                                );
-                                evaluated.push(SaturationAlleleInput {
-                                    source_variant: source.clone(),
-                                    candidate_variant: candidate.clone(),
-                                    consequence: evidence_from_batch_signal(
-                                        "Variant Consequences",
-                                        consequence_signal,
-                                    ),
-                                    clinvar: clinvar_evidence.clone(),
-                                    evidence_statuses: BTreeMap::from([
-                                        (
-                                            CONSEQUENCE_DEVICE_ID.into(),
-                                            evidence_status_label(&consequence_signal.status)
-                                                .into(),
-                                        ),
-                                        (
-                                            "org.dgw.builtin.clinvar".into(),
-                                            evidence_status_label(&clinvar_signal.status).into(),
-                                        ),
-                                    ]),
-                                    exact_evidence_sources: (clinvar_signal.status
-                                        == EvidenceStatus::Found)
-                                        .then(|| clinvar_evidence.source.clone())
-                                        .into_iter()
-                                        .collect(),
-                                });
-                            }
-                        }
-                        let mut chunk_request = request.clone();
-                        chunk_request.selected_variants = selected_chunk.to_vec();
-                        chunk_request.max_edits = selected_chunk.len() as u32;
-                        let plan = dgw_core::plan_saturation_optimizer(
-                            &current,
-                            &focus,
-                            &chunk_request,
-                            &evaluated,
-                        )
-                        .map_err(error_text)?;
-                        score_before += plan.score_before;
-                        excluded_positions = excluded_positions
-                            .saturating_add(plan.exclusions.len().min(u32::MAX as usize) as u32);
-                        score_description = plan.score_description.clone();
-                        limitation = plan.limitation.clone();
-                        groups.extend(optimizer_groups_from_plan(&plan));
-                        update_job(
-                            &project,
-                            &mut job,
-                            BackgroundJobStatus::Running,
-                            (chunk_base + chunk_span).round() as u8,
-                            "reduce",
-                            format!(
-                                "Reduced candidate batch {} of {} to per-position winners",
-                                chunk_index + 1,
-                                chunk_count
-                            ),
-                        )?;
-                    }
-                }
-                OptimizerMode::Conservative => {
+                usize::from(worker_threads),
+                |progress, stage, message| {
                     update_job(
                         &project,
                         &mut job,
                         BackgroundJobStatus::Running,
-                        12,
-                        "alleles",
-                        "Reading current and source allele-copy states",
-                    )?;
-                    let current = project
-                        .effective_variants_for_track_at_loci(&track_id, &request.selected_variants)
-                        .map_err(error_text)?;
-                    let source = project
-                        .source_variants_at_loci(&request.selected_variants)
-                        .map_err(error_text)?;
-                    let mut keys = BTreeMap::new();
-                    for variant in current.iter().chain(source.iter()) {
-                        keys.entry(variant.key.stable_key())
-                            .or_insert_with(|| variant.key.clone());
-                    }
-                    let keys: Vec<_> = keys.into_values().collect();
-                    let need_consequence = request.objective
-                        == OptimizerObjective::PredictedImpactBurden
-                        && request.weights.impact > 0.0;
-                    let need_clinvar = request.direction == OptimizerDirection::Maximize;
-                    let consequence = if need_consequence {
-                        evaluation
-                            .evaluate_device_signals(
-                                &project,
-                                &keys,
-                                CONSEQUENCE_DEVICE_ID,
-                                |processed, total| {
-                                    let progress = 18
-                                        + if total == 0 {
-                                            24
-                                        } else {
-                                            (processed * 24 / total) as u8
-                                        };
-                                    let _ = update_job(
-                                        &project,
-                                        &mut job,
-                                        BackgroundJobStatus::Running,
-                                        progress,
-                                        "consequences",
-                                        format!(
-                                            "Variant Consequences · {processed}/{total} alleles"
-                                        ),
-                                    );
-                                    Ok(())
-                                },
-                            )
-                            .map_err(error_text)?
-                    } else {
-                        BTreeMap::new()
-                    };
-                    if cancelled() {
-                        return Err("__cancelled__".into());
-                    }
-                    let source_keys: Vec<_> = source.iter().map(|item| item.key.clone()).collect();
-                    let clinvar = if need_clinvar {
-                        evaluation
-                            .evaluate_device_signals(
-                                &project,
-                                &source_keys,
-                                "org.dgw.builtin.clinvar",
-                                |processed, total| {
-                                    let progress = 45
-                                        + if total == 0 {
-                                            25
-                                        } else {
-                                            (processed * 25 / total) as u8
-                                        };
-                                    let _ = update_job(
-                                        &project,
-                                        &mut job,
-                                        BackgroundJobStatus::Running,
-                                        progress,
-                                        "clinvar",
-                                        format!("ClinVar guard · {processed}/{total} alleles"),
-                                    );
-                                    Ok(())
-                                },
-                            )
-                            .map_err(error_text)?
-                    } else {
-                        BTreeMap::new()
-                    };
-                    evaluated_candidates = keys.len().min(u32::MAX as usize) as u32;
-                    let evaluated: Vec<_> = keys
-                        .iter()
-                        .map(|key| OptimizerAlleleEvidenceInput {
-                            variant: key.clone(),
-                            consequence: consequence
-                                .get(key)
-                                .map(|signal| {
-                                    evidence_from_batch_signal("Variant Consequences", signal)
-                                })
-                                .unwrap_or_else(|| not_computed_evidence("Variant Consequences")),
-                            clinvar: clinvar
-                                .get(key)
-                                .map(|signal| {
-                                    evidence_from_batch_signal(
-                                        &project.manifest().resource_bundle.clinvar.release,
-                                        signal,
-                                    )
-                                })
-                                .unwrap_or_else(|| not_computed_evidence("ClinVar")),
-                        })
-                        .collect();
-                    update_job(
-                        &project,
-                        &mut job,
-                        BackgroundJobStatus::Running,
-                        76,
-                        "reduce",
-                        "Ranking conservative source-allele candidates",
-                    )?;
-                    let plan = plan_optimizer_with_evidence(
-                        &current, &source, &focus, &request, &evaluated,
+                        progress,
+                        stage,
+                        message,
                     )
-                    .map_err(error_text)?;
-                    score_before = plan.score_before;
-                    excluded_positions = plan.exclusions.len().min(u32::MAX as usize) as u32;
-                    score_description = plan.score_description.clone();
-                    limitation = plan.limitation.clone();
-                    groups.extend(optimizer_groups_from_plan(&plan));
-                }
-            }
-
-            if cancelled() {
-                return Err("__cancelled__".into());
-            }
-            groups.sort_by(|left, right| {
-                right
-                    .improvement
-                    .partial_cmp(&left.improvement)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| left.source_variant.cmp(&right.source_variant))
-            });
-            let improving_positions = groups.len().min(u32::MAX as usize) as u32;
-            let selected_groups: Vec<_> = groups
-                .into_iter()
-                .take(request.max_edits as usize)
-                .collect();
-            let changed_positions = selected_groups.len() as u32;
-            let unchanged_or_tied_positions = considered_positions
-                .saturating_sub(excluded_positions)
-                .saturating_sub(improving_positions);
-            let deferred_by_change_limit = improving_positions.saturating_sub(changed_positions);
-            let score_delta: f64 = selected_groups.iter().map(|group| group.score_delta).sum();
-            let changes: Vec<_> = selected_groups
-                .into_iter()
-                .flat_map(|group| group.changes)
-                .collect();
-            let generated_edits = changes.len().min(u32::MAX as usize) as u32;
-            let no_op_reason = changes.is_empty().then(|| {
-                "No selected position had an eligible allele that improved the requested objective."
-                    .to_owned()
-            });
-            let compound_layer_id = if changes.is_empty() {
-                None
-            } else {
-                update_job(
-                    &project,
-                    &mut job,
-                    BackgroundJobStatus::Running,
-                    90,
-                    "staging",
-                    format!(
-                        "Storing {} changes across {} optimized positions",
-                        generated_edits, changed_positions
-                    ),
-                )?;
-                let note = format!(
-                    "Genome Optimizer · {:?} · {:?} {:?} · {} positions",
-                    request.mode, request.direction, request.objective, changed_positions
-                );
-                Some(
-                    project
-                        .stage_compound_mutation_layer(
-                            &track_id,
-                            &source_state_id,
-                            "org.dgw.builtin.genome-optimizer",
-                            changed_positions,
-                            &changes,
-                            Some(note),
-                        )
-                        .map_err(error_text)?
-                        .id,
-                )
-            };
-            Ok(OptimizerBackgroundResult {
-                mode: request.mode,
-                direction: request.direction,
-                considered_positions,
-                evaluated_candidates,
-                excluded_positions,
-                improving_positions,
-                unchanged_or_tied_positions,
-                deferred_by_change_limit,
-                changed_positions,
-                generated_edits,
-                score_before,
-                score_after: score_before + score_delta,
-                score_description,
-                limitation,
-                no_op_reason,
-                candidate_comparisons_retained: 0,
-                compound_layer_id,
-            })
-        })();
+                },
+                cancelled,
+            )
+        });
 
         match outcome {
             Ok(result) => {
@@ -1938,7 +1358,7 @@ fn start_optimizer_job(
                     message,
                 );
             }
-            Err(error) if error == "__cancelled__" => {
+            Err(error) if dgw_core::optimizer_error_is_cancelled(&error) => {
                 let _ = update_job(
                     &project,
                     &mut job,
@@ -2729,53 +2149,6 @@ pub fn run() {
 mod tests {
     use super::*;
     use dgw_core::{RandomizerProposal, SubstitutionPattern, VariantKey};
-
-    #[test]
-    fn bulk_optimizer_generates_one_three_alt_set_per_exact_locus() {
-        let first = VariantKey {
-            assembly: "GRCh37".into(),
-            contig: "1".into(),
-            position: 100,
-            reference: "A".into(),
-            alternate: "C".into(),
-        };
-        let second_alt = VariantKey {
-            alternate: "G".into(),
-            ..first.clone()
-        };
-        let candidates = optimizer_candidate_variants(&[first, second_alt]);
-        assert_eq!(candidates.len(), 3);
-        assert_eq!(
-            candidates
-                .iter()
-                .map(|candidate| candidate.alternate.as_str())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["C", "G", "T"])
-        );
-    }
-
-    #[test]
-    fn batch_signal_preserves_optimizer_impact_and_clinvar_guard_fields() {
-        let evidence = evidence_from_batch_signal(
-            "ClinVar test",
-            &BatchEvidenceSignal {
-                status: EvidenceStatus::Found,
-                exact_match_count: 1,
-                impact_signal: Some(1.0),
-                impact_label: Some("HIGH".into()),
-                clinvar_classification: Some("Likely_pathogenic".into()),
-                no_transcript_feature: false,
-            },
-        );
-        assert_eq!(
-            evidence.records[0].get("impact").map(String::as_str),
-            Some("HIGH")
-        );
-        assert_eq!(
-            evidence.records[0].get("CLNSIG").map(String::as_str),
-            Some("Likely_pathogenic")
-        );
-    }
 
     #[test]
     fn randomizer_preview_keeps_totals_but_bounds_change_details() {
