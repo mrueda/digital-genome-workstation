@@ -10,8 +10,10 @@ describe("user settings", () => {
   it("keeps valid preferences and repairs invalid fields", () => {
     expect(parseUserSettings(JSON.stringify({
       uiScale: 1.5,
+      colorTheme: "light",
       showVariantBrowser: false,
       showEvidenceInspector: true,
+      showContextHelp: false,
       showDeviceRack: false,
       showTrackMonitor: false,
       reduceMotion: true,
@@ -19,8 +21,10 @@ describe("user settings", () => {
       interactiveAlleleLimit: 800
     }))).toEqual({
       uiScale: 1.5,
+      colorTheme: "light",
       showVariantBrowser: false,
       showEvidenceInspector: true,
+      showContextHelp: false,
       showDeviceRack: false,
       showTrackMonitor: false,
       reduceMotion: true,
@@ -36,6 +40,10 @@ describe("user settings", () => {
       workerThreads: 256,
       interactiveAlleleLimit: 100
     });
+  });
+
+  it("repairs an invalid colour theme", () => {
+    expect(parseUserSettings(JSON.stringify({ colorTheme: "sepia" })).colorTheme).toBe("system");
   });
 
   it("migrates the former Mixer visibility preference", () => {

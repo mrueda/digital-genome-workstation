@@ -8,6 +8,10 @@ export function shortId(id?: string): string {
   return id ? id.slice(0, 8) : "—";
 }
 
+export function chromosomeLabel(contig: string): string {
+  return contig.toLowerCase().startsWith("chr") ? contig : `chr${contig}`;
+}
+
 export function sequenceChunks(sequence?: string, width = 10): string[] {
   if (!sequence) return [];
   return sequence.match(new RegExp(`.{1,${width}}`, "g")) ?? [];

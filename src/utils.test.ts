@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { filterSamples, projectSlug, sequenceChunks, sequenceDisplayParts, variantLabel } from "./utils";
+import { chromosomeLabel, filterSamples, projectSlug, sequenceChunks, sequenceDisplayParts, variantLabel } from "./utils";
 
 describe("workspace helpers", () => {
   it("formats stable genomic labels", () => {
     expect(
       variantLabel({ assembly: "b37", contig: "7", position: 140453136, reference: "A", alternate: "T" })
     ).toContain("A>T");
+  });
+
+  it("does not duplicate an existing chromosome prefix", () => {
+    expect(chromosomeLabel("7")).toBe("chr7");
+    expect(chromosomeLabel("chr7")).toBe("chr7");
   });
 
   it("chunks sequences for the focused base display", () => {

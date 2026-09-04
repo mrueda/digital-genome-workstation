@@ -4,9 +4,9 @@ DGW uses **device** as a general workstation concept, not only for tools that ed
 
 | Device kind | Built-in example | Structured output |
 | --- | --- | --- |
-| Editing | Mutation Generator, Genome Optimizer | Proposed normalized edit operations and planning details |
-| Analysis | SnpEff | Predicted transcript consequences for one exact allele |
-| Evidence | dbNSFP, ClinVar, COSMIC | Exact-match evidence records with explicit status |
+| Editing | Mutation Generator, Genome Morph, Genome Optimizer | Proposed normalized edit operations and planning details |
+| Evidence | Variant Consequences | Predicted transcript consequences for one exact allele |
+| Evidence | dbNSFP, ClinVar, COSMIC | Exact-match database records with explicit status |
 | Visualization | Variant Map | Read-only presentation of focused track state and available model results |
 
 Manual editing remains a host interaction rather than an external device. Its changes use the same immutable edit-operation model as proposals accepted from an editing device.
@@ -52,9 +52,9 @@ Editing responses contain proposals, never project commands or paths. Analysis a
 
 ## Device code and resource packs are different
 
-A **device package** supplies behavior: for example, invoking SnpEff, planning bounded allele edits, or interpreting an indexed evidence row.
+A **device package** supplies behavior: for example, invoking a consequence engine, planning bounded allele edits, or interpreting an indexed evidence row.
 
-A **resource pack** supplies compatible data and tool resources: reference assembly files, a SnpEff model, or versioned dbNSFP, ClinVar, and COSMIC snapshots. It includes identity, release, checksums, assembly/contig contract, paths or installation references, and license information. A resource pack is not executable device code.
+A **resource pack** supplies compatible data and tool resources: reference assembly files, an Ensembl GFF3 release, or versioned dbNSFP, ClinVar, and COSMIC snapshots. It includes identity, release, checksums, assembly/contig contract, paths or installation references, and license information. A resource pack is not executable device code.
 
 The current `ResourceBundle` is the first local resource-pack contract. It keeps code and large/licensed biological data outside `.dgw` projects while pinning a fingerprint in each project and evaluation cache entry.
 
@@ -64,19 +64,19 @@ Separating these concepts lets one device work with several compatible resource 
 
 The built-in implementations already establish much of the contract shape:
 
-- the Mutation Generator and Genome Optimizer are non-mutating core planners; the Tauri host validates and applies returned proposals through normal track operations;
-- SnpEff receives a structured exact-allele request through the evaluation service and returns parsed consequence fields;
+- the Mutation Generator, Genome Morph, and Genome Optimizer are non-mutating core planners; the Tauri host validates and applies returned proposals through normal track operations;
+- Variant Consequences batches structured exact-allele requests through `bcftools csq --local-csq` and returns parsed consequence fields;
 - dbNSFP, ClinVar, and COSMIC adapters return structured exact-match evidence states; and
 - Variant Map reads bounded focused-track marks and session Track Monitor results without changing the track or an objective; and
 - the resource bundle identifies and fingerprints their local resources.
 
-These are built into DGW and exposed through the same host catalog. The app validates versioned built-in and external manifest shapes, structured requests, structured responses, resource bindings, and editing proposals. There is not yet a community registry, install/update workflow, sandboxed external runner, or enabled third-party execution path. Device settings and full optimizer-run provenance also do not yet persist in the project schema. Background Mutation Generator previews are the first host job implementation: they persist a device-owned request/result envelope and progress without creating a duplicate bulk device.
+These are built into DGW and exposed through the same host catalog. The app validates versioned built-in and external manifest shapes, structured requests, structured responses, resource bindings, and editing proposals. There is not yet a community registry, install/update workflow, sandboxed external runner, or enabled third-party execution path. Device settings and formal optimizer-run provenance also do not yet persist as a dedicated project record. Background Mutation Generator, Genome Morph, and Genome Optimizer jobs persist device-owned request/result envelopes and progress without creating duplicate bulk devices.
 
-SnpEff, dbNSFP, ClinVar, and COSMIC can be applied as ordered rack cards on the selected track. Each optional resource-backed card can run independently for the selected allele. Selection automatically requests missing active-device results and shows stable cached results first; unapplied, bypassed, or unavailable devices are excluded from the current evidence view. **Track Profiler** is host orchestration over that same allele-level API. Ordinary blocks progressively fill the session meter; compound layers use a persistent aggregate background job with batched SnpEff and database adapters. The profiler is not yet a separately installable device or a joint-effect protocol. Mutation Generator and both Genome Optimizer modes target explicit selected VCF positions; Saturation requires active SnpEff and host-evaluates three non-REF candidates per canonical SNV. Both devices are available only to editable tracks and must be applied explicitly. Randomizer is currently the Mutation Generator's only mode; its request includes amount, seed, substitution pattern, and transition probability, and its plan reports transition/transversion counts plus explicit exclusions.
+Variant Consequences, dbNSFP, ClinVar, and COSMIC can be applied as ordered rack cards on the selected track. Each optional resource-backed card can run independently for the selected allele. Selection automatically requests missing active-device results and shows stable cached results first; unapplied, bypassed, or unavailable devices are excluded from the current evidence view. **Track Profiler** is host orchestration over that same allele-level API. Ordinary blocks and compound layers use the same persistent aggregate background job with batched consequence prediction and database adapters. A fingerprint of active mutations, devices, and resources permits safe reuse across unchanged duplicates; stale or missing selected-track profiles start automatically. The profiler is not yet a separately installable device or a joint-effect protocol. Mutation Generator and both Genome Optimizer modes target explicit selected VCF positions; Saturation requires active Variant Consequences and host-evaluates three non-REF candidates per canonical SNV. Both devices are available only to editable tracks and must be applied explicitly. Randomizer is currently the Mutation Generator's only mode; its request includes amount, seed, substitution pattern, and transition probability, and its plan reports transition/transversion counts plus explicit exclusions.
 
-The Device Browser groups available devices by function: **Edit**, **Evidence**, **Analyze**, and **Visualize**. Mutation Generator is Edit; SnpEff, dbNSFP, ClinVar, and COSMIC are Evidence; Genome Optimizer is Analyze; and Variant Map is Visualize. There is no separate Score group because the objective-driven operation is an analysis. A visualization reads bounded host state and existing device results but contributes no score and proposes no edits. The per-track Device Rack is different: it contains only applied device instances in order. Group membership is presentation metadata, not an implied biological pipeline, audio-style signal chain, or replacement for the lower-level protocol capability declared by a manifest.
+The Device Browser groups available devices by function: **Edit**, **Evidence**, **Analyze**, and **Visualize**. Mutation Generator and Genome Morph are Edit; Variant Consequences, dbNSFP, ClinVar, and COSMIC are Evidence; Genome Optimizer is Analyze; and Variant Map is Visualize. There is no separate Score group because the objective-driven operation is an analysis. A visualization reads bounded host state and existing device results but contributes no score and proposes no edits. The per-track Device Rack is different: it contains only applied device instances in order. Group membership is presentation metadata, not an implied biological pipeline, audio-style signal chain, or replacement for the lower-level protocol capability declared by a manifest.
 
-The file-level DGW Starter project template applies Mutation Generator, all four Evidence devices, Genome Optimizer, and Variant Map in functional order; the Empty project template applies none. Neither is a Device Browser action. Applied Edit and Analyze devices remain inert until their explicit Preview/Apply or Run action, while Variant Map is read-only. Duplicating a track copies its applied device IDs and session bypass state. Applied-chain and device-setting persistence still require a project-schema extension.
+The file-level DGW Starter project template applies Mutation Generator, Genome Morph, all four Evidence devices, Genome Optimizer, and Variant Map in functional order; the Empty project template applies none. Neither is a Device Browser action. Applied Edit and Analyze devices remain inert until their explicit Preview/Apply or Run action, while Variant Map is read-only. Duplicating a track copies its applied device IDs and session bypass state. Applied-chain and device-setting persistence still require a project-schema extension.
 
 Scoring has two independent control axes:
 

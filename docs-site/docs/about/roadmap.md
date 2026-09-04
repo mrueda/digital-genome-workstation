@@ -5,7 +5,7 @@
 - Strict-PASS b37 VCF import with automatic normalization of a private selected-sample copy, internal exact-ALT decomposition of multiallelic rows, optional INFO annotations, and phased or unphased diploid GT support.
 - Focused two-copy DNA reconstruction with explicit copy-unknown alleles.
 - Immutable SNV/short-indel edits, branches, bypass, and internal A/B pointers.
-- Per-allele SnpEff plus exact dbNSFP, ClinVar, and COSMIC evidence.
+- Per-allele Variant Consequences plus exact dbNSFP, ClinVar, and COSMIC evidence.
 - Normalized VCF render with full provenance.
 - Linux and macOS desktop development path.
 
@@ -27,21 +27,21 @@
 - Conservative **Distance from reference (ALT copies)** objective with no annotation or health interpretation.
 - Minimize restores eligible active exact-source alleles to reference.
 - Maximize only reintroduces exact original-source alleles absent from the current track; it is not disease maximization.
-- Live SnpEff candidate ranking and fixed ClinVar candidate screening for Saturation.
+- Live `bcftools csq` candidate ranking and fixed ClinVar candidate screening for Saturation.
 - Explicit objective inclusion versus user bypass: included bypassed devices contribute zero while excluded/new devices cannot silently enter a score.
 - Maximum-edits bound, deterministic ranking, and explicit candidate exclusions.
 - Proposals become normal visible, reversible edit blocks with individual evidence review.
-- Selected-position Saturation scan evaluates all three non-REF canonical-SNV bases with SnpEff, reports database evidence separately, and preserves copy placement.
+- Selected-position Saturation scan evaluates all three non-REF canonical-SNV bases with Variant Consequences, reports database evidence separately, and preserves copy placement.
 - The interface reports the additive-score limitation: no interactions, compound effects, penetrance, or whole-genome model.
 
 ## Engineering next
 
 - Persist device settings and device-to-edit ownership.
 - Add formal optimizer-run provenance: input identity, scoring contract/version, request, components, exclusions, output edit IDs, and uncertainty.
-- Scale Saturation beyond its initial 100-position safety bound: chunked SnpEff annotation through one persistent worker, fingerprinted allele-result caching, batched indexed-resource queries, streaming three-candidate reduction, cancellation, and progress reporting.
+- Benchmark and harden bulk Saturation near its experimental ceiling, add resumable resource-fingerprinted candidate caches, and retain a bounded downloadable audit artifact without transferring every comparison row into the live interface.
 - Include track identity, consolidation details, and device/run records in export provenance.
 - Publish versioned DGW Device API schemas for editing, analysis, and evidence devices.
-- Move built-in Genome Optimizer, SnpEff, dbNSFP, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
+- Move built-in Genome Optimizer, Variant Consequences, dbNSFP, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
 - Present built-in editing, analysis, and evidence devices through one generic rack lifecycle and UI.
 - Formalize resource-pack manifests separately from executable device manifests.
 - Define external-device isolation, permissions, cancellation, failure handling, and reproducibility before enabling third-party execution.
@@ -51,8 +51,17 @@
 - Pluggable evaluators and configurable evidence summaries.
 - Redistribution-safe test bundles and packaged desktop releases.
 
+## Implemented experimental prototype — Genome Morph
+
+- A separate Edit device compares effective genotype states between compatible tracks in one project.
+- `0%` preserves the selected source track; `100%` copies every differing editable VCF position toward the target; intermediate values use a stable genomic or seeded-random whole-position ordering.
+- Preview runs as a persistent background job and Apply creates one compact reversible mutation layer on the selected track.
+- Unphased alleles are compared without interpreting VCF genotype order as phase.
+- Intermediate states are explicitly synthetic editing scenarios rather than evolutionary, reproductive, viability, or health claims.
+
 ## Later research
 
+- Cross-genome morphing between samples from the same joint-called VCF, with explicit `0/0` versus `./.`, shared callability scope, same-assembly normalization, and multi-sample provenance.
 - Haplotype-aware compound transcript/protein consequences.
 - Interaction-aware objectives only where a scientifically validated model supports them.
 - GRCh38 resource bundles and carefully explicit assembly migration.

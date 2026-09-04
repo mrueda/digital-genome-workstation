@@ -8,6 +8,6 @@ DGW separates the testable biological engine from its desktop shell.
 | `dgw-desktop` | Narrow Tauri commands and lifecycle for long-lived evaluation workers |
 | React UI | Genome tracks, device racks, persistent edit blocks, focused interaction, evidence presentation, and native dialogs |
 | Device layer | Structured editing, analysis, and evidence contracts; built-in devices today, versioned external API later |
-| External stack | Java/SnpEff, bcftools, bgzip/tabix, hs37d5, dbNSFP, ClinVar, and COSMIC |
+| External stack | bcftools/HTSlib 1.24, Ensembl GFF3, bgzip/tabix, registered references, dbNSFP, ClinVar, and COSMIC |
 
-Start with [Architecture](architecture.md), then review the [Device API and Resource Packs](device-api.md), [Track, State, and Edit Model](state-model.md), and [Evaluation Engine](evaluation-engine.md).
+Start with [Architecture](architecture.md), then review the [Device API and Resource Packs](device-api.md), [Track, State, and Edit Model](state-model.md), [Evaluation Engine](evaluation-engine.md), and [Scoring and Evidence Methods](scoring-methods.md).

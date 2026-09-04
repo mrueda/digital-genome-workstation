@@ -21,10 +21,10 @@ DGW adds:
 - `DGW_SOURCE_KEY` — original normalized allele, when applicable; and
 - project, internal state, source, resource-bundle, and provenance identifiers in meta headers.
 
-DGW does not insert SnpEff, dbNSFP, ClinVar, or COSMIC results into the VCF. Those records are resource-versioned evidence, not properties of the genotype file.
+DGW does not insert Variant Consequences, dbNSFP, ClinVar, or COSMIC results into the VCF. Those records are resource-versioned evidence, not properties of the genotype file.
 
 A sibling `<output>.evidence.json.gz` contains a snapshot of the project's cached live exact-allele evidence at export time. It records device and resource identities, exact allele keys, status, evaluation time, and coverage. An entry need not be active in the exported track, and absence means “not cached,” not a negative result.
 
-The `.provenance.json` sidecar records the full edit lineage, effective merged bypass mask, project/resource manifest, render time, scientific limitation, and the evidence-sidecar path and SHA-256. Its own SHA-256 is embedded in the VCF header.
+A second sibling, `<output>.device-runs.json.gz`, contains the project's write-once record of completed, failed, and cancelled device invocations. It includes device/version, input state and fingerprint, selection, parameters, resource versions, aggregate result, generated edit/layer IDs, timestamps, and limitations. Clearing the Jobs list does not remove these records.
 
-The current export provenance does not identify a formal consolidation event or include the complete Genome Optimizer settings and plan. Formal device-run persistence remains later work; cached allele evidence is nevertheless exported separately from the clean VCF.
+The `.provenance.json` sidecar records the full edit lineage, effective merged bypass mask, project/resource manifest, render time, scientific limitation, and the paths and SHA-256 values of both compressed sidecars. Its own SHA-256 is embedded in the VCF header. Device-run records are project-wide and therefore can include runs not contributing to the exported track.

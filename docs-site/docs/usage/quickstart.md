@@ -24,27 +24,33 @@ cargo test -p dgw-core
 npm run tauri dev
 ```
 
-The onboarding screen begins with a development resource-bundle template. Its paths match the existing `/media/mrueda/2TBS` b37 stack; edit the JSON for another computer.
+Choose **GRCh37 (b37/hs37d5)** or **GRCh38 (hg38)** before selecting a VCF. The development profiles point to the existing `/media/mrueda/2TBS` resources; edit the JSON for another computer. Assembly cannot be inferred from a `chr` prefix and DGW does not perform liftover.
+
+![DGW project setup with the reference profile, resource bundle, VCF selector and example-project action visible](/img/dgw-project-setup.png)
+
+*Project setup keeps the VCF workflow and the prepared synthetic example together. The disabled workspace button becomes available after DGW has inspected an input and a project location is set.*
 
 ## Adjust the interface
 
-DGW starts at a readable 110% scale. Use **Settings** in the application menu to choose an interface scale from 90% to 150%. DGW applies native whole-webview zoom, so panels, cards, tracks, controls, spacing, and text scale together. At 140–150%, hide the Variants or Evidence panel from **View** if you want to return more horizontal room to the genome workspace. The same settings panel stores side-panel visibility and reduced-motion preferences. These user preferences do not become part of a `.dgw` project.
+DGW starts at a readable 110% scale. Use **Settings** in the application menu to choose an interface scale from 90% to 150% and select the System, Dark, or Light appearance. System follows the operating-system preference. DGW applies native whole-webview zoom, so panels, cards, tracks, controls, spacing, and text scale together. At 140–150%, hide the Variants or Evidence panel from **View** if you want to return more horizontal room to the genome workspace. The same settings panel stores side-panel visibility and reduced-motion preferences. These user preferences do not become part of a `.dgw` project.
 
 The track arrangement always remains visible. Selecting a track shows its devices in the lower pane; selecting an allele mark or mutation block replaces that lower pane with the allele editor. Choose **Show devices** to return to the selected track's device chain.
 
 ## 3. Try the biological demonstration
 
-Click **Open example**. DGW creates and enters a project from its bundled `dgw-cluster.synthetic.vcf` in one step, using the fictional `DGW_DEMO` sample and a new `.dgw` project location. It contains ten fictional variants across chromosomes 7 and 17. The initial chromosome 7 region has seven variants in a 55-base span, so the timeline shows several clickable allele lollipops at once; use the Source Variants navigator to jump across the explicit chromosome boundary to chromosome 17. Positions shown by DGW follow the VCF convention and are 1-based. The genotypes contain no patient data. During development, you can also browse to the fixture yourself.
+Choose **File → Open Example Project** and select the prepared GRCh37 or GRCh38 allele-editing example. The same assembly-specific action appears on the setup screen. DGW creates a fresh project containing `Source genome`, `BRAF · restore to REF`, and `BRAF · alternative ALT`. The two experimental tracks contain visible, reversible edits at the BRAF locus, so you can inspect and bypass a change immediately instead of building the demonstration first.
+
+The underlying fixture contains ten fictional variants across chromosomes 7 and 17 in the `DGW_DEMO` sample. The initial chromosome 7 region has seven variants in a 55-base span; use the Source Variants navigator to jump to the chromosome 17 group. Positions are 1-based. The fixtures contain no patient data and are independent assembly-specific files; DGW does not perform liftover.
 
 From an open project, **File → New from Template** creates and enters a separate project using the same imported source genome and selected sample. It does not copy experimental edits. From the setup screen, a template only chooses the initial Device Rack; you must then choose a VCF or open the example.
 
-DGW saves project changes immediately in the active `.dgw` package rather than using a separate Save command. Open **File** to see the complete package path and autosave status. The original input VCF is never modified.
+DGW autosaves project changes and the current workstation session in the active `.dgw` package. Open **File** to see the complete package path and save status. **Save Project** (Command/Ctrl+S) flushes pending interface state immediately; **Open Project** and **Open Recent** resume an existing package; **Save a Copy** creates a separate snapshot and leaves the original project open. The original input VCF is never modified.
 
-Click any lollipop to open that input-VCF allele in the lower editor. The BRAF V600E lollipop at `7:140453136 A→T` is the best exact-resource demonstration. The default **DGW Starter** template applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and the read-only Variant Map. Selecting the allele automatically runs the available, active Evidence devices; imported INFO annotations are ignored. **Refresh active Evidence devices** remains available. Mutation Generator and Genome Optimizer do nothing until explicitly previewed/applied or run. The other nearby alleles are synthetic visual-workflow examples and may have no exact database match.
+Click any lollipop to open that input-VCF allele in the lower editor. The BRAF V600E lollipop at `7:140453136 A→T` is the best exact-resource demonstration. The default **DGW Starter** template applies Mutation Generator, Variant Consequences, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and the read-only Variant Map. Selecting the allele automatically runs the available, active Evidence devices; imported INFO annotations are ignored. **Refresh active Evidence devices** remains available. Mutation Generator and Genome Optimizer do nothing until explicitly previewed/applied or run. The other nearby alleles are synthetic visual-workflow examples and may have no exact database match.
 
 The lower editor opens on **Allele Roll**. Its REF row is the forward-strand FASTA and its A/C/G/T lanes show the possible SNV bases at the selected VCF column. On an editable track, drag the filled active base block vertically onto another lane, or click the destination cell, and then apply the staged mutation in the panel to the right. A/B/U appears as a small chromosome-copy label inside the block. Dropping on REF stages restoration; the coordinate cannot move horizontally. Muted FASTA-only columns are context rather than editable calls. Use **Sequence** to see the reconstructed reference, chromosome copy A, and chromosome copy B strings.
 
-Duplicate the source genome track and name the duplicate `BRAF restore`. Click its BRAF allele mark to open the allele editor below the tracks. Choose **Use reference**, keep the chromosome copy unknown, and save the mutation. The restore remains visible as an edit block. Bypass it to compare the experimental track with its unchanged source, then enable it again.
+Select the prepared `BRAF · restore to REF` track and click its mutation block to open the allele editor. Bypass the block to compare the experimental track with its unchanged source, then enable it again. To repeat the operation yourself, duplicate `Source genome`, click its BRAF allele mark, choose **Use reference**, keep the chromosome copy unknown, and save the mutation.
 
 You can perform the same bounded change through the experimental Genome Optimizer:
 

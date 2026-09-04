@@ -27,6 +27,7 @@
     "targets": "all",
     "resources": {
       "../fixtures/dgw-cluster.synthetic.vcf": "fixtures/dgw-cluster.synthetic.vcf",
+      "../fixtures/dgw-cluster.grch38.synthetic.vcf": "fixtures/dgw-cluster.grch38.synthetic.vcf",
       "../fixtures/braf-v600e.synthetic.vcf": "fixtures/braf-v600e.synthetic.vcf"
     },
     "shortDescription": "Edit genome variants without changing the source VCF",

@@ -19,6 +19,37 @@ pub struct IndexedResource {
     pub index_path: PathBuf,
     pub release: String,
     pub license_label: String,
+    /// Contig convention used by this indexed file. Older v1 bundles omitted
+    /// this field and therefore inherit the project/reference convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contig_style: Option<String>,
+    #[serde(default)]
+    pub fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneAnnotationResource {
+    pub path: PathBuf,
+    pub index_path: PathBuf,
+    pub assembly: String,
+    pub contig_style: String,
+    pub release: String,
+    pub source_url: String,
+    pub license_label: String,
+    #[serde(default)]
+    pub fingerprint: Option<FileFingerprint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsequenceAnnotationResource {
+    pub path: PathBuf,
+    pub assembly: String,
+    pub contig_style: String,
+    pub release: String,
+    pub source_url: String,
+    pub license_label: String,
     #[serde(default)]
     pub fingerprint: Option<FileFingerprint>,
 }
@@ -33,17 +64,18 @@ pub struct ResourceBundle {
     pub reference_path: PathBuf,
     pub reference_fai_path: PathBuf,
     pub reference_gzi_path: Option<PathBuf>,
-    pub java_path: PathBuf,
-    pub snpeff_jar_path: PathBuf,
-    pub snpeff_config_path: Option<PathBuf>,
-    pub snpeff_genome: String,
-    pub snpeff_version: String,
     pub bcftools_path: PathBuf,
+    #[serde(default)]
+    pub bcftools_version: String,
     pub bgzip_path: PathBuf,
     pub tabix_path: PathBuf,
     pub dbnsfp: IndexedResource,
     pub clinvar: IndexedResource,
     pub cosmic: IndexedResource,
+    #[serde(default)]
+    pub gene_annotation: Option<GeneAnnotationResource>,
+    #[serde(default)]
+    pub consequence_annotation: Option<ConsequenceAnnotationResource>,
     #[serde(default)]
     pub bundle_fingerprint: Option<String>,
 }
@@ -115,6 +147,10 @@ pub enum EditKind {
         key: VariantKey,
         #[serde(rename = "sourceKey", alias = "source_key")]
         source_key: Option<VariantKey>,
+        /// Retains the original `/` genotype slot when an unphased allele is
+        /// introduced from REF rather than replacing an active ALT.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unphased_slot: Option<u8>,
     },
     RestoreReference {
         #[serde(rename = "sourceKey", alias = "source_key")]
@@ -203,6 +239,8 @@ pub struct ProjectManifest {
     pub resource_bundle_fingerprint: String,
     pub root_state_id: String,
     pub selected_vcf_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_from_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -212,6 +250,7 @@ pub struct VcfInspection {
     pub file_format: Option<String>,
     pub samples: Vec<String>,
     pub contigs: Vec<String>,
+    pub input_contig_style: String,
     pub has_ann: bool,
     pub record_count: u64,
     pub pass_record_count: u64,
@@ -272,7 +311,8 @@ pub struct EvidenceResult {
 pub struct EvaluationResult {
     pub variant: VariantKey,
     pub cache_key: String,
-    pub snpeff: EvidenceResult,
+    #[serde(alias = "snpeff")]
+    pub consequence: EvidenceResult,
     pub dbnsfp: EvidenceResult,
     pub clinvar: EvidenceResult,
     pub cosmic: EvidenceResult,
@@ -415,6 +455,45 @@ pub struct BackgroundJob {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Terminal status of an immutable scientific device-run record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceRunStatus {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Write-once provenance for one device invocation. Unlike `BackgroundJob`,
+/// this record is an audit artifact: it is never updated as work progresses
+/// and is not removed when routine job history is cleared.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceRunRecord {
+    pub id: String,
+    pub device_id: String,
+    pub device_version: String,
+    pub operation: String,
+    pub track_id: String,
+    pub input_state_id: String,
+    pub input_fingerprint: String,
+    pub selection: serde_json::Value,
+    pub parameters: serde_json::Value,
+    pub resource_bundle_fingerprint: String,
+    pub resource_context: serde_json::Value,
+    pub result_summary: serde_json::Value,
+    #[serde(default)]
+    pub output_edit_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compound_layer_id: Option<String>,
+    pub status: DeviceRunStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub limitation: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CompoundMutationChange {
@@ -502,6 +581,70 @@ pub struct SelectionResolution {
     pub limit: u32,
     pub variants: Vec<VariantKey>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransportTargetKind {
+    Variants,
+    ActiveEdits,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TransportAction {
+    Locate,
+    First,
+    Last,
+    Previous,
+    Next,
+}
+
+/// Stable cursor used by bounded transport queries. Compound changes retain
+/// their child ordinal so repeated edits at one locus remain navigable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportCursor {
+    pub source_key: VariantKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compound_ordinal: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportTargetRequest {
+    pub selection: VariantSelection,
+    pub target_kind: TransportTargetKind,
+    pub action: TransportAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<TransportCursor>,
+    #[serde(default)]
+    pub wrap: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportTarget {
+    pub cursor: TransportCursor,
+    pub source_key: VariantKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_variant: Option<EffectiveVariant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_id: Option<String>,
+    pub locus_status: String,
+    pub ordinal: u64,
+    pub total: u64,
+    pub wrapped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportTargetResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<TransportTarget>,
+    pub total: u64,
 }
 
 #[cfg(test)]

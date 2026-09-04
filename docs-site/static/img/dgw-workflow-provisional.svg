@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Digital Genome Workstation workflow</title>
+  <desc id="desc">A source VCF becomes a read-only genome track. Duplicated tracks receive reversible edits and modular devices, are compared in Track Monitor, and are exported as VCF or focused FASTA with provenance.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#34414e"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#12202c" flood-opacity="0.12"/>
+    </filter>
+    <style>
+      .label { font-family: Arial, Helvetica, sans-serif; fill: #17212b; }
+      .small { font-size: 20px; }
+      .device { font-size: 18px; }
+      .body { font-size: 23px; }
+      .heading { font-size: 27px; font-weight: 700; }
+      .section { font-size: 21px; font-weight: 700; letter-spacing: 1.6px; }
+      .muted { fill: #607080; }
+      .box { fill: #ffffff; stroke: #aeb9c4; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .track { fill: #f8fafb; stroke: #82909c; stroke-width: 2; rx: 13; }
+      .flow { fill: none; stroke: #34414e; stroke-width: 3; marker-end: url(#arrow); }
+      .thin { fill: none; stroke: #84919c; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#f3f5f7"/>
+  <text x="70" y="66" class="label" font-size="34" font-weight="700">Digital Genome Workstation workflow</text>
+  <text x="1530" y="64" class="label muted small" text-anchor="end">PROVISIONAL FIGURE</text>
+
+  <!-- Input -->
+  <rect x="65" y="145" width="255" height="265" class="box"/>
+  <text x="95" y="187" class="label section">INPUT</text>
+  <rect x="95" y="220" width="195" height="58" rx="11" fill="#eaf7fa" stroke="#3ba6b7" stroke-width="2"/>
+  <text x="192" y="257" class="label body" text-anchor="middle" font-weight="700">Sample VCF</text>
+  <rect x="95" y="296" width="195" height="58" rx="11" fill="#eef2f5" stroke="#82909c" stroke-width="2"/>
+  <text x="192" y="333" class="label body" text-anchor="middle">Reference FASTA</text>
+  <text x="95" y="386" class="label small muted">Select one sample</text>
+
+  <path d="M320 278 H390" class="flow"/>
+
+  <!-- Project and tracks -->
+  <rect x="390" y="105" width="690" height="425" class="box"/>
+  <text x="425" y="150" class="label section">DGW PROJECT</text>
+  <text x="1045" y="150" class="label small muted" text-anchor="end">PASS filter · normalize · index</text>
+
+  <rect x="430" y="185" width="610" height="75" class="track"/>
+  <rect x="430" y="185" width="14" height="75" rx="7" fill="#3ba6b7"/>
+  <text x="470" y="220" class="label heading">Source track</text>
+  <text x="470" y="246" class="label small muted">Read-only imported genotype state</text>
+  <g fill="#3ba6b7">
+    <path d="M850 223 l10 -10 l10 10 l-10 10 z"/><path d="M900 223 l10 -10 l10 10 l-10 10 z"/><path d="M965 223 l10 -10 l10 10 l-10 10 z"/>
+  </g>
+
+  <path d="M520 260 V301" class="thin"/>
+  <text x="538" y="288" class="label small muted">duplicate</text>
+
+  <rect x="430" y="310" width="610" height="82" class="track"/>
+  <rect x="430" y="310" width="14" height="82" rx="7" fill="#ee8a34"/>
+  <text x="470" y="344" class="label heading">Experimental track A</text>
+  <text x="470" y="372" class="label small muted">Reversible edit blocks</text>
+  <rect x="815" y="330" width="42" height="42" rx="7" fill="#ee8a34" opacity="0.92"/>
+  <rect x="874" y="330" width="42" height="42" rx="7" fill="#ee8a34" opacity="0.62"/>
+  <rect x="933" y="330" width="42" height="42" rx="7" fill="#ee8a34" opacity="0.35"/>
+
+  <path d="M520 392 V422" class="thin"/>
+  <rect x="430" y="430" width="610" height="62" class="track"/>
+  <rect x="430" y="430" width="14" height="62" rx="7" fill="#d5a52d"/>
+  <text x="470" y="468" class="label heading">Experimental track B</text>
+  <text x="1010" y="468" class="label device muted" text-anchor="end">shared history, different branch</text>
+
+  <!-- Monitor -->
+  <path d="M1080 318 H1140" class="flow"/>
+  <rect x="1140" y="145" width="395" height="265" class="box"/>
+  <text x="1175" y="187" class="label section">TRACK MONITOR</text>
+  <text x="1175" y="229" class="label heading">Edited vs source</text>
+  <rect x="1175" y="256" width="320" height="26" rx="13" fill="#e2e7eb"/>
+  <rect x="1335" y="256" width="92" height="26" rx="13" fill="#58a96b"/>
+  <line x1="1335" y1="246" x2="1335" y2="292" stroke="#17212b" stroke-width="2"/>
+  <text x="1175" y="326" class="label small">Active edits · evidence coverage</text>
+  <text x="1175" y="360" class="label small">Source-relative proxy score</text>
+  <text x="1175" y="392" class="label small muted">Not a disease or fitness estimate</text>
+
+  <!-- Device area -->
+  <path d="M735 530 V583" class="flow"/>
+  <rect x="390" y="585" width="835" height="230" class="box"/>
+  <text x="425" y="630" class="label section">DEVICES ON THE SELECTED TRACK</text>
+
+  <rect x="425" y="660" width="180" height="112" rx="13" fill="#fff1e5" stroke="#ee8a34" stroke-width="2"/>
+  <text x="447" y="695" class="label heading">Edit</text>
+  <text x="447" y="728" class="label device">Mutation Generator</text>
+  <text x="447" y="757" class="label device">Genome Morph</text>
+
+  <rect x="620" y="660" width="190" height="112" rx="13" fill="#eaf7fa" stroke="#3ba6b7" stroke-width="2"/>
+  <text x="642" y="695" class="label heading">Evidence</text>
+  <text x="642" y="728" class="label device">Consequences · dbNSFP</text>
+  <text x="642" y="757" class="label device">ClinVar · COSMIC</text>
+
+  <rect x="825" y="660" width="175" height="112" rx="13" fill="#fff8df" stroke="#d5a52d" stroke-width="2"/>
+  <text x="847" y="695" class="label heading">Analyze</text>
+  <text x="847" y="735" class="label device">Genome Optimizer</text>
+
+  <rect x="1015" y="660" width="175" height="112" rx="13" fill="#edf4fa" stroke="#5a86b1" stroke-width="2"/>
+  <text x="1037" y="695" class="label heading">Visualize</text>
+  <text x="1037" y="735" class="label device">Variant Map</text>
+
+  <!-- Output -->
+  <path d="M1225 700 H1285" class="flow"/>
+  <rect x="1285" y="585" width="250" height="230" class="box"/>
+  <text x="1320" y="630" class="label section">EXPORT</text>
+  <rect x="1320" y="660" width="180" height="48" rx="10" fill="#edf6ef" stroke="#58a96b" stroke-width="2"/>
+  <text x="1410" y="692" class="label body" text-anchor="middle">Track VCF</text>
+  <rect x="1320" y="720" width="180" height="48" rx="10" fill="#edf6ef" stroke="#58a96b" stroke-width="2"/>
+  <text x="1410" y="752" class="label body" text-anchor="middle">Focused FASTA</text>
+  <text x="1410" y="795" class="label small muted" text-anchor="middle">with provenance</text>
+
+  <text x="70" y="864" class="label small muted">The original VCF is not modified. Evidence is queried for the active exact allele.</text>
+</svg>

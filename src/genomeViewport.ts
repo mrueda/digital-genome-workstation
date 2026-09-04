@@ -17,7 +17,7 @@ function boundedRegion(
   requestedSpan: number,
   contigLength?: number
 ): FocusContext {
-  const maximumSpan = Math.max(1, Math.min(MAX_VIEWPORT_BASES, contigLength ?? MAX_VIEWPORT_BASES));
+  const maximumSpan = Math.max(1, contigLength ?? MAX_VIEWPORT_BASES);
   const minimumSpan = Math.min(MIN_VIEWPORT_BASES, maximumSpan);
   const span = clamp(Math.round(requestedSpan), minimumSpan, maximumSpan);
   const maximumStart = Math.max(1, (contigLength ?? Number.MAX_SAFE_INTEGER) - span + 1);

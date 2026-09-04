@@ -168,6 +168,7 @@ pub fn plan_randomizer(
                 edit: EditKind::SetAllele {
                     key: replacement_variant.clone(),
                     source_key: Some(key.clone()),
+                    unphased_slot: None,
                 },
             });
         }

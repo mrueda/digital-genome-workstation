@@ -7,7 +7,7 @@ const guideLinks = [
   {
     label: 'Start',
     title: 'Load one genome',
-    text: 'Register a b37 resource stack, inspect a normalized VCF, and select one sample as the source track.',
+    text: 'Register a GRCh37 or GRCh38 resource stack, inspect a VCF, and select one sample as the source track.',
     to: '/docs/usage/quickstart',
   },
   {
@@ -19,7 +19,7 @@ const guideLinks = [
   {
     label: 'Interpret',
     title: 'Use analysis and evidence devices',
-    text: 'Inspect SnpEff consequences and exact dbNSFP, ClinVar, and COSMIC matches, with resource versions recorded.',
+    text: 'Inspect live transcript consequences and exact dbNSFP, ClinVar, and COSMIC matches, with resource versions recorded.',
     to: '/docs/usage/evaluate-alleles',
   },
   {
@@ -32,6 +32,7 @@ const guideLinks = [
 
 export default function Home() {
   const flow = useBaseUrl('/img/dgw-state-flow.svg');
+  const workspace = useBaseUrl('/img/dgw-workspace.png');
 
   return (
     <Layout
@@ -44,7 +45,7 @@ export default function Home() {
               <p className={styles.kicker}>Digital Genome Workstation</p>
               <h1>Edit a genome.<br /><span>Keep every possibility.</span></h1>
               <p className={styles.lede}>
-                DGW turns one selected human VCF sample into a source genome track.
+                DGW turns one selected VCF sample into a source genome track.
                 Duplicate it, apply reversible changes, inspect every allele, and consolidate
                 only when you choose to create a new baseline.
               </p>
@@ -57,7 +58,7 @@ export default function Home() {
                 </Link>
               </div>
               <div className={styles.scope}>
-                <span>b37 / hs37d5</span><span>SNVs + short indels</span><span>Runs on your computer</span>
+                <span>GRCh37 + GRCh38</span><span>SNVs + short indels</span><span>Runs on your computer</span>
               </div>
             </div>
 
@@ -68,12 +69,21 @@ export default function Home() {
               <div className={styles.sequence}><b>COPY</b><code>TCCTTTACTT <em>T</em>CTACACCTC AGA</code></div>
               <div className={styles.variant}><span>A › T</span><strong>BRAF · p.Val600Glu</strong></div>
               <div className={styles.evidence}>
-                <span>SnpEff <b>found</b></span><span>dbNSFP <b>found</b></span>
+                <span>Consequences <b>found</b></span><span>dbNSFP <b>found</b></span>
                 <span>ClinVar <b>found</b></span><span>COSMIC <b>found</b></span>
               </div>
               <div className={styles.states}><i /> device active <i /> edit visible <i className={styles.branch} /> bypass to compare</div>
             </div>
           </div>
+        </section>
+
+        <section className={styles.product} aria-label="Digital Genome Workstation interface">
+          <div className={styles.productHeading}>
+            <p>THE WORKSTATION</p>
+            <h2>Tracks, changes, devices and evidence stay in one view.</h2>
+            <span>The screenshot uses the bundled synthetic GRCh37 demonstration; it contains no patient data.</span>
+          </div>
+          <img src={workspace} alt="DGW showing source and experimental genome tracks, reversible BRAF edits, the Device Rack, Track Monitor and allele evidence" />
         </section>
 
         <section className={styles.workflow} aria-label="Non-destructive genome track flow">

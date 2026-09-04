@@ -13,7 +13,13 @@ Then run `cargo check -p dgw-desktop` again.
 
 ## The bundle validator reports a missing path
 
-Expand **Resource bundle** on the onboarding screen and update the JSON. Paths are local and machine-specific. The supplied development profile expects `/media/mrueda/2TBS`. Reference and VCF-tool paths are required. A missing optional SnpEff, dbNSFP, ClinVar, or COSMIC resource should leave only that device unavailable; remove or repair its configuration rather than inventing a placeholder file.
+Expand **Resource bundle** on the onboarding screen and update the JSON. Paths are local and machine-specific. The supplied development profile expects `/media/mrueda/2TBS`. The reference and version-matched VCF tools are required for a project. An assembly-matched consequence GFF3 is required only for Variant Consequences and Saturation. A missing optional consequence or database resource should leave only the dependent device unavailable; remove or repair its configuration rather than inventing a placeholder file.
+
+For an open project, use **Help → About DGW → Tools and resources**. DGW checks that registered files and indexes still exist and runs the configured bcftools executable to compare its reported version with the project profile. **Ready** means the registered paths passed this immediate check; it does not independently validate the scientific content of a third-party database.
+
+## The interface becomes blank
+
+A render failure should now open DGW's recovery screen instead of leaving a blank window. Copy the diagnostic report, then reload the application. If the same interface failure happens immediately, use **Reset interface settings and reload**. This removes only computer-level display preferences; it does not delete the `.dgw` package or its genome edits. The last interface-only state change may not have reached the project's session record before the failure.
 
 ## What does “U · chromosome copy unknown” mean?
 
@@ -31,9 +37,11 @@ DGW v0.1 imports only strict `FILTER=PASS` records carried as non-reference geno
 
 Confirm that the FASTA is BGZF-compressed and that both `.fai` and `.gzi` belong to the exact file. Contig names must match the VCF.
 
-## SnpEff times out on the first request
+## Variant Consequences fails
 
-The cold model load can take 8–15 seconds and about 3 GB RAM. Confirm Java can access the configured JAR, config, and hg19 data directory. A failed worker is restarted once; failures are not cached.
+Confirm that the configured bcftools executable includes `csq`, the reference FASTA indexes belong to the exact FASTA, and the Ensembl GFF3 matches the project assembly. GRCh38 model loading can take several seconds and about 800 MB in the current development environment. Failures are not cached.
+
+A `.dgw` project pins the resource profile used when it was created. A development project created before the Variant Consequences migration has no Ensembl consequence descriptor and therefore shows this device as unavailable; opening the package does not silently rewrite its scientific resource identity. Reimport the source VCF with the updated assembly profile for now. An explicit resource-rebinding workflow is planned for projects that must retain their existing edits.
 
 ## An index is older than its database
 

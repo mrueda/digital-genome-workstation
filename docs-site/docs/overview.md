@@ -1,12 +1,16 @@
 # Digital Genome Workstation
 
-Digital Genome Workstation (DGW) is a desktop application for testing changes to one genome without modifying its source VCF. It borrows the working model of a digital audio workstation: duplicate a track, apply reversible changes through devices, keep the changes visible, bypass them for comparison, and consolidate only by explicit choice. The first resource profile is human b37/hs37d5, but the track-and-device model is not inherently human-specific.
+Digital Genome Workstation (DGW) is a desktop application for testing changes to one genome without modifying its source VCF. It borrows the working model of a digital audio workstation: duplicate a track, apply reversible changes through devices, keep the changes visible, bypass them for comparison, and consolidate only by explicit choice. The development profiles support human b37/hs37d5 and GRCh38/hg38, but the track-and-device model is not inherently human-specific.
 
-Application-level navigation separates project work from user preferences. Interface scale, side-panel visibility, and reduced motion follow the user across projects without entering scientific project provenance.
+Application-level navigation separates project work from user preferences. Colour theme, interface scale, side-panel visibility, and reduced motion follow the user across projects without entering scientific project provenance.
 
 DGW is a variant what-if workspace. It answers a focused question: **if this sample had a different allele at this VCF position, what predicted consequence and known evidence would that allele have?** You can use the reference allele or substitute another ALT, compare experimental genome tracks, and export the track you want to keep.
 
 DGW is not IGV. It does not present chromosome-scale read tracks or accept BAM/CRAM input. The interface stays centered on the small region and allele currently being worked on.
+
+![DGW showing source and experimental genome tracks, persistent BRAF edits, its Device Rack, Track Monitor and exact-allele Evidence](/img/dgw-workspace.png)
+
+*The bundled synthetic GRCh37 demonstration. The source and two experimental genome tracks share one focused region; the selected track's devices sit below and its Track Monitor remains separate on the right.*
 
 ## The track model
 
@@ -50,36 +54,36 @@ Tracks, persistent edit blocks, the device rack, and consolidation are now the p
 
 A device changes one experimental track while leaving its source intact. Bypassing the device previews the same track without its active changes.
 
-The rack has three device roles:
+The rack has four device roles:
 
 - **Edit** devices propose reversible changes. Mutation Generator is the first built-in example.
-- **Evidence** devices report allele annotations, predictions, classifications, or observations. SnpEff, dbNSFP, ClinVar, and COSMIC fill this group.
+- **Evidence** devices report allele annotations, predictions, classifications, or observations. Variant Consequences, dbNSFP, ClinVar, and COSMIC fill this group.
 - **Analyze** devices apply an explicit model to one or more track inputs. Genome Optimizer is the first built-in example and emits ordinary reversible proposals.
 - **Visualize** devices present track state and available results without proposing edits or contributing to an objective. Variant Map is the first built-in example.
 
-Device code is separate from its resource pack. For example, the SnpEff device is behavior, while the configured JAR, model, and reference data are resources. The VST-like analogy describes how devices fit into a rack; actual compatibility will use the structured, versioned [DGW Device API](technical-details/device-api.md).
+Device code is separate from its resource pack. For example, Variant Consequences is behavior, while the configured bcftools executable, Ensembl GFF3, and reference data are resources. The VST-like analogy describes how devices fit into a rack; actual compatibility will use the structured, versioned [DGW Device API](technical-details/device-api.md).
 
 All built-ins appear in the function-grouped Device Browser, opened through **Create → Add Device** or the rack's add button. The selected track's Device Rack remains below the tracks and shows the full panels of only the instances applied to that track, arranged horizontally in order. The grouping describes purpose; it does not imply that outputs flow through an audio-like signal chain.
 
-The built-in **DGW Starter** project template pre-applies Mutation Generator, SnpEff, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and Variant Map in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them; Variant Map is read-only. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
+The built-in **DGW Starter** project template pre-applies Mutation Generator, Variant Consequences, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and Variant Map in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them; Variant Map is read-only. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
 
 The **Genome Optimizer** is an implemented experimental device with two modes:
 
 - **Conservative** works on the explicit selection and restricts proposals to REF restoration or reintroduction of an original source ALT;
-- **Saturation scan** works on selected imported SNV positions, annotates all three non-REF bases with SnpEff, and chooses the lowest- or highest-impact ALT per position.
+- **Saturation scan** works on selected imported SNV positions, annotates all three non-REF bases with Variant Consequences, and chooses the lowest- or highest-impact ALT per position.
 
 Its remaining controls define:
 
 - **Distance from reference (ALT copies)** for Conservative mode: one model unit per selected non-reference allele copy, with no Evidence-device input;
-- live SnpEff impact ranking for Saturation mode;
+- live transcript-consequence impact ranking for Saturation mode;
 - **Minimize** or **Maximize** for the displayed model; and
 - a maximum number of edits or positions for one run.
 
-In Conservative mode, Minimize proposes reference restorations only for active alleles that exactly match the immutable source VCF. Maximize only reintroduces exact original-source alleles that are currently absent. In Saturation mode, SnpEff impact is the comparable ranking signal across every candidate. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by a fixed guard where that guard applies; no match remains unknown. COSMIC and dbNSFP matches are reported as evidence context but do not lower the score. Unsupported non-SNV positions and incomplete three-ALT comparisons are excluded rather than guessed.
+In Conservative mode, Minimize proposes reference restorations only for active alleles that exactly match the immutable source VCF. Maximize only reintroduces exact original-source alleles that are currently absent. In Saturation mode, transcript-consequence impact is the comparable ranking signal across every candidate. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by a fixed guard where that guard applies; no match remains unknown. COSMIC and dbNSFP matches are reported as evidence context but do not lower the score. Unsupported non-SNV positions and incomplete three-ALT comparisons are excluded rather than guessed.
 
 The faders and knob adjust the model, not the nucleotides. Output alleles remain discrete: for example, `A` or `T`, never a continuous mixture of the two. Every accepted proposal becomes an ordinary visible, bypassable edit block on the selected track.
 
-Conservative does not use Evidence-device outputs. Saturation uses live SnpEff impact and fixed ClinVar candidate screening; ClinVar is a guard, not a fader. Other devices can still run and display results but do not affect that ranking. A future device must never silently enter an established model.
+Conservative does not use Evidence-device outputs. Saturation uses live Variant Consequences impact and fixed ClinVar candidate screening; ClinVar is a guard, not a fader. Other devices can still run and display results but do not affect that ranking. A future device must never silently enter an established model.
 
 :::caution Model-specific results
 The score is an additive sum of independent allele-copy values. It does not model interactions, combined transcript/protein effects, penetrance, or whole-genome effects. It is not total health, a diagnosis, or a combined biological consequence. “Minimize” and “Maximize” refer only to the named proxy score.
@@ -93,7 +97,7 @@ All current devices are built into DGW. External community-device installation a
 
 ## Prediction and evidence stay separate
 
-SnpEff predicts transcript consequences. dbNSFP supplies computational scores for exact alleles. ClinVar and COSMIC report previously observed or curated evidence. DGW never treats “not found” as “benign.” Imported VCF INFO annotations are ignored; all displayed evidence comes from the currently configured resources.
+Variant Consequences predicts transcript effects with `bcftools csq`. dbNSFP supplies computational scores for exact alleles. ClinVar and COSMIC report previously observed or curated evidence. DGW never treats “not found” as “benign.” Imported VCF INFO annotations are ignored; all displayed evidence comes from the currently configured resources.
 
 ## Current boundary
 

@@ -4,12 +4,18 @@
 
 The default workstation demonstration. One fictional sample (`DGW_DEMO`) has ten synthetic SNVs: seven across 55 bases around the BRAF V600E coordinate on chromosome 7 and three near TP53 on chromosome 17. The dense chromosome 7 layout makes the imported VCF alleles, lollipop selection, horizontal zoom, track duplication, and mutation blocks visible together, while chromosome 17 demonstrates explicit chromosome boundaries and navigation. All REF bases were checked against hs37d5. The genotypes contain no participant data.
 
-This is the fixture opened as a new project by the onboarding screen's **Open example** button and bundled with desktop builds.
+This is the GRCh37 fixture opened when the onboarding screen's **GRCh37** reference profile is selected. It is bundled with desktop builds.
+
+## `dgw-cluster.grch38.synthetic.vcf`
+
+The matching GRCh38 workstation demonstration. It keeps the same fictional `DGW_DEMO` sample and two-neighborhood structure, with seven SNVs around BRAF V600E on `chr7` and three near TP53 on `chr17`. Its coordinates and REF alleles were checked against the configured hg38 FASTA. It contains no participant data.
+
+This fixture is opened when the onboarding screen's **GRCh38** reference profile is selected and is bundled with desktop builds. The two example files are independent assembly-specific inputs; DGW does not lift one into the other.
 
 ## `braf-v600e.synthetic.vcf`
 
 One fictional sample (`DGW_DEMO`) with an unphased BRAF V600E genotype. The file is generated test data and contains no participant data.
-It remains the focused real-resource smoke-test fixture because its exact SnpEff, dbNSFP, ClinVar, and COSMIC behavior is easy to verify.
+It remains the focused real-resource smoke-test fixture because its exact Variant Consequences, dbNSFP, ClinVar, and COSMIC behavior is easy to verify.
 
 ## `multiallelic.synthetic.vcf`
 

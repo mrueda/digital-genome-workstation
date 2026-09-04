@@ -52,6 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             EditKind::SetAllele {
                 key,
                 source_key: Some(variant.key.clone()),
+                unphased_slot: variant.unphased_slot,
             },
             Some(format!("smoke mutation {}", index + 1)),
         )?;

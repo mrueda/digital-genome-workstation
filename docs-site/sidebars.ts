@@ -29,6 +29,7 @@ const sidebars: SidebarsConfig = {
             {type: 'doc', id: 'technical-details/device-api', label: 'Device API & Resource Packs'},
             {type: 'doc', id: 'technical-details/state-model', label: 'Track, State & Edit Model'},
             {type: 'doc', id: 'technical-details/evaluation-engine', label: 'Evaluation Engine'},
+            {type: 'doc', id: 'technical-details/scoring-methods', label: 'Scoring & Evidence Methods'},
           ],
         },
         {

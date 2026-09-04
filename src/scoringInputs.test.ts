@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { effectiveScoringWeights, scoringInputState } from "./scoringInputs";
 
 const inputs = [
-  { id: "impact", sourceDeviceId: "snpeff" },
+  { id: "impact", sourceDeviceId: "consequence" },
   { id: "clinvar", sourceDeviceId: "clinvar" },
   { id: "sourceEvidence" }
 ];
@@ -12,7 +12,7 @@ describe("objective scoring inputs", () => {
     const objective = { includedWeightIds: ["impact", "sourceEvidence"] };
     expect(scoringInputState(objective, inputs[0], new Set())).toBe("included");
     expect(scoringInputState(objective, inputs[1], new Set())).toBe("excluded");
-    expect(scoringInputState(objective, inputs[0], new Set(["snpeff"]))).toBe("bypassed");
+    expect(scoringInputState(objective, inputs[0], new Set(["consequence"]))).toBe("bypassed");
   });
 
   it("uses zero effective weight without changing configured values", () => {
@@ -21,7 +21,7 @@ describe("objective scoring inputs", () => {
       configured,
       { includedWeightIds: ["impact", "clinvar", "sourceEvidence"] },
       inputs,
-      new Set(["snpeff"])
+      new Set(["consequence"])
     );
 
     expect(effective).toEqual({ impact: 0, clinvar: 60, sourceEvidence: 20 });

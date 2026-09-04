@@ -1,3 +1,5 @@
+@import 'katex/dist/katex.min.css';
+
 :root {
   --ifm-color-primary: #247f92;
   --ifm-color-primary-dark: #207284;
@@ -35,6 +37,8 @@
 .theme-doc-markdown h1, .theme-doc-markdown h2 { letter-spacing: -.025em; }
 .theme-doc-markdown table { display: table; width: 100%; }
 .theme-doc-markdown code { border-color: rgba(101,197,216,.16); }
+.theme-doc-markdown p > img { display: block; width: 100%; margin: 1.8rem auto .65rem; border: 1px solid var(--ifm-color-emphasis-300); border-radius: 8px; box-shadow: 0 18px 44px rgba(0,0,0,.18); }
+.theme-doc-markdown p:has(> img) + p > em { display: block; margin-bottom: 1.8rem; color: var(--ifm-color-emphasis-700); font-size: .86rem; line-height: 1.55; }
 .button--primary { --ifm-button-background-color: #65c5d8; --ifm-button-border-color: #65c5d8; color: #141516; }
 .button--primary:hover { color: #141516; }
 .button--secondary { border-color: #596064; color: #e5e6e6; }

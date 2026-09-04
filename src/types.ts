@@ -5,6 +5,38 @@ export interface IndexedResource {
   indexPath: string;
   release: string;
   licenseLabel: string;
+  contigStyle?: "chr_prefix" | "no_chr_prefix";
+}
+
+export interface GeneAnnotationResource {
+  path: string;
+  indexPath: string;
+  assembly: string;
+  contigStyle: string;
+  release: string;
+  sourceUrl: string;
+  licenseLabel: string;
+  fingerprint?: {
+    path: string;
+    sha256: string;
+    size: number;
+    modifiedUnix?: number;
+  };
+}
+
+export interface ConsequenceAnnotationResource {
+  path: string;
+  assembly: string;
+  contigStyle: string;
+  release: string;
+  sourceUrl: string;
+  licenseLabel: string;
+  fingerprint?: {
+    path: string;
+    sha256: string;
+    size: number;
+    modifiedUnix?: number;
+  };
 }
 
 export interface ResourceBundle {
@@ -15,18 +47,34 @@ export interface ResourceBundle {
   referencePath: string;
   referenceFaiPath: string;
   referenceGziPath?: string;
-  javaPath: string;
-  snpeffJarPath: string;
-  snpeffConfigPath?: string;
-  snpeffGenome: string;
-  snpeffVersion: string;
   bcftoolsPath: string;
+  bcftoolsVersion: string;
   bgzipPath: string;
   tabixPath: string;
   dbnsfp: IndexedResource;
   clinvar: IndexedResource;
   cosmic: IndexedResource;
+  geneAnnotation?: GeneAnnotationResource;
+  consequenceAnnotation?: ConsequenceAnnotationResource;
   bundleFingerprint?: string;
+}
+
+export type ResourceHealthStatus = "ready" | "warning" | "missing" | "notConfigured" | "error";
+
+export interface ResourceHealthItem {
+  id: "toolchain" | "reference" | "consequence" | "genes" | "dbnsfp" | "clinvar" | "cosmic";
+  label: string;
+  status: ResourceHealthStatus;
+  summary: string;
+  paths: string[];
+}
+
+export interface ProjectResourceHealth {
+  bundleId: string;
+  assembly: string;
+  checkedAt: string;
+  status: ResourceHealthStatus;
+  items: ResourceHealthItem[];
 }
 
 export interface VariantKey {
@@ -42,6 +90,7 @@ export interface VcfInspection {
   fileFormat?: string;
   samples: string[];
   contigs: string[];
+  inputContigStyle: "chr_prefix" | "no_chr_prefix" | "mixed";
   recordCount: number;
   passRecordCount: number;
   nonPassRecordCount: number;
@@ -81,7 +130,7 @@ export interface GenomeState {
 }
 
 export type EditKind =
-  | { kind: "setAllele"; key: VariantKey; sourceKey?: VariantKey }
+  | { kind: "setAllele"; key: VariantKey; sourceKey?: VariantKey; unphasedSlot?: number }
   | { kind: "restoreReference"; sourceKey: VariantKey }
   | { kind: "compoundMutationLayer"; layerId: string; positionCount: number; changeCount: number };
 
@@ -98,6 +147,17 @@ export interface FocusContext {
   contig: string;
   start: number;
   end: number;
+}
+
+export interface GeneSearchHit {
+  geneId: string;
+  symbol: string;
+  contig: string;
+  start: number;
+  end: number;
+  strand: string;
+  biotype?: string;
+  sourceVariantCount: number;
 }
 
 export interface WorkspaceSnapshot {
@@ -125,6 +185,8 @@ export interface GenomeTrackLane {
   track: GenomeTrack;
   edits: EditOperation[];
   variants: EffectiveVariant[];
+  sourceVariantTotal: number;
+  variantsTruncated: boolean;
 }
 
 export interface VariantPage {
@@ -184,11 +246,13 @@ export interface TrackProfileDeviceCoverage {
   exactMatches: number;
   unavailable: number;
   errors: number;
+  noTranscriptFeature: number;
 }
 
 export interface TrackEvidenceProfileResult {
   trackId: string;
   stateId: string;
+  profileInputFingerprint?: string;
   activeMutations: number;
   evaluatedMutations: number;
   impactDelta?: number;
@@ -197,6 +261,29 @@ export interface TrackEvidenceProfileResult {
   unchangedImpactMutations?: number;
   deviceCoverage: TrackProfileDeviceCoverage[];
   limitation: string;
+}
+
+export type MorphOrdering = "genomic" | "seededRandom";
+
+export interface TrackMorphRequest {
+  amount: number;
+  ordering: MorphOrdering;
+  seed: number;
+}
+
+export interface TrackMorphPreviewResult {
+  sourceTrackId: string;
+  sourceStateId: string;
+  targetTrackId: string;
+  targetStateId: string;
+  amount: number;
+  differingPositions: number;
+  differingAlleles: number;
+  selectedPositions: number;
+  generatedEdits: number;
+  noOpReason?: string;
+  limitation: string;
+  compoundLayerId?: string;
 }
 
 export interface VariantDensityBin {
@@ -224,6 +311,39 @@ export interface SelectionResolution {
   limit: number;
   variants: VariantKey[];
   truncated: boolean;
+}
+
+export type TransportTargetKind = "variants" | "activeEdits";
+export type TransportAction = "locate" | "first" | "last" | "previous" | "next";
+
+export interface TransportCursor {
+  sourceKey: VariantKey;
+  editId?: string;
+  compoundOrdinal?: number;
+}
+
+export interface TransportTargetRequest {
+  selection: VariantSelection;
+  targetKind: TransportTargetKind;
+  action: TransportAction;
+  cursor?: TransportCursor;
+  wrap?: boolean;
+}
+
+export interface TransportTarget {
+  cursor: TransportCursor;
+  sourceKey: VariantKey;
+  currentVariant?: EffectiveVariant;
+  editId?: string;
+  locusStatus: "alternate" | "reference";
+  ordinal: number;
+  total: number;
+  wrapped: boolean;
+}
+
+export interface TransportTargetResult {
+  target?: TransportTarget;
+  total: number;
 }
 
 export type OptimizerObjectiveId = "alternateAlleleBurden" | "predictedImpactBurden";
@@ -254,6 +374,12 @@ export interface OptimizerProposal {
   rationale: string;
 }
 
+export interface OptimizerExclusion {
+  sourceVariant: VariantKey;
+  haplotype: Haplotype;
+  reason: string;
+}
+
 export interface OptimizerCandidateComparison {
   sourceVariant: VariantKey;
   candidateVariant: VariantKey;
@@ -279,6 +405,7 @@ export interface OptimizerPlan {
   request: OptimizerRequest;
   focus: FocusContext;
   proposals: OptimizerProposal[];
+  exclusions: OptimizerExclusion[];
   scoreBefore: number;
   scoreAfter: number;
   consideredVariants: number;
@@ -294,6 +421,26 @@ export interface OptimizerRunResult {
   plan: OptimizerPlan;
   generatedEditIds: string[];
   snapshot: ProjectSnapshot;
+}
+
+export interface OptimizerBackgroundResult {
+  mode: OptimizerMode;
+  direction: OptimizerDirection;
+  consideredPositions: number;
+  evaluatedCandidates: number;
+  excludedPositions: number;
+  improvingPositions: number;
+  unchangedOrTiedPositions: number;
+  deferredByChangeLimit: number;
+  changedPositions: number;
+  generatedEdits: number;
+  scoreBefore: number;
+  scoreAfter: number;
+  scoreDescription: string;
+  limitation: string;
+  noOpReason?: string;
+  candidateComparisonsRetained: number;
+  compoundLayerId?: string;
 }
 
 export interface RandomizerRequest {
@@ -368,6 +515,7 @@ export interface ProjectManifest {
   resourceBundle: ResourceBundle;
   rootStateId: string;
   sourceVcf: { path: string; sha256: string; size: number };
+  copiedFromProjectId?: string;
 }
 
 export interface ProjectSnapshot {
@@ -418,7 +566,7 @@ export interface EvidenceResult {
 export interface EvaluationResult {
   variant: VariantKey;
   cacheKey: string;
-  snpeff: EvidenceResult;
+  consequence: EvidenceResult;
   dbnsfp: EvidenceResult;
   clinvar: EvidenceResult;
   cosmic: EvidenceResult;

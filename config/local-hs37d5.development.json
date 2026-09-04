@@ -6,31 +6,56 @@
   "referencePath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz",
   "referenceFaiPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.fai",
   "referenceGziPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.gzi",
-  "javaPath": "/usr/bin/java",
-  "snpeffJarPath": "/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.jar",
-  "snpeffConfigPath": "/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.config",
-  "snpeffGenome": "hg19",
-  "snpeffVersion": "5.0e",
-  "bcftoolsPath": "/media/mrueda/2TBS/NGSutils/bcftools-1.21-103_arm64/bcftools",
-  "bgzipPath": "/usr/local/bin/bgzip",
-  "tabixPath": "/usr/local/bin/tabix",
+  "bcftoolsPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bcftools",
+  "bcftoolsVersion": "1.24",
+  "bgzipPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bgzip",
+  "tabixPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/tabix",
   "dbnsfp": {
     "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz",
     "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz.tbi",
     "release": "dbNSFP 4.1a",
-    "licenseLabel": "user-supplied"
+    "licenseLabel": "user-supplied",
+    "contigStyle": "no_chr_prefix"
   },
   "clinvar": {
     "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz",
     "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi",
     "release": "ClinVar 20250312",
-    "licenseLabel": "user-supplied"
+    "licenseLabel": "user-supplied",
+    "contigStyle": "no_chr_prefix"
   },
   "cosmic": {
     "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz",
     "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz.tbi",
     "release": "COSMIC local snapshot",
-    "licenseLabel": "user-supplied; not redistributed"
+    "licenseLabel": "user-supplied; not redistributed",
+    "contigStyle": "no_chr_prefix"
+  },
+  "geneAnnotation": {
+    "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Ensembl.GRCh37.87.genes.sqlite",
+    "assembly": "GRCh37",
+    "contigStyle": "no_chr_prefix",
+    "release": "Ensembl 87",
+    "sourceUrl": "https://ftp.ensembl.org/pub/grch37/release-87/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz",
+    "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+    "fingerprint": {
+      "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz",
+      "sha256": "56bc520f5e9cbc14ab4d03b472355b572818729fa422b905ba62d58291590058",
+      "size": 42400095
+    }
+  },
+  "consequenceAnnotation": {
+    "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz",
+    "assembly": "GRCh37",
+    "contigStyle": "no_chr_prefix",
+    "release": "Ensembl 87",
+    "sourceUrl": "https://ftp.ensembl.org/pub/grch37/release-87/gff3/homo_sapiens/Homo_sapiens.GRCh37.87.gff3.gz",
+    "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+    "fingerprint": {
+      "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz",
+      "sha256": "133dea44279767ede793578219c77b21985fde2cab835fa3492934548125824b",
+      "size": 37903989
+    }
   }
 }
-

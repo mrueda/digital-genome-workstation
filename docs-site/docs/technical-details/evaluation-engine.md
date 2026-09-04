@@ -1,16 +1,16 @@
 # Evaluation Engine
 
-Within the user-facing DGW rack model, SnpEff, dbNSFP, ClinVar, and COSMIC are **Evidence** devices. They report different kinds of allele-level evidence, including predicted transcript consequences and computational scores. Their current implementations are built-in adapters, but they already return structured results through a host-owned boundary rather than writing project state themselves.
+Within the user-facing DGW rack model, Variant Consequences, dbNSFP, ClinVar, and COSMIC are **Evidence** devices. They report different kinds of allele-level evidence, including predicted transcript consequences and computational scores. Their current implementations are built-in adapters, but they return structured results through a host-owned boundary rather than writing project state themselves.
 
-Device behavior and biological resources are separate. The analysis/evidence adapters are code; the registered SnpEff model and database snapshots belong to the resource pack. See [Device API and Resource Packs](device-api.md).
+Device behavior and biological resources are separate. The adapters are code; the registered Ensembl GFF3 and database snapshots belong to the resource pack. See [Device API and Resource Packs](device-api.md).
 
 Imported VCF annotations never enter this path. The engine receives an exact normalized `assembly/contig/POS/REF/ALT` key and evaluates that allele with the resources registered for the project. This is why an edited ALT can be evaluated even when it never appeared in the input VCF.
 
-## Persistent SnpEff
+## Batched transcript consequences
 
-SnpEff starts with a minimal VCF stream on stdin. Each request receives a unique temporary VCF ID; the stdout reader discards headers and correlates the returned record by that ID. One worker serializes requests for one resource-bundle fingerprint. A timeout or process failure causes one restart attempt.
+Variant Consequences writes the requested exact alleles to a temporary VCF and invokes the project's pinned `bcftools csq` with `--local-csq`, the reference FASTA, and the assembly-matched Ensembl GFF3. Stable temporary IDs correlate output records with requests. `--local-csq` deliberately evaluates each VCF record independently so Saturation candidates remain comparable.
 
-This avoids reloading the model for every edit. Cold and warm timings depend on the machine and the selected SnpEff dataset.
+The complete request is sent as one batch because loading the Ensembl model dominates startup. `BCSQ` Sequence Ontology terms are mapped to DGW's four impact classes. When `csq` reports no overlapping transcript feature, DGW emits an explicit `no_transcript_feature` MODIFIER record; it does not describe this as a database match.
 
 ## Exact indexed lookup
 
@@ -32,4 +32,6 @@ The host, not a device, persists evaluation results and chooses cache identities
 
 ## Optimizer use
 
-No optimizer mode falls back to imported `ANN`, `CLNSIG`, or another source INFO field. Conservative uses normalized allele identity and counts selected non-reference copies without Evidence-device input. Saturation uses the same typed live evidence boundary as the allele inspector and evaluates three non-REF candidates per selected canonical SNV, with a hard limit of 100 selected positions. A required SnpEff or ClinVar-guard failure aborts the run before edits are applied.
+No optimizer mode falls back to imported `ANN`, `CLNSIG`, or another source INFO field. Conservative uses normalized allele identity and counts selected non-reference copies without Evidence-device input. Saturation uses the same typed live evidence boundary as the allele inspector and evaluates three non-REF candidates per selected canonical SNV. Runs above 100 selected positions use a persistent background job, send the accepted candidate scope through one consequence batch, query ClinVar in bounded region batches, and retain only the winning edit data needed for the compound layer. The configurable run limit has an experimental 100,000-position ceiling. A required Variant Consequences or ClinVar-guard failure aborts the run before edits are applied.
+
+See [Scoring and Evidence Methods](scoring-methods.md) for the fields, equations, selection rules, and reporting requirements.

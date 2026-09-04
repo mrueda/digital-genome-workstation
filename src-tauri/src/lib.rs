@@ -1,18 +1,21 @@
-use dgw_core::evaluation::normalize_variant;
+use dgw_core::evaluation::{normalize_variant, BatchEvidenceSignal};
 use dgw_core::{
-    built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence, plan_randomizer,
-    validate_resource_bundle, BackgroundJob, BackgroundJobStatus, CompoundMutationChange,
-    CreateProjectRequest, DeviceManifest, EditKind, EditOperation, EffectiveVariant,
-    EvaluationResult, EvaluationService, EvidenceResult, EvidenceStatus, FocusContext,
-    FocusFastaExport, FocusView, GenomeState, GenomeTrack, Haplotype, OptimizerAlleleEvidenceInput,
+    built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
+    plan_randomizer, plan_track_morph, validate_resource_bundle, BackgroundJob,
+    BackgroundJobStatus, CompoundMutationChange, CreateProjectRequest, DeviceManifest,
+    DeviceRunRecord, DeviceRunStatus, EditKind, EditOperation, EffectiveVariant, EvaluationResult,
+    EvaluationService, EvidenceResult, EvidenceStatus, FocusContext, FocusFastaExport, FocusView,
+    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, OptimizerAlleleEvidenceInput,
     OptimizerDirection, OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest,
     ProcessProgress, Project, ProjectSnapshot, RandomizerPlan, RandomizerRequest, ResourceBundle,
-    SaturationAlleleInput, SelectionResolution, VariantContigSummary, VariantDensity,
-    VariantNavigationBin, VariantPage, VariantSelection, VcfInspection, WorkspaceSnapshot,
+    SaturationAlleleInput, SelectionResolution, TrackMorphRequest, TransportTargetRequest,
+    TransportTargetResult, VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage,
+    VariantSelection, VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{ipc::Channel, Manager};
 use uuid::Uuid;
@@ -36,6 +39,155 @@ struct ExampleFixture {
     project_path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ResourceHealthStatus {
+    Ready,
+    Warning,
+    Missing,
+    NotConfigured,
+    Error,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceHealthItem {
+    id: &'static str,
+    label: &'static str,
+    status: ResourceHealthStatus,
+    summary: String,
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectResourceHealth {
+    bundle_id: String,
+    assembly: String,
+    checked_at: chrono::DateTime<chrono::Utc>,
+    status: ResourceHealthStatus,
+    items: Vec<ResourceHealthItem>,
+}
+
+fn file_health(
+    id: &'static str,
+    label: &'static str,
+    release: &str,
+    paths: Vec<PathBuf>,
+    configured: bool,
+    required: bool,
+) -> ResourceHealthItem {
+    if !configured {
+        return ResourceHealthItem {
+            id,
+            label,
+            status: if required {
+                ResourceHealthStatus::Missing
+            } else {
+                ResourceHealthStatus::NotConfigured
+            },
+            summary: if required {
+                "Required resource is not configured".into()
+            } else {
+                "Optional resource is not configured".into()
+            },
+            paths,
+        };
+    }
+    let missing: Vec<_> = paths
+        .iter()
+        .filter(|path| !path.is_file())
+        .map(|path| path.display().to_string())
+        .collect();
+    ResourceHealthItem {
+        id,
+        label,
+        status: if missing.is_empty() {
+            ResourceHealthStatus::Ready
+        } else {
+            ResourceHealthStatus::Missing
+        },
+        summary: if missing.is_empty() {
+            release.to_owned()
+        } else {
+            format!("Missing {}", missing.join(", "))
+        },
+        paths,
+    }
+}
+
+fn toolchain_health(bundle: &ResourceBundle) -> ResourceHealthItem {
+    let paths = vec![
+        bundle.bcftools_path.clone(),
+        bundle.bgzip_path.clone(),
+        bundle.tabix_path.clone(),
+    ];
+    let mut item = file_health(
+        "toolchain",
+        "bcftools toolchain",
+        &format!("bcftools {} · bgzip · tabix", bundle.bcftools_version),
+        paths,
+        true,
+        true,
+    );
+    if item.status != ResourceHealthStatus::Ready {
+        return item;
+    }
+    match Command::new(&bundle.bcftools_path)
+        .arg("--version-only")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let observed = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if !bundle.bcftools_version.is_empty()
+                && !observed.starts_with(&bundle.bcftools_version)
+            {
+                item.status = ResourceHealthStatus::Warning;
+                item.summary = format!(
+                    "Configured {}, executable reports {}",
+                    bundle.bcftools_version, observed
+                );
+            } else {
+                item.summary = format!("bcftools {observed} · bgzip · tabix");
+            }
+        }
+        Ok(output) => {
+            item.status = ResourceHealthStatus::Error;
+            item.summary = format!(
+                "bcftools could not run: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            item.status = ResourceHealthStatus::Error;
+            item.summary = format!("bcftools could not run: {error}");
+        }
+    }
+    item
+}
+
+fn report_status(items: &[ResourceHealthItem]) -> ResourceHealthStatus {
+    if items
+        .iter()
+        .any(|item| item.status == ResourceHealthStatus::Error)
+    {
+        ResourceHealthStatus::Error
+    } else if items.iter().any(|item| {
+        item.status == ResourceHealthStatus::Missing && matches!(item.id, "toolchain" | "reference")
+    }) {
+        ResourceHealthStatus::Missing
+    } else if items.iter().any(|item| {
+        matches!(
+            item.status,
+            ResourceHealthStatus::Missing | ResourceHealthStatus::Warning
+        )
+    }) {
+        ResourceHealthStatus::Warning
+    } else {
+        ResourceHealthStatus::Ready
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatedProject {
@@ -49,6 +201,8 @@ struct GenomeTrackLane {
     track: GenomeTrack,
     edits: Vec<EditOperation>,
     variants: Vec<EffectiveVariant>,
+    source_variant_total: u64,
+    variants_truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -57,6 +211,36 @@ struct OptimizerRunResult {
     plan: OptimizerPlan,
     generated_edit_ids: Vec<String>,
     snapshot: ProjectSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OptimizerBackgroundResult {
+    mode: OptimizerMode,
+    direction: OptimizerDirection,
+    considered_positions: u32,
+    evaluated_candidates: u32,
+    excluded_positions: u32,
+    improving_positions: u32,
+    unchanged_or_tied_positions: u32,
+    deferred_by_change_limit: u32,
+    changed_positions: u32,
+    generated_edits: u32,
+    score_before: f64,
+    score_after: f64,
+    score_description: String,
+    limitation: String,
+    no_op_reason: Option<String>,
+    candidate_comparisons_retained: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compound_layer_id: Option<String>,
+}
+
+struct BulkOptimizerGroup {
+    source_variant: dgw_core::VariantKey,
+    changes: Vec<CompoundMutationChange>,
+    score_delta: f64,
+    improvement: f64,
 }
 
 #[derive(Serialize)]
@@ -72,35 +256,6 @@ struct RandomizerRunResult {
 struct CompoundLayerApplyResult {
     generated_edit_id: String,
     snapshot: ProjectSnapshot,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackProfileDeviceCoverage {
-    id: String,
-    evaluated: u32,
-    total: u32,
-    exact_matches: u64,
-    unavailable: u32,
-    errors: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackEvidenceProfileResult {
-    track_id: String,
-    state_id: String,
-    active_mutations: u32,
-    evaluated_mutations: u32,
-    impact_delta: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    higher_impact_mutations: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lower_impact_mutations: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    unchanged_impact_mutations: Option<u32>,
-    device_coverage: Vec<TrackProfileDeviceCoverage>,
-    limitation: String,
 }
 
 const RANDOMIZER_PREVIEW_CHANGE_LIMIT: usize = 200;
@@ -128,6 +283,24 @@ struct RandomizerPreviewResult {
     excluded_positions: usize,
     change_count: usize,
     changes: Vec<RandomizerPreviewChange>,
+    no_op_reason: Option<String>,
+    limitation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compound_layer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMorphPreviewResult {
+    source_track_id: String,
+    source_state_id: String,
+    target_track_id: String,
+    target_state_id: String,
+    amount: u8,
+    differing_positions: u32,
+    differing_alleles: u32,
+    selected_positions: u32,
+    generated_edits: u32,
     no_op_reason: Option<String>,
     limitation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,6 +396,120 @@ fn resolve_randomizer_request(
     Ok((request, current))
 }
 
+fn resolve_optimizer_request(
+    project: &Project,
+    track_id: &str,
+    mut request: OptimizerRequest,
+    selection: Option<VariantSelection>,
+    selection_limit: Option<u32>,
+) -> Result<OptimizerRequest, String> {
+    if let Some(selection) = selection {
+        let limit = selection_limit
+            .unwrap_or(dgw_core::MAX_SATURATION_POSITIONS as u32)
+            .min(dgw_core::MAX_SATURATION_POSITIONS as u32)
+            .max(1);
+        let resolution = project
+            .resolve_selection(&selection, limit)
+            .map_err(error_text)?;
+        if resolution.track_id != track_id {
+            return Err("Genome Optimizer selection belongs to a different track".into());
+        }
+        if resolution.truncated {
+            return Err(format!(
+                "{} alleles are selected; Genome Optimizer accepts at most {} positions for this run",
+                resolution.total, limit
+            ));
+        }
+        request.selected_variants = resolution.variants;
+    }
+    if request.selected_variants.is_empty() {
+        return Err("Select at least one active allele before running Genome Optimizer".into());
+    }
+    if request.selected_variants.len() > dgw_core::MAX_SATURATION_POSITIONS {
+        return Err(format!(
+            "Genome Optimizer accepts at most {} positions per run",
+            dgw_core::MAX_SATURATION_POSITIONS
+        ));
+    }
+    if request.max_edits == 0 || request.max_edits > dgw_core::MAX_OPTIMIZER_EDITS {
+        return Err(format!(
+            "Genome Optimizer changes must be between 1 and {} positions",
+            dgw_core::MAX_OPTIMIZER_EDITS
+        ));
+    }
+    Ok(request)
+}
+
+fn evidence_from_batch_signal(source: &str, signal: &BatchEvidenceSignal) -> EvidenceResult {
+    let mut record = BTreeMap::new();
+    if let Some(impact) = &signal.impact_label {
+        record.insert("impact".into(), impact.clone());
+    }
+    if let Some(classification) = &signal.clinvar_classification {
+        record.insert("CLNSIG".into(), classification.clone());
+    }
+    EvidenceResult {
+        source: source.into(),
+        status: signal.status.clone(),
+        records: (!record.is_empty()).then_some(record).into_iter().collect(),
+        message: None,
+    }
+}
+
+fn optimizer_candidate_variants(selected: &[dgw_core::VariantKey]) -> Vec<dgw_core::VariantKey> {
+    let mut candidates = BTreeMap::new();
+    for source in selected {
+        if source.reference.len() != 1
+            || source.alternate.len() != 1
+            || !matches!(
+                source.reference.as_bytes()[0].to_ascii_uppercase(),
+                b'A' | b'C' | b'G' | b'T'
+            )
+        {
+            continue;
+        }
+        let reference = source.reference.as_bytes()[0].to_ascii_uppercase();
+        for alternate in [b'A', b'C', b'G', b'T']
+            .into_iter()
+            .filter(|alternate| *alternate != reference)
+        {
+            let candidate = dgw_core::VariantKey {
+                assembly: source.assembly.clone(),
+                contig: source.contig.clone(),
+                position: source.position,
+                reference: char::from(reference).to_string(),
+                alternate: char::from(alternate).to_string(),
+            };
+            candidates
+                .entry(candidate.stable_key())
+                .or_insert(candidate);
+        }
+    }
+    candidates.into_values().collect()
+}
+
+fn optimizer_groups_from_plan(plan: &OptimizerPlan) -> Vec<BulkOptimizerGroup> {
+    let mut grouped: BTreeMap<String, BulkOptimizerGroup> = BTreeMap::new();
+    for proposal in &plan.proposals {
+        let key = proposal.source_variant.stable_key();
+        let group = grouped.entry(key).or_insert_with(|| BulkOptimizerGroup {
+            source_variant: proposal.source_variant.clone(),
+            changes: Vec::new(),
+            score_delta: 0.0,
+            improvement: 0.0,
+        });
+        group.changes.push(CompoundMutationChange {
+            haplotype: proposal.haplotype,
+            edit: proposal.edit.clone(),
+        });
+        group.score_delta += proposal.score_delta;
+    }
+    for group in grouped.values_mut() {
+        group.improvement = group.score_delta.abs();
+    }
+    grouped.into_values().collect()
+}
+
 fn update_job(
     project: &Project,
     job: &mut BackgroundJob,
@@ -236,7 +523,183 @@ fn update_job(
     job.stage = stage.into();
     job.message = message.into();
     job.updated_at = chrono::Utc::now();
-    project.save_background_job(job).map_err(error_text)
+    project.save_background_job(job).map_err(error_text)?;
+    persist_terminal_device_run(project, job)
+}
+
+fn persist_terminal_device_run(project: &Project, job: &BackgroundJob) -> Result<(), String> {
+    let status = match job.status {
+        BackgroundJobStatus::Completed => DeviceRunStatus::Completed,
+        BackgroundJobStatus::Failed => DeviceRunStatus::Failed,
+        BackgroundJobStatus::Cancelled => DeviceRunStatus::Cancelled,
+        BackgroundJobStatus::Queued | BackgroundJobStatus::Running => return Ok(()),
+    };
+    if project.device_run(&job.id).is_ok() {
+        return Ok(());
+    }
+
+    let input_state_id = job
+        .request
+        .get("sourceStateId")
+        .or_else(|| job.request.get("stateId"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            project
+                .track(&job.track_id)
+                .map(|track| track.head_state_id)
+                .unwrap_or_else(|_| project.manifest().root_state_id.clone())
+        });
+    let selection = job
+        .request
+        .get("selection")
+        .cloned()
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            job.request
+                .pointer("/optimizer/selectedVariants")
+                .cloned()
+                .map(|variants| serde_json::json!({"selectedVariants": variants}))
+        })
+        .unwrap_or_else(|| serde_json::json!({"scope": "captured track state"}));
+    let manifest = built_in_device_manifest(&job.device_id);
+    let device_version = manifest
+        .as_ref()
+        .map(|manifest| manifest.version.clone())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+    let input_fingerprint = job
+        .request
+        .get("profileInputFingerprint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or(
+            project
+                .device_run_input_fingerprint(
+                    &job.device_id,
+                    &device_version,
+                    &job.track_id,
+                    &input_state_id,
+                    &selection,
+                    &job.request,
+                )
+                .map_err(error_text)?,
+        );
+    let result_summary = job.result.clone().unwrap_or_else(|| {
+        serde_json::json!({
+            "stage": job.stage,
+            "message": job.message,
+            "progress": job.progress,
+        })
+    });
+    let compound_layer_id = result_summary
+        .get("compoundLayerId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let output_edit_ids = result_summary
+        .get("generatedEditIds")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let limitation = result_summary
+        .get("limitation")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            manifest.as_ref().map(|manifest| {
+                manifest
+                    .scientific_limitations
+                    .join(" ")
+            })
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            "This record preserves the declared device inputs and terminal result; interpretation remains device-specific."
+                .into()
+        });
+    project
+        .save_device_run(&DeviceRunRecord {
+            id: job.id.clone(),
+            device_id: job.device_id.clone(),
+            device_version,
+            operation: job.operation.clone(),
+            track_id: job.track_id.clone(),
+            input_state_id,
+            input_fingerprint,
+            selection,
+            parameters: job.request.clone(),
+            resource_bundle_fingerprint: project.manifest().resource_bundle_fingerprint.clone(),
+            resource_context: project.device_run_resource_context(),
+            result_summary,
+            output_edit_ids,
+            compound_layer_id,
+            status,
+            error: job.error.clone(),
+            limitation,
+            started_at: job.created_at,
+            completed_at: job.updated_at,
+        })
+        .map_err(error_text)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_completed_device_run(
+    project: &Project,
+    device_id: &str,
+    operation: &str,
+    track_id: &str,
+    input_state_id: &str,
+    selection: serde_json::Value,
+    parameters: serde_json::Value,
+    result_summary: serde_json::Value,
+    output_edit_ids: Vec<String>,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
+    let manifest = built_in_device_manifest(device_id)
+        .ok_or_else(|| format!("unknown built-in device {device_id}"))?;
+    let input_fingerprint = project
+        .device_run_input_fingerprint(
+            device_id,
+            &manifest.version,
+            track_id,
+            input_state_id,
+            &selection,
+            &parameters,
+        )
+        .map_err(error_text)?;
+    let limitation = result_summary
+        .get("limitation")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| manifest.scientific_limitations.join(" "));
+    project
+        .save_device_run(&DeviceRunRecord {
+            id: Uuid::new_v4().to_string(),
+            device_id: device_id.into(),
+            device_version: manifest.version,
+            operation: operation.into(),
+            track_id: track_id.into(),
+            input_state_id: input_state_id.into(),
+            input_fingerprint,
+            selection,
+            parameters,
+            resource_bundle_fingerprint: project.manifest().resource_bundle_fingerprint.clone(),
+            resource_context: project.device_run_resource_context(),
+            compound_layer_id: None,
+            result_summary,
+            output_edit_ids,
+            status: DeviceRunStatus::Completed,
+            error: None,
+            limitation,
+            started_at,
+            completed_at: chrono::Utc::now(),
+        })
+        .map_err(error_text)
 }
 
 fn job_was_cancelled(cancelled_jobs: &Mutex<BTreeSet<String>>, job_id: &str) -> bool {
@@ -262,15 +725,33 @@ fn available_project_path(parent: PathBuf, stem: &str) -> PathBuf {
 }
 
 #[tauri::command]
-fn example_fixture(app: tauri::AppHandle) -> Result<ExampleFixture, String> {
-    let development_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fixtures/dgw-cluster.synthetic.vcf");
+fn example_fixture(app: tauri::AppHandle, assembly: String) -> Result<ExampleFixture, String> {
+    let (file_name, project_name, project_stem) = match assembly.as_str() {
+        "b37" => (
+            "dgw-cluster.synthetic.vcf",
+            "DGW Allele Editing — GRCh37",
+            "dgw-allele-editing-grch37-example",
+        ),
+        "hg38" => (
+            "dgw-cluster.grch38.synthetic.vcf",
+            "DGW Allele Editing — GRCh38",
+            "dgw-allele-editing-grch38-example",
+        ),
+        _ => {
+            return Err(format!(
+                "no bundled example is available for assembly {assembly}"
+            ))
+        }
+    };
+    let development_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../fixtures")
+        .join(file_name);
     let path = if development_path.is_file() {
         development_path
     } else {
         app.path()
             .resolve(
-                "fixtures/dgw-cluster.synthetic.vcf",
+                format!("fixtures/{file_name}"),
                 tauri::path::BaseDirectory::Resource,
             )
             .map_err(error_text)?
@@ -292,40 +773,45 @@ fn example_fixture(app: tauri::AppHandle) -> Result<ExampleFixture, String> {
     Ok(ExampleFixture {
         path,
         sample: "DGW_DEMO".into(),
-        project_name: "DGW clustered variants example".into(),
-        project_path: available_project_path(projects_dir, "dgw-cluster-example"),
+        project_name: project_name.into(),
+        project_path: available_project_path(projects_dir, project_stem),
     })
 }
 
 #[tauri::command]
-fn inspect_vcf_file(
+async fn inspect_vcf_file(
     path: PathBuf,
     assembly: Option<String>,
     on_progress: Channel<ProcessProgress>,
 ) -> Result<VcfInspection, String> {
-    let _ = on_progress.send(ProcessProgress::new(
-        "vcfInspection",
-        "open",
-        "Opening the VCF",
-        1,
-        3,
-    ));
-    let _ = on_progress.send(ProcessProgress::new(
-        "vcfInspection",
-        "scan",
-        "Reading headers, samples, filters, and variant records",
-        2,
-        3,
-    ));
-    let inspection = inspect_vcf(path, assembly.as_deref().unwrap_or("b37")).map_err(error_text)?;
-    let _ = on_progress.send(ProcessProgress::new(
-        "vcfInspection",
-        "summary",
-        "VCF inspection complete",
-        3,
-        3,
-    ));
-    Ok(inspection)
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = on_progress.send(ProcessProgress::new(
+            "vcfInspection",
+            "open",
+            "Opening the VCF",
+            1,
+            3,
+        ));
+        let _ = on_progress.send(ProcessProgress::new(
+            "vcfInspection",
+            "scan",
+            "Reading headers, samples, filters, and variant records",
+            2,
+            3,
+        ));
+        let inspection =
+            inspect_vcf(path, assembly.as_deref().unwrap_or("b37")).map_err(error_text)?;
+        let _ = on_progress.send(ProcessProgress::new(
+            "vcfInspection",
+            "summary",
+            "VCF inspection complete",
+            3,
+            3,
+        ));
+        Ok(inspection)
+    })
+    .await
+    .map_err(|error| format!("VCF inspection worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -339,22 +825,26 @@ fn device_catalog() -> Vec<DeviceManifest> {
 }
 
 #[tauri::command]
-fn create_project(
+async fn create_project(
     request: CreateProjectRequest,
     on_progress: Channel<ProcessProgress>,
 ) -> Result<ProjectSnapshot, String> {
-    let project = Project::create_with_progress(request, |progress| {
-        let _ = on_progress.send(progress);
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = Project::create_with_progress(request, |progress| {
+            let _ = on_progress.send(progress);
+        })
+        .map_err(error_text)?;
+        let _ = on_progress.send(ProcessProgress::new(
+            "vcfImport",
+            "workspace",
+            "Opening the completed genome workspace",
+            10,
+            10,
+        ));
+        project.snapshot().map_err(error_text)
     })
-    .map_err(error_text)?;
-    let _ = on_progress.send(ProcessProgress::new(
-        "vcfImport",
-        "workspace",
-        "Opening the completed genome workspace",
-        10,
-        10,
-    ));
-    project.snapshot().map_err(error_text)
+    .await
+    .map_err(|error| format!("VCF import worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -414,10 +904,151 @@ fn open_project(path: PathBuf) -> Result<ProjectSnapshot, String> {
 }
 
 #[tauri::command]
+fn project_resource_health(project_path: PathBuf) -> Result<ProjectResourceHealth, String> {
+    let project = Project::open(project_path).map_err(error_text)?;
+    let bundle = &project.manifest().resource_bundle;
+    let mut reference_paths = vec![
+        bundle.reference_path.clone(),
+        bundle.reference_fai_path.clone(),
+    ];
+    if let Some(path) = &bundle.reference_gzi_path {
+        reference_paths.push(path.clone());
+    }
+    let mut items = vec![
+        toolchain_health(bundle),
+        file_health(
+            "reference",
+            "Reference FASTA",
+            &format!("{} reference and indexes", bundle.assembly),
+            reference_paths,
+            true,
+            true,
+        ),
+    ];
+    items.push(match &bundle.consequence_annotation {
+        Some(resource) => file_health(
+            "consequence",
+            "Variant consequences",
+            &resource.release,
+            vec![resource.path.clone()],
+            true,
+            false,
+        ),
+        None => file_health(
+            "consequence",
+            "Variant consequences",
+            "",
+            Vec::new(),
+            false,
+            false,
+        ),
+    });
+    items.push(match &bundle.gene_annotation {
+        Some(resource) => file_health(
+            "genes",
+            "Gene navigation",
+            &resource.release,
+            vec![resource.path.clone(), resource.index_path.clone()],
+            true,
+            false,
+        ),
+        None => file_health("genes", "Gene navigation", "", Vec::new(), false, false),
+    });
+    for (id, label, resource) in [
+        ("dbnsfp", "dbNSFP", &bundle.dbnsfp),
+        ("clinvar", "ClinVar", &bundle.clinvar),
+        ("cosmic", "COSMIC", &bundle.cosmic),
+    ] {
+        items.push(file_health(
+            id,
+            label,
+            &resource.release,
+            vec![resource.path.clone(), resource.index_path.clone()],
+            !resource.path.as_os_str().is_empty(),
+            false,
+        ));
+    }
+    Ok(ProjectResourceHealth {
+        bundle_id: bundle.id.clone(),
+        assembly: bundle.assembly.clone(),
+        checked_at: chrono::Utc::now(),
+        status: report_status(&items),
+        items,
+    })
+}
+
+#[tauri::command]
+fn load_workstation_session(project_path: PathBuf) -> Result<Option<serde_json::Value>, String> {
+    Project::open(project_path)
+        .and_then(|project| project.workstation_session())
+        .map_err(error_text)
+}
+
+#[tauri::command]
+fn save_workstation_session(
+    project_path: PathBuf,
+    session: serde_json::Value,
+) -> Result<String, String> {
+    Project::open(project_path)
+        .and_then(|project| project.save_workstation_session(&session))
+        .map_err(error_text)
+}
+
+#[tauri::command]
+fn save_project_copy(
+    project_path: PathBuf,
+    destination_path: PathBuf,
+) -> Result<CreatedProject, String> {
+    let copied = Project::open(project_path)
+        .and_then(|project| project.save_copy(&destination_path))
+        .map_err(error_text)?;
+    Ok(CreatedProject {
+        project_path: destination_path,
+        snapshot: copied.snapshot().map_err(error_text)?,
+    })
+}
+
+#[tauri::command]
 fn focus_region(project_path: PathBuf, context: FocusContext) -> Result<FocusView, String> {
     Project::open(project_path)
         .and_then(|project| project.focus_view(context))
         .map_err(error_text)
+}
+
+#[tauri::command]
+fn search_genes(
+    project_path: PathBuf,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<GeneSearchHit>, String> {
+    let project = Project::open(project_path).map_err(error_text)?;
+    let resource = project
+        .manifest()
+        .resource_bundle
+        .gene_annotation
+        .as_ref()
+        .ok_or_else(|| "This project has no gene annotation resource configured".to_owned())?;
+    let loci = dgw_core::search_gene_index(&resource.index_path, &query, limit.unwrap_or(12))
+        .map_err(error_text)?;
+    loci.into_iter()
+        .map(|mut locus| {
+            locus.contig = dgw_core::vcf::translate_contig_style(
+                &locus.contig,
+                &project.manifest().resource_bundle.contig_style,
+            );
+            let source_variant_count = project
+                .source_variant_count_in_context(&FocusContext {
+                    contig: locus.contig.clone(),
+                    start: locus.start,
+                    end: locus.end,
+                })
+                .map_err(error_text)?;
+            Ok(GeneSearchHit {
+                locus,
+                source_variant_count,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -446,22 +1077,37 @@ fn track_deck(
         .into_iter()
         .map(|track| {
             let edits = project.edits_for_track(&track.id).map_err(error_text)?;
-            let mut variants = match &context {
-                Some(context) => project
-                    .effective_variants_for_track_in_context(&track.id, context)
-                    .map_err(error_text)?,
+            let (variants, source_variant_total, variants_truncated) = match &context {
+                Some(context) => {
+                    let total = project
+                        .source_variant_count_in_context(context)
+                        .map_err(error_text)?;
+                    if total > dgw_core::MAX_TRACK_REGION_VARIANTS as u64 {
+                        (Vec::new(), total, true)
+                    } else {
+                        (
+                            project
+                                .effective_variants_for_track_in_context(&track.id, context)
+                                .map_err(error_text)?,
+                            total,
+                            false,
+                        )
+                    }
+                }
                 None => {
-                    project
+                    let page = project
                         .variant_page(&track.id, 0, dgw_core::VARIANT_PAGE_SIZE)
-                        .map_err(error_text)?
-                        .variants
+                        .map_err(error_text)?;
+                    let truncated = page.has_more;
+                    (page.variants, page.total, truncated)
                 }
             };
-            variants.truncate(dgw_core::MAX_TRACK_REGION_VARIANTS);
             Ok(GenomeTrackLane {
                 track,
                 edits,
                 variants,
+                source_variant_total,
+                variants_truncated,
             })
         })
         .collect()
@@ -528,6 +1174,16 @@ fn resolve_variant_selection(
 }
 
 #[tauri::command]
+fn transport_target(
+    project_path: PathBuf,
+    request: TransportTargetRequest,
+) -> Result<TransportTargetResult, String> {
+    Project::open(project_path)
+        .and_then(|project| project.transport_target(&request))
+        .map_err(error_text)
+}
+
+#[tauri::command]
 fn save_workspace(
     project_path: PathBuf,
     workspace: WorkspaceSnapshot,
@@ -577,6 +1233,17 @@ fn delete_track(project_path: PathBuf, track_id: String) -> Result<ProjectSnapsh
 }
 
 #[tauri::command]
+fn track_profile_input_fingerprint(
+    project_path: PathBuf,
+    track_id: String,
+    device_ids: Vec<String>,
+) -> Result<String, String> {
+    Project::open(project_path)
+        .and_then(|project| project.track_profile_input_fingerprint(&track_id, &device_ids))
+        .map_err(error_text)
+}
+
+#[tauri::command]
 fn consolidate_track(project_path: PathBuf, track_id: String) -> Result<ProjectSnapshot, String> {
     let project = Project::open(project_path).map_err(error_text)?;
     project.consolidate_track(&track_id).map_err(error_text)?;
@@ -584,68 +1251,99 @@ fn consolidate_track(project_path: PathBuf, track_id: String) -> Result<ProjectS
 }
 
 #[tauri::command]
-fn run_optimizer(
+async fn run_optimizer(
     state: tauri::State<'_, AppState>,
     project_path: PathBuf,
     track_id: String,
     focus: FocusContext,
     request: OptimizerRequest,
 ) -> Result<OptimizerRunResult, String> {
-    if request.selected_variants.is_empty() {
-        return Err("Select at least one active allele before running Genome Optimizer.".into());
-    }
-    let project = Project::open(project_path).map_err(error_text)?;
-    let current = project
-        .effective_variants_for_track_at_loci(&track_id, &request.selected_variants)
-        .map_err(error_text)?;
-    let plan = match request.mode {
-        OptimizerMode::Conservative => {
-            let source = project
-                .source_variants_at_loci(&request.selected_variants)
-                .map_err(error_text)?;
-            let evaluated = evaluate_conservative_alleles(
-                &state.evaluation,
-                &project,
-                &current,
-                &source,
-                &request,
-            )?;
-            plan_optimizer_with_evidence(&current, &source, &focus, &request, &evaluated)
-                .map_err(error_text)?
+    let evaluation = Arc::clone(&state.evaluation);
+    tauri::async_runtime::spawn_blocking(move || {
+        let started_at = chrono::Utc::now();
+        if request.selected_variants.is_empty() {
+            return Err(
+                "Select at least one active allele before running Genome Optimizer.".into(),
+            );
         }
-        OptimizerMode::Saturation => {
-            let evaluated = evaluate_saturation_candidates(&state.evaluation, &project, &request)?;
-            dgw_core::plan_saturation_optimizer(&current, &focus, &request, &evaluated)
-                .map_err(error_text)?
-        }
-    };
-    let note = format!(
-        "Genome Optimizer · {:?} · {:?} {:?} · additive per-allele score",
-        request.mode, request.direction, request.objective
-    );
-    let batch: Vec<_> = plan
-        .proposals
-        .iter()
-        .map(|proposal| {
-            (
-                proposal.haplotype,
-                proposal.edit.clone(),
-                Some(note.clone()),
-            )
+        let project = Project::open(project_path).map_err(error_text)?;
+        let input_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
+        let current = project
+            .effective_variants_for_track_at_loci(&track_id, &request.selected_variants)
+            .map_err(error_text)?;
+        let plan = match request.mode {
+            OptimizerMode::Conservative => {
+                let source = project
+                    .source_variants_at_loci(&request.selected_variants)
+                    .map_err(error_text)?;
+                let evaluated = evaluate_conservative_alleles(
+                    &evaluation,
+                    &project,
+                    &current,
+                    &source,
+                    &request,
+                )?;
+                plan_optimizer_with_evidence(&current, &source, &focus, &request, &evaluated)
+                    .map_err(error_text)?
+            }
+            OptimizerMode::Saturation => {
+                let evaluated = evaluate_saturation_candidates(&evaluation, &project, &request)?;
+                dgw_core::plan_saturation_optimizer(&current, &focus, &request, &evaluated)
+                    .map_err(error_text)?
+            }
+        };
+        let note = format!(
+            "Genome Optimizer · {:?} · {:?} {:?} · additive per-allele score",
+            request.mode, request.direction, request.objective
+        );
+        let batch: Vec<_> = plan
+            .proposals
+            .iter()
+            .map(|proposal| {
+                (
+                    proposal.haplotype,
+                    proposal.edit.clone(),
+                    Some(note.clone()),
+                )
+            })
+            .collect();
+        let generated_edit_ids = project
+            .apply_edits_to_track(&track_id, &batch)
+            .map_err(error_text)?
+            .into_iter()
+            .filter_map(|state| state.edit_id)
+            .collect::<Vec<_>>();
+        save_completed_device_run(
+            &project,
+            "org.dgw.builtin.genome-optimizer",
+            "genomeOptimizer",
+            &track_id,
+            &input_state_id,
+            serde_json::json!({"selectedVariants": &request.selected_variants}),
+            serde_json::to_value(&request).map_err(error_text)?,
+            serde_json::json!({
+                "consideredVariants": plan.considered_variants,
+                "eligibleCandidates": plan.eligible_candidates,
+                "excludedCandidates": plan.exclusions.len(),
+                "changedPositions": plan.proposals.len(),
+                "scoreBefore": plan.score_before,
+                "scoreAfter": plan.score_after,
+                "scoreDescription": &plan.score_description,
+                "noOpReason": &plan.no_op_reason,
+                "limitation": &plan.limitation,
+            }),
+            generated_edit_ids.clone(),
+            started_at,
+        )?;
+        let snapshot = project.snapshot().map_err(error_text)?;
+        Ok(OptimizerRunResult {
+            plan,
+            generated_edit_ids,
+            snapshot,
         })
-        .collect();
-    let generated_edit_ids = project
-        .apply_edits_to_track(&track_id, &batch)
-        .map_err(error_text)?
-        .into_iter()
-        .filter_map(|state| state.edit_id)
-        .collect();
-    let snapshot = project.snapshot().map_err(error_text)?;
-    Ok(OptimizerRunResult {
-        plan,
-        generated_edit_ids,
-        snapshot,
     })
+    .await
+    .map_err(|error| format!("Genome Optimizer worker failed: {error}"))?
 }
 
 fn evaluate_conservative_alleles(
@@ -655,18 +1353,19 @@ fn evaluate_conservative_alleles(
     source: &[EffectiveVariant],
     request: &OptimizerRequest,
 ) -> Result<Vec<OptimizerAlleleEvidenceInput>, String> {
-    const SNPEFF: &str = "org.dgw.builtin.snpeff";
     const CLINVAR: &str = "org.dgw.builtin.clinvar";
-    let need_snpeff = request.objective == OptimizerObjective::PredictedImpactBurden
+    let need_consequence = request.objective == OptimizerObjective::PredictedImpactBurden
         && request.weights.impact > 0.0;
     let need_clinvar_guard = request.direction == OptimizerDirection::Maximize;
-    if need_snpeff
+    if need_consequence
         && !request
             .evidence_device_ids
             .iter()
-            .any(|device_id| device_id == SNPEFF)
+            .any(|device_id| device_id == CONSEQUENCE_DEVICE_ID)
     {
-        return Err("Weighted annotation burden requires an applied, active SnpEff device.".into());
+        return Err(
+            "Weighted annotation burden requires applied, active Variant Consequences.".into(),
+        );
     }
     if need_clinvar_guard
         && !request
@@ -691,12 +1390,12 @@ fn evaluate_conservative_alleles(
     }
     let mut evaluated = Vec::with_capacity(keys.len());
     for key in keys.into_values() {
-        let snpeff = if need_snpeff {
+        let consequence = if need_consequence {
             evaluation
-                .evaluate_device(project, &key, SNPEFF)
+                .evaluate_device(project, &key, CONSEQUENCE_DEVICE_ID)
                 .map_err(error_text)?
         } else {
-            not_computed_evidence("SnpEff")
+            not_computed_evidence("Variant Consequences")
         };
         let clinvar = if need_clinvar_guard && source_keys.contains(&key.stable_key()) {
             evaluation
@@ -707,7 +1406,7 @@ fn evaluate_conservative_alleles(
         };
         evaluated.push(OptimizerAlleleEvidenceInput {
             variant: key,
-            snpeff,
+            consequence,
             clinvar,
         });
     }
@@ -728,108 +1427,9 @@ fn evaluate_saturation_candidates(
     project: &Project,
     request: &OptimizerRequest,
 ) -> Result<Vec<SaturationAlleleInput>, String> {
-    const SNPEFF: &str = "org.dgw.builtin.snpeff";
-    const CLINVAR: &str = "org.dgw.builtin.clinvar";
-    if !request
-        .evidence_device_ids
-        .iter()
-        .any(|device_id| device_id == SNPEFF)
-    {
-        return Err("Saturation mode requires an applied, active SnpEff device for comparable candidate scoring.".into());
-    }
-    if !request
-        .evidence_device_ids
-        .iter()
-        .any(|device_id| device_id == CLINVAR)
-    {
-        return Err("Saturation mode requires an applied, active ClinVar device for the fixed Pathogenic/Likely pathogenic guard.".into());
-    }
-
-    let mut evaluated = Vec::new();
-    for selected in &request.selected_variants {
-        if selected.reference.len() != 1
-            || selected.alternate.len() != 1
-            || !matches!(
-                selected.reference.as_bytes()[0].to_ascii_uppercase(),
-                b'A' | b'C' | b'G' | b'T'
-            )
-        {
-            continue;
-        }
-        let reference = selected.reference.as_bytes()[0].to_ascii_uppercase();
-        for alternate in [b'A', b'C', b'G', b'T']
-            .into_iter()
-            .filter(|alternate| *alternate != reference)
-        {
-            let candidate = dgw_core::VariantKey {
-                assembly: selected.assembly.clone(),
-                contig: selected.contig.clone(),
-                position: selected.position,
-                reference: char::from(reference).to_string(),
-                alternate: char::from(alternate).to_string(),
-            };
-            let results: BTreeMap<String, EvidenceResult> = BTreeMap::from([
-                (
-                    SNPEFF.into(),
-                    evaluation
-                        .evaluate_device(project, &candidate, SNPEFF)
-                        .map_err(error_text)?,
-                ),
-                (
-                    CLINVAR.into(),
-                    evaluation
-                        .evaluate_device(project, &candidate, CLINVAR)
-                        .map_err(error_text)?,
-                ),
-            ]);
-            if let Some(snpeff) = results.get(SNPEFF) {
-                if matches!(
-                    snpeff.status,
-                    EvidenceStatus::Error | EvidenceStatus::ResourceUnavailable
-                ) {
-                    return Err(format!(
-                        "SnpEff could not evaluate saturation candidate {}: {}",
-                        candidate.display(),
-                        snpeff
-                            .message
-                            .as_deref()
-                            .unwrap_or("resource or annotation failure")
-                    ));
-                }
-            }
-            let evidence_statuses = results
-                .iter()
-                .map(|(device_id, result)| {
-                    (
-                        device_id.clone(),
-                        evidence_status_label(&result.status).into(),
-                    )
-                })
-                .collect();
-            let exact_evidence_sources = results
-                .iter()
-                .filter(|(device_id, result)| {
-                    device_id.as_str() != SNPEFF && result.status == EvidenceStatus::Found
-                })
-                .map(|(_, result)| result.source.clone())
-                .collect();
-            evaluated.push(SaturationAlleleInput {
-                source_variant: selected.clone(),
-                candidate_variant: candidate,
-                snpeff: results
-                    .get(SNPEFF)
-                    .cloned()
-                    .unwrap_or_else(|| not_computed_evidence("SnpEff")),
-                clinvar: results
-                    .get(CLINVAR)
-                    .cloned()
-                    .unwrap_or_else(|| not_computed_evidence("ClinVar")),
-                evidence_statuses,
-                exact_evidence_sources,
-            });
-        }
-    }
-    Ok(evaluated)
+    evaluation
+        .evaluate_saturation_candidates(project, request)
+        .map_err(error_text)
 }
 
 fn evidence_status_label(status: &EvidenceStatus) -> &'static str {
@@ -873,11 +1473,13 @@ fn start_randomizer_preview_job(
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
     let project = Project::open(&project_path).map_err(error_text)?;
+    let source_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
     let now = chrono::Utc::now();
     let request_payload = serde_json::json!({
         "request": &request,
         "selection": &selection,
         "selectionLimit": selection_limit,
+        "sourceStateId": source_state_id,
     });
     let mut job = BackgroundJob {
         id: Uuid::new_v4().to_string(),
@@ -1044,6 +1646,774 @@ fn start_randomizer_preview_job(
 }
 
 #[tauri::command]
+fn start_optimizer_job(
+    state: tauri::State<'_, AppState>,
+    project_path: PathBuf,
+    track_id: String,
+    focus: FocusContext,
+    request: OptimizerRequest,
+    selection: Option<VariantSelection>,
+    selection_limit: Option<u32>,
+    worker_threads: Option<u16>,
+) -> Result<BackgroundJob, String> {
+    let project = Project::open(&project_path).map_err(error_text)?;
+    let track = project.track(&track_id).map_err(error_text)?;
+    if track.read_only {
+        return Err("Duplicate the read-only source track before running Genome Optimizer".into());
+    }
+    let source_state_id = track.head_state_id.clone();
+    let now = chrono::Utc::now();
+    let mut job = BackgroundJob {
+        id: Uuid::new_v4().to_string(),
+        operation: "genomeOptimizer".into(),
+        device_id: "org.dgw.builtin.genome-optimizer".into(),
+        track_id: track_id.clone(),
+        status: BackgroundJobStatus::Queued,
+        progress: 0,
+        stage: "queued".into(),
+        message: "Waiting for the background compute slot".into(),
+        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        request: serde_json::json!({
+            "optimizer": &request,
+            "selection": &selection,
+            "selectionLimit": selection_limit,
+            "sourceStateId": &source_state_id,
+        }),
+        result: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    project.save_background_job(&job).map_err(error_text)?;
+
+    let returned_job = job.clone();
+    let job_lock = Arc::clone(&state.job_lock);
+    let cancelled_jobs = Arc::clone(&state.cancelled_jobs);
+    let evaluation = Arc::clone(&state.evaluation);
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = match job_lock.lock() {
+            Ok(lock) => lock,
+            Err(error) => {
+                let message = format!("background compute lock failed: {error}");
+                job.error = Some(message.clone());
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Failed,
+                    100,
+                    "failed",
+                    message,
+                );
+                return;
+            }
+        };
+        let _lock = lock;
+        let job_id = job.id.clone();
+        let cancelled = || job_was_cancelled(&cancelled_jobs, &job_id);
+        let outcome = (|| -> Result<OptimizerBackgroundResult, String> {
+            if cancelled() {
+                return Err("__cancelled__".into());
+            }
+            update_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                3,
+                "selection",
+                "Resolving the selected genome positions",
+            )?;
+            let request = resolve_optimizer_request(
+                &project,
+                &track_id,
+                request,
+                selection,
+                selection_limit,
+            )?;
+            let has_consequence = request
+                .evidence_device_ids
+                .iter()
+                .any(|device_id| device_id == CONSEQUENCE_DEVICE_ID);
+            let has_clinvar = request
+                .evidence_device_ids
+                .iter()
+                .any(|device_id| device_id == "org.dgw.builtin.clinvar");
+            if request.mode == OptimizerMode::Saturation && (!has_consequence || !has_clinvar) {
+                return Err(
+                    "Saturation requires applied, active Variant Consequences and ClinVar devices"
+                        .into(),
+                );
+            }
+            if request.mode == OptimizerMode::Conservative
+                && request.objective == OptimizerObjective::PredictedImpactBurden
+                && request.weights.impact > 0.0
+                && !has_consequence
+            {
+                return Err(
+                    "Weighted annotation burden requires applied, active Variant Consequences"
+                        .into(),
+                );
+            }
+            if request.mode == OptimizerMode::Conservative
+                && request.direction == OptimizerDirection::Maximize
+                && !has_clinvar
+            {
+                return Err(
+                    "Conservative Maximize requires an applied, active ClinVar guard".into(),
+                );
+            }
+            let considered_positions = request.selected_variants.len() as u32;
+            let mut groups = Vec::new();
+            let mut score_before = 0.0;
+            let mut evaluated_candidates = 0_u32;
+            let mut excluded_positions = 0_u32;
+            let mut score_description = match request.mode {
+                OptimizerMode::Saturation => "Comparable normalized transcript-consequence impact per allele copy across all non-reference SNV bases at the selected positions.".into(),
+                OptimizerMode::Conservative => "Number of alternate allele copies in the selected scope; this measures distance from the reference, not biological burden.".into(),
+            };
+            let mut limitation = dgw_core::ADDITIVE_SCORE_LIMITATION.to_owned();
+
+            match request.mode {
+                OptimizerMode::Saturation => {
+                    const POSITION_CHUNK_SIZE: usize = 100_000;
+                    let chunk_count = request
+                        .selected_variants
+                        .len()
+                        .div_ceil(POSITION_CHUNK_SIZE)
+                        .max(1);
+                    for (chunk_index, selected_chunk) in request
+                        .selected_variants
+                        .chunks(POSITION_CHUNK_SIZE)
+                        .enumerate()
+                    {
+                        if cancelled() {
+                            return Err("__cancelled__".into());
+                        }
+                        let current = project
+                            .effective_variants_for_track_at_loci(&track_id, selected_chunk)
+                            .map_err(error_text)?;
+                        let candidates = optimizer_candidate_variants(selected_chunk);
+                        evaluated_candidates = evaluated_candidates
+                            .saturating_add(candidates.len().min(u32::MAX as usize) as u32);
+                        let chunk_base = 8.0 + (chunk_index as f64 / chunk_count as f64) * 74.0;
+                        let chunk_span = 74.0 / chunk_count as f64;
+                        update_job(
+                            &project,
+                            &mut job,
+                            BackgroundJobStatus::Running,
+                            chunk_base.round() as u8,
+                            "consequences",
+                            format!(
+                                "Predicting consequence batch {} of {} · {} alleles",
+                                chunk_index + 1,
+                                chunk_count,
+                                candidates.len()
+                            ),
+                        )?;
+                        let consequence = evaluation
+                            .evaluate_device_signals(
+                                &project,
+                                &candidates,
+                                CONSEQUENCE_DEVICE_ID,
+                                |processed, total| {
+                                    let fraction = if total == 0 {
+                                        1.0
+                                    } else {
+                                        processed as f64 / total as f64
+                                    };
+                                    let progress = chunk_base + chunk_span * 0.58 * fraction;
+                                    let _ = update_job(
+                                        &project,
+                                        &mut job,
+                                        BackgroundJobStatus::Running,
+                                        progress.round() as u8,
+                                        "consequences",
+                                        format!(
+                                            "Variant Consequences batch {} of {} · {}/{} candidate alleles",
+                                            chunk_index + 1,
+                                            chunk_count,
+                                            processed,
+                                            total
+                                        ),
+                                    );
+                                    Ok(())
+                                },
+                            )
+                            .map_err(error_text)?;
+                        if cancelled() {
+                            return Err("__cancelled__".into());
+                        }
+                        let clinvar = evaluation
+                            .evaluate_device_signals(
+                                &project,
+                                &candidates,
+                                "org.dgw.builtin.clinvar",
+                                |processed, total| {
+                                    let fraction = if total == 0 {
+                                        1.0
+                                    } else {
+                                        processed as f64 / total as f64
+                                    };
+                                    let progress = chunk_base
+                                        + chunk_span * (0.58 + 0.30 * fraction);
+                                    let _ = update_job(
+                                        &project,
+                                        &mut job,
+                                        BackgroundJobStatus::Running,
+                                        progress.round() as u8,
+                                        "clinvar",
+                                        format!(
+                                            "ClinVar guard batch {} of {} · {}/{} candidate alleles",
+                                            chunk_index + 1,
+                                            chunk_count,
+                                            processed,
+                                            total
+                                        ),
+                                    );
+                                    Ok(())
+                                },
+                            )
+                            .map_err(error_text)?;
+                        let mut evaluated = Vec::with_capacity(candidates.len());
+                        for source in selected_chunk {
+                            for candidate in candidates.iter().filter(|candidate| {
+                                candidate.assembly == source.assembly
+                                    && candidate.contig == source.contig
+                                    && candidate.position == source.position
+                                    && candidate.reference.eq_ignore_ascii_case(&source.reference)
+                            }) {
+                                let consequence_signal =
+                                    consequence.get(candidate).ok_or_else(|| {
+                                        format!(
+                                            "Variant Consequences omitted candidate {}",
+                                            candidate.display()
+                                        )
+                                    })?;
+                                let clinvar_signal = clinvar.get(candidate).ok_or_else(|| {
+                                    format!("ClinVar omitted candidate {}", candidate.display())
+                                })?;
+                                let clinvar_evidence = evidence_from_batch_signal(
+                                    &project.manifest().resource_bundle.clinvar.release,
+                                    clinvar_signal,
+                                );
+                                evaluated.push(SaturationAlleleInput {
+                                    source_variant: source.clone(),
+                                    candidate_variant: candidate.clone(),
+                                    consequence: evidence_from_batch_signal(
+                                        "Variant Consequences",
+                                        consequence_signal,
+                                    ),
+                                    clinvar: clinvar_evidence.clone(),
+                                    evidence_statuses: BTreeMap::from([
+                                        (
+                                            CONSEQUENCE_DEVICE_ID.into(),
+                                            evidence_status_label(&consequence_signal.status)
+                                                .into(),
+                                        ),
+                                        (
+                                            "org.dgw.builtin.clinvar".into(),
+                                            evidence_status_label(&clinvar_signal.status).into(),
+                                        ),
+                                    ]),
+                                    exact_evidence_sources: (clinvar_signal.status
+                                        == EvidenceStatus::Found)
+                                        .then(|| clinvar_evidence.source.clone())
+                                        .into_iter()
+                                        .collect(),
+                                });
+                            }
+                        }
+                        let mut chunk_request = request.clone();
+                        chunk_request.selected_variants = selected_chunk.to_vec();
+                        chunk_request.max_edits = selected_chunk.len() as u32;
+                        let plan = dgw_core::plan_saturation_optimizer(
+                            &current,
+                            &focus,
+                            &chunk_request,
+                            &evaluated,
+                        )
+                        .map_err(error_text)?;
+                        score_before += plan.score_before;
+                        excluded_positions = excluded_positions
+                            .saturating_add(plan.exclusions.len().min(u32::MAX as usize) as u32);
+                        score_description = plan.score_description.clone();
+                        limitation = plan.limitation.clone();
+                        groups.extend(optimizer_groups_from_plan(&plan));
+                        update_job(
+                            &project,
+                            &mut job,
+                            BackgroundJobStatus::Running,
+                            (chunk_base + chunk_span).round() as u8,
+                            "reduce",
+                            format!(
+                                "Reduced candidate batch {} of {} to per-position winners",
+                                chunk_index + 1,
+                                chunk_count
+                            ),
+                        )?;
+                    }
+                }
+                OptimizerMode::Conservative => {
+                    update_job(
+                        &project,
+                        &mut job,
+                        BackgroundJobStatus::Running,
+                        12,
+                        "alleles",
+                        "Reading current and source allele-copy states",
+                    )?;
+                    let current = project
+                        .effective_variants_for_track_at_loci(&track_id, &request.selected_variants)
+                        .map_err(error_text)?;
+                    let source = project
+                        .source_variants_at_loci(&request.selected_variants)
+                        .map_err(error_text)?;
+                    let mut keys = BTreeMap::new();
+                    for variant in current.iter().chain(source.iter()) {
+                        keys.entry(variant.key.stable_key())
+                            .or_insert_with(|| variant.key.clone());
+                    }
+                    let keys: Vec<_> = keys.into_values().collect();
+                    let need_consequence = request.objective
+                        == OptimizerObjective::PredictedImpactBurden
+                        && request.weights.impact > 0.0;
+                    let need_clinvar = request.direction == OptimizerDirection::Maximize;
+                    let consequence = if need_consequence {
+                        evaluation
+                            .evaluate_device_signals(
+                                &project,
+                                &keys,
+                                CONSEQUENCE_DEVICE_ID,
+                                |processed, total| {
+                                    let progress = 18
+                                        + if total == 0 {
+                                            24
+                                        } else {
+                                            (processed * 24 / total) as u8
+                                        };
+                                    let _ = update_job(
+                                        &project,
+                                        &mut job,
+                                        BackgroundJobStatus::Running,
+                                        progress,
+                                        "consequences",
+                                        format!(
+                                            "Variant Consequences · {processed}/{total} alleles"
+                                        ),
+                                    );
+                                    Ok(())
+                                },
+                            )
+                            .map_err(error_text)?
+                    } else {
+                        BTreeMap::new()
+                    };
+                    if cancelled() {
+                        return Err("__cancelled__".into());
+                    }
+                    let source_keys: Vec<_> = source.iter().map(|item| item.key.clone()).collect();
+                    let clinvar = if need_clinvar {
+                        evaluation
+                            .evaluate_device_signals(
+                                &project,
+                                &source_keys,
+                                "org.dgw.builtin.clinvar",
+                                |processed, total| {
+                                    let progress = 45
+                                        + if total == 0 {
+                                            25
+                                        } else {
+                                            (processed * 25 / total) as u8
+                                        };
+                                    let _ = update_job(
+                                        &project,
+                                        &mut job,
+                                        BackgroundJobStatus::Running,
+                                        progress,
+                                        "clinvar",
+                                        format!("ClinVar guard · {processed}/{total} alleles"),
+                                    );
+                                    Ok(())
+                                },
+                            )
+                            .map_err(error_text)?
+                    } else {
+                        BTreeMap::new()
+                    };
+                    evaluated_candidates = keys.len().min(u32::MAX as usize) as u32;
+                    let evaluated: Vec<_> = keys
+                        .iter()
+                        .map(|key| OptimizerAlleleEvidenceInput {
+                            variant: key.clone(),
+                            consequence: consequence
+                                .get(key)
+                                .map(|signal| {
+                                    evidence_from_batch_signal("Variant Consequences", signal)
+                                })
+                                .unwrap_or_else(|| not_computed_evidence("Variant Consequences")),
+                            clinvar: clinvar
+                                .get(key)
+                                .map(|signal| {
+                                    evidence_from_batch_signal(
+                                        &project.manifest().resource_bundle.clinvar.release,
+                                        signal,
+                                    )
+                                })
+                                .unwrap_or_else(|| not_computed_evidence("ClinVar")),
+                        })
+                        .collect();
+                    update_job(
+                        &project,
+                        &mut job,
+                        BackgroundJobStatus::Running,
+                        76,
+                        "reduce",
+                        "Ranking conservative source-allele candidates",
+                    )?;
+                    let plan = plan_optimizer_with_evidence(
+                        &current, &source, &focus, &request, &evaluated,
+                    )
+                    .map_err(error_text)?;
+                    score_before = plan.score_before;
+                    excluded_positions = plan.exclusions.len().min(u32::MAX as usize) as u32;
+                    score_description = plan.score_description.clone();
+                    limitation = plan.limitation.clone();
+                    groups.extend(optimizer_groups_from_plan(&plan));
+                }
+            }
+
+            if cancelled() {
+                return Err("__cancelled__".into());
+            }
+            groups.sort_by(|left, right| {
+                right
+                    .improvement
+                    .partial_cmp(&left.improvement)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.source_variant.cmp(&right.source_variant))
+            });
+            let improving_positions = groups.len().min(u32::MAX as usize) as u32;
+            let selected_groups: Vec<_> = groups
+                .into_iter()
+                .take(request.max_edits as usize)
+                .collect();
+            let changed_positions = selected_groups.len() as u32;
+            let unchanged_or_tied_positions = considered_positions
+                .saturating_sub(excluded_positions)
+                .saturating_sub(improving_positions);
+            let deferred_by_change_limit = improving_positions.saturating_sub(changed_positions);
+            let score_delta: f64 = selected_groups.iter().map(|group| group.score_delta).sum();
+            let changes: Vec<_> = selected_groups
+                .into_iter()
+                .flat_map(|group| group.changes)
+                .collect();
+            let generated_edits = changes.len().min(u32::MAX as usize) as u32;
+            let no_op_reason = changes.is_empty().then(|| {
+                "No selected position had an eligible allele that improved the requested objective."
+                    .to_owned()
+            });
+            let compound_layer_id = if changes.is_empty() {
+                None
+            } else {
+                update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Running,
+                    90,
+                    "staging",
+                    format!(
+                        "Storing {} changes across {} optimized positions",
+                        generated_edits, changed_positions
+                    ),
+                )?;
+                let note = format!(
+                    "Genome Optimizer · {:?} · {:?} {:?} · {} positions",
+                    request.mode, request.direction, request.objective, changed_positions
+                );
+                Some(
+                    project
+                        .stage_compound_mutation_layer(
+                            &track_id,
+                            &source_state_id,
+                            "org.dgw.builtin.genome-optimizer",
+                            changed_positions,
+                            &changes,
+                            Some(note),
+                        )
+                        .map_err(error_text)?
+                        .id,
+                )
+            };
+            Ok(OptimizerBackgroundResult {
+                mode: request.mode,
+                direction: request.direction,
+                considered_positions,
+                evaluated_candidates,
+                excluded_positions,
+                improving_positions,
+                unchanged_or_tied_positions,
+                deferred_by_change_limit,
+                changed_positions,
+                generated_edits,
+                score_before,
+                score_after: score_before + score_delta,
+                score_description,
+                limitation,
+                no_op_reason,
+                candidate_comparisons_retained: 0,
+                compound_layer_id,
+            })
+        })();
+
+        match outcome {
+            Ok(result) => {
+                let message = result.no_op_reason.clone().unwrap_or_else(|| {
+                    format!(
+                        "Optimizer prepared {} changes across {} positions",
+                        result.generated_edits, result.changed_positions
+                    )
+                });
+                job.result = serde_json::to_value(result).ok();
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Completed,
+                    100,
+                    "completed",
+                    message,
+                );
+            }
+            Err(error) if error == "__cancelled__" => {
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Cancelled,
+                    100,
+                    "cancelled",
+                    "Genome Optimizer job cancelled",
+                );
+            }
+            Err(error) => {
+                job.error = Some(error.clone());
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Failed,
+                    100,
+                    "failed",
+                    error,
+                );
+            }
+        }
+    });
+    Ok(returned_job)
+}
+
+#[tauri::command]
+fn start_track_morph_preview_job(
+    state: tauri::State<'_, AppState>,
+    project_path: PathBuf,
+    track_id: String,
+    target_track_id: String,
+    request: TrackMorphRequest,
+    worker_threads: Option<u16>,
+) -> Result<BackgroundJob, String> {
+    if track_id == target_track_id {
+        return Err("Genome Morph requires another track as its target".into());
+    }
+    let project = Project::open(&project_path).map_err(error_text)?;
+    let source_track = project.track(&track_id).map_err(error_text)?;
+    if source_track.read_only {
+        return Err("Duplicate the read-only source track before applying Genome Morph".into());
+    }
+    let target_track = project.track(&target_track_id).map_err(error_text)?;
+    let now = chrono::Utc::now();
+    let mut job = BackgroundJob {
+        id: Uuid::new_v4().to_string(),
+        operation: "trackMorphPreview".into(),
+        device_id: "org.dgw.builtin.genome-morph".into(),
+        track_id: track_id.clone(),
+        status: BackgroundJobStatus::Queued,
+        progress: 0,
+        stage: "queued".into(),
+        message: "Waiting for the background compute slot".into(),
+        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        request: serde_json::json!({
+            "sourceStateId": &source_track.head_state_id,
+            "targetTrackId": &target_track_id,
+            "targetStateId": &target_track.head_state_id,
+            "morph": &request,
+        }),
+        result: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    project.save_background_job(&job).map_err(error_text)?;
+
+    let returned_job = job.clone();
+    let job_lock = Arc::clone(&state.job_lock);
+    let cancelled_jobs = Arc::clone(&state.cancelled_jobs);
+    tauri::async_runtime::spawn_blocking(move || {
+        let lock = match job_lock.lock() {
+            Ok(lock) => lock,
+            Err(error) => {
+                job.error = Some(format!("background compute lock failed: {error}"));
+                let message = job.error.clone().unwrap_or_default();
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Failed,
+                    100,
+                    "failed",
+                    message,
+                );
+                return;
+            }
+        };
+        let _lock = lock;
+        let job_id = job.id.clone();
+        let cancelled = || job_was_cancelled(&cancelled_jobs, &job_id);
+        let outcome = (|| -> Result<TrackMorphPreviewResult, String> {
+            if cancelled() {
+                return Err("__cancelled__".into());
+            }
+            update_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                10,
+                "source",
+                format!("Reading effective state for {}", source_track.name),
+            )?;
+            let source = project
+                .effective_variants_for_track(&track_id)
+                .map_err(error_text)?;
+
+            if cancelled() {
+                return Err("__cancelled__".into());
+            }
+            update_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                35,
+                "target",
+                format!("Reading effective state for {}", target_track.name),
+            )?;
+            let target = project
+                .effective_variants_for_track(&target_track_id)
+                .map_err(error_text)?;
+
+            if cancelled() {
+                return Err("__cancelled__".into());
+            }
+            update_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                60,
+                "difference",
+                format!(
+                    "Comparing {} and {} effective allele states",
+                    source_track.name, target_track.name
+                ),
+            )?;
+            let plan = plan_track_morph(&source, &target, &request).map_err(error_text)?;
+            let mut compound_layer_id = None;
+            if !plan.changes.is_empty() {
+                if cancelled() {
+                    return Err("__cancelled__".into());
+                }
+                update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Running,
+                    82,
+                    "staging",
+                    format!(
+                        "Storing {} allele changes across {} positions",
+                        plan.generated_edits, plan.selected_positions
+                    ),
+                )?;
+                let note = format!(
+                    "Genome Morph · {} → {} · {}% · {} · {} positions",
+                    source_track.name,
+                    target_track.name,
+                    request.amount,
+                    request.ordering.label(),
+                    plan.selected_positions
+                );
+                let layer = project
+                    .stage_compound_mutation_layer(
+                        &track_id,
+                        &source_track.head_state_id,
+                        "org.dgw.builtin.genome-morph",
+                        plan.selected_positions,
+                        &plan.changes,
+                        Some(note),
+                    )
+                    .map_err(error_text)?;
+                compound_layer_id = Some(layer.id);
+            }
+            Ok(TrackMorphPreviewResult {
+                source_track_id: track_id.clone(),
+                source_state_id: source_track.head_state_id.clone(),
+                target_track_id: target_track_id.clone(),
+                target_state_id: target_track.head_state_id.clone(),
+                amount: request.amount,
+                differing_positions: plan.differing_positions,
+                differing_alleles: plan.differing_alleles,
+                selected_positions: plan.selected_positions,
+                generated_edits: plan.generated_edits,
+                no_op_reason: plan.no_op_reason,
+                limitation: plan.limitation,
+                compound_layer_id,
+            })
+        })();
+
+        match outcome {
+            Ok(result) => {
+                let message = format!(
+                    "Morph preview prepared {} changes across {} positions",
+                    result.generated_edits, result.selected_positions
+                );
+                job.result = serde_json::to_value(result).ok();
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Completed,
+                    100,
+                    "completed",
+                    message,
+                );
+            }
+            Err(error) if error == "__cancelled__" => {
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Cancelled,
+                    100,
+                    "cancelled",
+                    "Genome Morph preview cancelled",
+                );
+            }
+            Err(error) => {
+                job.error = Some(error.clone());
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Failed,
+                    100,
+                    "failed",
+                    error,
+                );
+            }
+        }
+    });
+    Ok(returned_job)
+}
+
+#[tauri::command]
 fn background_job(project_path: PathBuf, job_id: String) -> Result<BackgroundJob, String> {
     Project::open(project_path)
         .and_then(|project| project.background_job(&job_id))
@@ -1057,6 +2427,23 @@ fn list_background_jobs(
 ) -> Result<Vec<BackgroundJob>, String> {
     Project::open(project_path)
         .and_then(|project| project.list_background_jobs(limit.unwrap_or(50)))
+        .map_err(error_text)
+}
+
+#[tauri::command]
+fn list_device_runs(
+    project_path: PathBuf,
+    limit: Option<u32>,
+) -> Result<Vec<DeviceRunRecord>, String> {
+    Project::open(project_path)
+        .and_then(|project| project.list_device_runs(limit.unwrap_or(100)))
+        .map_err(error_text)
+}
+
+#[tauri::command]
+fn delete_finished_background_jobs(project_path: PathBuf) -> Result<u64, String> {
+    Project::open(project_path)
+        .and_then(|project| project.delete_finished_background_jobs())
         .map_err(error_text)
 }
 
@@ -1100,24 +2487,16 @@ fn start_track_evidence_profile_job(
     device_ids: Vec<String>,
     worker_threads: Option<u16>,
 ) -> Result<BackgroundJob, String> {
-    const SUPPORTED: [&str; 4] = [
-        "org.dgw.builtin.snpeff",
-        "org.dgw.builtin.dbnsfp",
-        "org.dgw.builtin.clinvar",
-        "org.dgw.builtin.cosmic",
-    ];
-    let mut device_ids: Vec<String> = device_ids
-        .into_iter()
-        .filter(|device_id| SUPPORTED.contains(&device_id.as_str()))
-        .collect();
-    let mut seen_devices = BTreeSet::new();
-    device_ids.retain(|device_id| seen_devices.insert(device_id.clone()));
+    let device_ids = dgw_core::normalized_track_profile_devices(&device_ids);
     if device_ids.is_empty() {
         return Err("Track Profiler requires at least one active Evidence device".into());
     }
 
     let project = Project::open(&project_path).map_err(error_text)?;
     let captured_track = project.track(&track_id).map_err(error_text)?;
+    let profile_input_fingerprint = project
+        .track_profile_input_fingerprint(&track_id, &device_ids)
+        .map_err(error_text)?;
     let now = chrono::Utc::now();
     let mut job = BackgroundJob {
         id: Uuid::new_v4().to_string(),
@@ -1133,6 +2512,7 @@ fn start_track_evidence_profile_job(
             "stateId": &captured_track.head_state_id,
             "bypassedEditIds": &captured_track.bypassed_edit_ids,
             "deviceIds": &device_ids,
+            "profileInputFingerprint": &profile_input_fingerprint,
         }),
         result: None,
         error: None,
@@ -1186,209 +2566,56 @@ fn start_track_evidence_profile_job(
             return;
         }
 
-        let outcome = (|| -> Result<TrackEvidenceProfileResult, String> {
-            let mutations = project
-                .active_track_mutations(&track_id)
-                .map_err(error_text)?;
-            if mutations.is_empty() {
-                return Err("the selected track has no active mutations to profile".into());
-            }
-            let active_mutations = u32::try_from(mutations.len()).unwrap_or(u32::MAX);
-            let mut unique = BTreeSet::new();
-            for mutation in &mutations {
-                unique.insert(mutation.source_variant.clone());
-                if let Some(current) = &mutation.current_variant {
-                    unique.insert(current.clone());
-                }
-            }
-            let variants: Vec<_> = unique.into_iter().collect();
-            let device_total = device_ids.len();
-            let mut device_coverage = Vec::with_capacity(device_total);
-            let mut evaluated_mutations = 0_u32;
-            let mut impact_delta = None;
-            let mut higher_impact_mutations = None;
-            let mut lower_impact_mutations = None;
-            let mut unchanged_impact_mutations = None;
-
-            for (device_index, device_id) in device_ids.iter().enumerate() {
+        let mut last_reported = BTreeMap::<String, usize>::new();
+        let outcome = dgw_core::profile_track(
+            &evaluation,
+            &project,
+            &track_id,
+            &device_ids,
+            |device_id, processed, total| {
                 if job_was_cancelled(&cancelled_jobs, &job.id) {
-                    return Err("__cancelled__".into());
+                    return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
                 }
-                let label = evidence_device_label(device_id);
-                let starting_progress =
-                    5 + (((device_index as f64) / device_total as f64) * 90.0).round() as u8;
-                update_job(
-                    &project,
-                    &mut job,
-                    BackgroundJobStatus::Running,
-                    starting_progress,
-                    "evidence",
-                    format!("{label}: preparing {} unique alleles", variants.len()),
-                )?;
-                let mut last_reported = 0_usize;
-                let signals = evaluation
-                    .evaluate_device_signals(&project, &variants, device_id, |processed, total| {
-                        if job_was_cancelled(&cancelled_jobs, &job.id) {
-                            return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
-                        }
-                        if processed == total || processed.saturating_sub(last_reported) >= 250 {
-                            last_reported = processed;
-                            let completed = device_index as f64
-                                + if total == 0 {
-                                    1.0
-                                } else {
-                                    processed as f64 / total as f64
-                                };
-                            let progress =
-                                5 + ((completed / device_total as f64) * 90.0).round() as u8;
-                            update_job(
-                                &project,
-                                &mut job,
-                                BackgroundJobStatus::Running,
-                                progress,
-                                "evidence",
-                                format!("{label}: {} of {} unique alleles", processed, total),
-                            )
-                            .map_err(dgw_core::DgwError::Project)?;
-                        }
-                        Ok(())
-                    })
-                    .map_err(|error| {
-                        if error.to_string().contains("__cancelled__") {
-                            "__cancelled__".into()
+                let device_index = device_ids
+                    .iter()
+                    .position(|candidate| candidate == device_id)
+                    .unwrap_or(0);
+                let last = last_reported.entry(device_id.into()).or_default();
+                if processed == 0 || processed == total || processed.saturating_sub(*last) >= 250 {
+                    *last = processed;
+                    let completed = device_index as f64
+                        + if total == 0 {
+                            1.0
                         } else {
-                            error_text(error)
-                        }
-                    })?;
-
-                let mut evaluated = 0_u32;
-                let mut exact_matches = 0_u64;
-                let mut unavailable = 0_u32;
-                let mut errors = 0_u32;
-                let mut device_impact_delta = 0.0_f64;
-                let mut impact_complete = true;
-                let mut device_higher = 0_u32;
-                let mut device_lower = 0_u32;
-                let mut device_unchanged = 0_u32;
-                for mutation in &mutations {
-                    let source = signals.get(&mutation.source_variant);
-                    let current = mutation
-                        .current_variant
-                        .as_ref()
-                        .and_then(|variant| signals.get(variant));
-                    let terminal = |signal: Option<&dgw_core::evaluation::BatchEvidenceSignal>| {
-                        signal.is_some_and(|signal| {
-                            matches!(
-                                signal.status,
-                                EvidenceStatus::Found | EvidenceStatus::NoExactMatch
-                            )
-                        })
-                    };
-                    if terminal(source) && (mutation.current_variant.is_none() || terminal(current))
-                    {
-                        evaluated = evaluated.saturating_add(1);
-                    }
-                    if let Some(current) = current {
-                        exact_matches =
-                            exact_matches.saturating_add(u64::from(current.exact_match_count));
-                    }
-                    let statuses = [source, current]
-                        .into_iter()
-                        .flatten()
-                        .map(|signal| &signal.status);
-                    let mut mutation_unavailable = false;
-                    let mut mutation_error = false;
-                    for status in statuses {
-                        mutation_unavailable |= *status == EvidenceStatus::ResourceUnavailable;
-                        mutation_error |= *status == EvidenceStatus::Error;
-                    }
-                    unavailable = unavailable.saturating_add(u32::from(mutation_unavailable));
-                    errors = errors.saturating_add(u32::from(mutation_error));
-
-                    if device_id == "org.dgw.builtin.snpeff" {
-                        let source_impact = source.and_then(|signal| signal.impact_signal);
-                        let current_impact = if mutation.current_variant.is_none() {
-                            Some(0.0)
-                        } else {
-                            current.and_then(|signal| signal.impact_signal)
+                            processed as f64 / total as f64
                         };
-                        match (source_impact, current_impact) {
-                            (Some(source), Some(current)) => {
-                                let delta = current - source;
-                                device_impact_delta += delta;
-                                if delta > f64::EPSILON {
-                                    device_higher = device_higher.saturating_add(1);
-                                } else if delta < -f64::EPSILON {
-                                    device_lower = device_lower.saturating_add(1);
-                                } else {
-                                    device_unchanged = device_unchanged.saturating_add(1);
-                                }
-                            }
-                            _ => impact_complete = false,
-                        }
-                    }
-                }
-                if device_id == "org.dgw.builtin.snpeff" {
-                    evaluated_mutations = if impact_complete {
-                        active_mutations
+                    let progress = 5 + ((completed / device_ids.len() as f64) * 90.0).round() as u8;
+                    let label = evidence_device_label(device_id);
+                    let message = if processed == 0 {
+                        format!("{label}: preparing {total} unique alleles")
                     } else {
-                        mutations
-                            .iter()
-                            .filter(|mutation| {
-                                let source = signals
-                                    .get(&mutation.source_variant)
-                                    .and_then(|signal| signal.impact_signal);
-                                let current = if mutation.current_variant.is_none() {
-                                    Some(0.0)
-                                } else {
-                                    mutation
-                                        .current_variant
-                                        .as_ref()
-                                        .and_then(|variant| signals.get(variant))
-                                        .and_then(|signal| signal.impact_signal)
-                                };
-                                source.is_some() && current.is_some()
-                            })
-                            .count() as u32
+                        format!("{label}: {processed} of {total} unique alleles")
                     };
-                    if impact_complete {
-                        impact_delta = Some(device_impact_delta);
-                    }
-                    higher_impact_mutations = Some(device_higher);
-                    lower_impact_mutations = Some(device_lower);
-                    unchanged_impact_mutations = Some(device_unchanged);
+                    update_job(
+                        &project,
+                        &mut job,
+                        BackgroundJobStatus::Running,
+                        progress,
+                        "evidence",
+                        message,
+                    )
+                    .map_err(dgw_core::DgwError::Project)?;
                 }
-                device_coverage.push(TrackProfileDeviceCoverage {
-                    id: device_id.clone(),
-                    evaluated,
-                    total: active_mutations,
-                    exact_matches,
-                    unavailable,
-                    errors,
-                });
+                Ok(())
+            },
+        )
+        .map_err(|error| {
+            if error.to_string().contains("__cancelled__") {
+                "__cancelled__".into()
+            } else {
+                error_text(error)
             }
-
-            let current_track = project.track(&track_id).map_err(error_text)?;
-            if current_track.head_state_id != captured_track.head_state_id
-                || current_track.bypassed_edit_ids != captured_track.bypassed_edit_ids
-            {
-                return Err(
-                    "the track changed while Evidence profiling was running; run it again".into(),
-                );
-            }
-            Ok(TrackEvidenceProfileResult {
-                track_id: track_id.clone(),
-                state_id: captured_track.head_state_id.clone(),
-                active_mutations,
-                evaluated_mutations,
-                impact_delta,
-                higher_impact_mutations,
-                lower_impact_mutations,
-                unchanged_impact_mutations,
-                device_coverage,
-                limitation: "Additive exact-allele evidence. Nearby interactions, phase-dependent combined consequences, penetrance, and disease probability are not modeled.".into(),
-            })
-        })();
+        });
 
         match outcome {
             Ok(result) => {
@@ -1435,7 +2662,7 @@ fn start_track_evidence_profile_job(
 
 fn evidence_device_label(device_id: &str) -> &'static str {
     match device_id {
-        "org.dgw.builtin.snpeff" => "SnpEff",
+        CONSEQUENCE_DEVICE_ID => "Variant Consequences",
         "org.dgw.builtin.dbnsfp" => "dbNSFP",
         "org.dgw.builtin.clinvar" => "ClinVar",
         "org.dgw.builtin.cosmic" => "COSMIC",
@@ -1451,7 +2678,9 @@ fn run_randomizer(
     selection: Option<VariantSelection>,
     selection_limit: Option<u32>,
 ) -> Result<RandomizerRunResult, String> {
+    let started_at = chrono::Utc::now();
     let project = Project::open(project_path).map_err(error_text)?;
+    let input_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
     let (request, current) =
         resolve_randomizer_request(&project, &track_id, request, selection, selection_limit)?;
     let plan = plan_randomizer(&current, &request).map_err(error_text)?;
@@ -1483,7 +2712,28 @@ fn run_randomizer(
         .map_err(error_text)?
         .into_iter()
         .filter_map(|state| state.edit_id)
-        .collect();
+        .collect::<Vec<_>>();
+    save_completed_device_run(
+        &project,
+        "org.dgw.builtin.mutation-generator",
+        "mutationGenerator",
+        &track_id,
+        &input_state_id,
+        serde_json::json!({"selectedVariants": &request.selected_variants}),
+        serde_json::to_value(&request).map_err(error_text)?,
+        serde_json::json!({
+            "selectedPositions": plan.selected_positions,
+            "randomizedPositions": plan.randomized_positions,
+            "transitionPositions": plan.transition_positions,
+            "transversionPositions": plan.transversion_positions,
+            "generatedEdits": plan.generated_edits,
+            "excludedPositions": plan.exclusions.len(),
+            "noOpReason": &plan.no_op_reason,
+            "limitation": &plan.limitation,
+        }),
+        generated_edit_ids.clone(),
+        started_at,
+    )?;
     let snapshot = project.snapshot().map_err(error_text)?;
     Ok(RandomizerRunResult {
         plan,
@@ -1550,12 +2800,18 @@ fn apply_edit(
     bypassed_edit_ids: Vec<String>,
 ) -> Result<GenomeState, String> {
     let project = Project::open(project_path).map_err(error_text)?;
-    if let EditKind::SetAllele { key, source_key } = &edit {
+    if let EditKind::SetAllele {
+        key,
+        source_key,
+        unphased_slot,
+    } = &edit
+    {
         let normalized =
             normalize_variant(&project.manifest().resource_bundle, key).map_err(error_text)?;
         edit = EditKind::SetAllele {
             key: normalized,
             source_key: source_key.clone(),
+            unphased_slot: *unphased_slot,
         };
     }
     match track_id {
@@ -1625,47 +2881,14 @@ fn render_track(
 }
 
 #[tauri::command]
-fn suggested_development_bundle() -> ResourceBundle {
-    use dgw_core::IndexedResource;
-    ResourceBundle {
-        schema_version: 1,
-        id: "local-hs37d5-hg19".into(),
-        assembly: "b37".into(),
-        contig_style: "no_chr_prefix".into(),
-        reference_path: "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz".into(),
-        reference_fai_path: "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.fai".into(),
-        reference_gzi_path: Some("/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.gzi".into()),
-        java_path: "/usr/bin/java".into(),
-        snpeff_jar_path: "/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.jar".into(),
-        snpeff_config_path: Some("/media/mrueda/2TBS/NGSutils/snpEff_v5.0/snpEff.config".into()),
-        snpeff_genome: "hg19".into(),
-        snpeff_version: "5.0e".into(),
-        bcftools_path: "/media/mrueda/2TBS/NGSutils/bcftools-1.21-103_arm64/bcftools".into(),
-        bgzip_path: "/usr/local/bin/bgzip".into(),
-        tabix_path: "/usr/local/bin/tabix".into(),
-        dbnsfp: IndexedResource {
-            path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz".into(),
-            index_path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz.tbi".into(),
-            release: "dbNSFP 4.1a".into(),
-            license_label: "user-supplied".into(),
-            fingerprint: None,
-        },
-        clinvar: IndexedResource {
-            path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz".into(),
-            index_path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi".into(),
-            release: "ClinVar 20250312".into(),
-            license_label: "user-supplied".into(),
-            fingerprint: None,
-        },
-        cosmic: IndexedResource {
-            path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz".into(),
-            index_path: "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz.tbi".into(),
-            release: "COSMIC local snapshot".into(),
-            license_label: "user-supplied; not redistributed".into(),
-            fingerprint: None,
-        },
-        bundle_fingerprint: None,
-    }
+fn suggested_development_bundles() -> Result<Vec<ResourceBundle>, String> {
+    [
+        include_str!("../../config/local-hs37d5.development.json"),
+        include_str!("../../config/local-hg38.development.json"),
+    ]
+    .into_iter()
+    .map(|contents| serde_json::from_str(contents).map_err(error_text))
+    .collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1684,7 +2907,12 @@ pub fn run() {
             create_project,
             create_project_from_current,
             open_project,
+            project_resource_health,
+            load_workstation_session,
+            save_workstation_session,
+            save_project_copy,
             focus_region,
+            search_genes,
             export_focus_fasta,
             track_deck,
             variant_page,
@@ -1692,16 +2920,22 @@ pub fn run() {
             variant_navigation_bins,
             variant_density,
             resolve_variant_selection,
+            transport_target,
             save_workspace,
             select_track,
             duplicate_track,
             rename_track,
             delete_track,
+            track_profile_input_fingerprint,
             consolidate_track,
+            start_optimizer_job,
             preview_randomizer,
             start_randomizer_preview_job,
+            start_track_morph_preview_job,
             background_job,
             list_background_jobs,
+            list_device_runs,
+            delete_finished_background_jobs,
             cancel_background_job,
             start_track_evidence_profile_job,
             run_randomizer,
@@ -1715,7 +2949,7 @@ pub fn run() {
             render_state,
             render_track,
             example_fixture,
-            suggested_development_bundle
+            suggested_development_bundles
         ])
         .run(tauri::generate_context!())
         .expect("error while running DGW");
@@ -1725,6 +2959,53 @@ pub fn run() {
 mod tests {
     use super::*;
     use dgw_core::{RandomizerProposal, SubstitutionPattern, VariantKey};
+
+    #[test]
+    fn bulk_optimizer_generates_one_three_alt_set_per_exact_locus() {
+        let first = VariantKey {
+            assembly: "GRCh37".into(),
+            contig: "1".into(),
+            position: 100,
+            reference: "A".into(),
+            alternate: "C".into(),
+        };
+        let second_alt = VariantKey {
+            alternate: "G".into(),
+            ..first.clone()
+        };
+        let candidates = optimizer_candidate_variants(&[first, second_alt]);
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.alternate.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["C", "G", "T"])
+        );
+    }
+
+    #[test]
+    fn batch_signal_preserves_optimizer_impact_and_clinvar_guard_fields() {
+        let evidence = evidence_from_batch_signal(
+            "ClinVar test",
+            &BatchEvidenceSignal {
+                status: EvidenceStatus::Found,
+                exact_match_count: 1,
+                impact_signal: Some(1.0),
+                impact_label: Some("HIGH".into()),
+                clinvar_classification: Some("Likely_pathogenic".into()),
+                no_transcript_feature: false,
+            },
+        );
+        assert_eq!(
+            evidence.records[0].get("impact").map(String::as_str),
+            Some("HIGH")
+        );
+        assert_eq!(
+            evidence.records[0].get("CLNSIG").map(String::as_str),
+            Some("Likely_pathogenic")
+        );
+    }
 
     #[test]
     fn randomizer_preview_keeps_totals_but_bounds_change_details() {
@@ -1748,6 +3029,7 @@ mod tests {
                     edit: EditKind::SetAllele {
                         key: replacement_variant,
                         source_key: Some(source_variant),
+                        unphased_slot: None,
                     },
                 }
             })

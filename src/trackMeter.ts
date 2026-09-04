@@ -2,10 +2,10 @@ import type { EvidenceResult } from "./types";
 
 /**
  * Small, explicit molecular-impact signal used by the source-relative meter.
- * It is deliberately limited to SnpEff impact categories and is not a disease
+ * It is deliberately limited to transcript-consequence impact categories and is not a disease
  * or clinical-risk score.
  */
-export function snpeffImpactSignal(evidence?: EvidenceResult) {
+export function consequenceImpactSignal(evidence?: EvidenceResult) {
   if (!evidence || evidence.status !== "found") return undefined;
   const values = evidence.records.map((record) => {
     switch (record.impact?.toUpperCase()) {

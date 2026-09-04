@@ -3,6 +3,8 @@ dist/
 docs-site/build/
 docs-site/.docusaurus/
 target/
+playwright-report/
+test-results/
 .DS_Store
 *.dgw/
 *.vcf.gz

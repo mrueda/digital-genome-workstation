@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
+import { createPortal } from "react-dom";
 import { focusViewport, panViewport, viewportSpan, zoomViewport } from "./genomeViewport";
 import { scoringInputState } from "./scoringInputs";
-import type { FocusContext } from "./types";
+import type { FocusContext, MorphOrdering, TrackMorphPreviewResult, VariantDensity } from "./types";
 import { sampleVariantMapMarks, variantMapTone, variantMapY } from "./variantMap";
 import "./track-device.css";
 
@@ -22,6 +23,31 @@ const DEFAULT_RACK_HEIGHT = 260;
 const MIN_RACK_HEIGHT = 160;
 const MIN_TRACK_DECK_HEIGHT = 230;
 const RACK_SEPARATOR_HEIGHT = 7;
+const CONTEXT_MENU_WIDTH = 250;
+const CONTEXT_MENU_ROW_HEIGHT = 34;
+const MUTATION_GENERATOR_DEVICE_ID = "org.dgw.builtin.mutation-generator";
+const GENOME_OPTIMIZER_DEVICE_ID = "org.dgw.builtin.genome-optimizer";
+const CONSEQUENCE_DEVICE_ID = "org.dgw.builtin.variant-consequences";
+
+interface ContextMenuItem {
+  id: string;
+  label: string;
+  action: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  separatorBefore?: boolean;
+  hint?: string;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  label: string;
+  items: ContextMenuItem[];
+  invoker?: HTMLElement;
+}
+
+type OpenContextMenu = (menu: ContextMenuState) => void;
 
 export interface GenomeTrackEditBlock {
   id: string;
@@ -69,6 +95,7 @@ export interface GenomeOptimizerSettings {
   direction: OptimizerDirection;
   weights: Record<string, number>;
   maxEdits: number;
+  maximumPositions: number;
 }
 
 export interface GenomeOptimizerResult {
@@ -76,6 +103,10 @@ export interface GenomeOptimizerResult {
   changedPositions?: number;
   consideredPositions?: number;
   evaluatedCandidates?: number;
+  excludedPositions?: number;
+  improvingPositions?: number;
+  unchangedOrTiedPositions?: number;
+  deferredByChangeLimit?: number;
   beforeScore?: number;
   afterScore?: number;
   scoreUnit?: string;
@@ -100,6 +131,7 @@ export interface GenomeOptimizerDevice {
   name?: string;
   bypassed: boolean;
   status: OptimizerStatus;
+  progress?: number;
   settings: GenomeOptimizerSettings;
   result?: GenomeOptimizerResult;
   generatedEditIds?: string[];
@@ -149,6 +181,28 @@ export interface AlleleRandomizerDevice {
   limitation?: string;
 }
 
+export interface GenomeMorphSettings {
+  targetTrackId: string;
+  amount: number;
+  ordering: MorphOrdering;
+  seed: number;
+}
+
+export interface GenomeMorphDevice {
+  id: string;
+  name: string;
+  bypassed: boolean;
+  status: OptimizerStatus;
+  settings: GenomeMorphSettings;
+  preview?: TrackMorphPreviewResult;
+  generatedEditIds?: string[];
+  progress?: number;
+  message?: string;
+  rackOrder?: number;
+  version?: string;
+  limitation?: string;
+}
+
 /** A compact, controlled device card in the selected track's ordered rack. */
 export interface RackDeviceView {
   id: string;
@@ -187,7 +241,7 @@ export interface TrackMeterModel {
   higherImpactMutations?: number;
   lowerImpactMutations?: number;
   unchangedImpactMutations?: number;
-  deviceCoverage: Array<{ id: string; label: string; evaluated: number; total: number; exactMatches: number; bypassed: boolean }>;
+  deviceCoverage: Array<{ id: string; label: string; evaluated: number; total: number; exactMatches: number; unavailable: number; errors: number; noTranscriptFeature: number; bypassed: boolean }>;
   items: TrackMeterItem[];
   appliedRun?: {
     device: string;
@@ -207,6 +261,7 @@ export interface TrackMeterModel {
 
 export interface TrackProfilerModel {
   status: "idle" | "running" | "complete" | "partial";
+  profileInputFingerprint?: string;
   progress?: number;
   processedMutations: number;
   totalMutations: number;
@@ -222,8 +277,11 @@ export interface GenomeTrackModel {
   visible: boolean;
   edits: GenomeTrackEditBlock[];
   alleles: GenomeTrackAlleleMark[];
+  sourceVariantTotal?: number;
+  densityMode?: boolean;
   totalEditCount?: number;
   randomizer?: AlleleRandomizerDevice;
+  morph?: GenomeMorphDevice;
   optimizer?: GenomeOptimizerDevice;
 }
 
@@ -241,6 +299,7 @@ export interface TrackDeviceWorkspaceProps {
   weightControls: OptimizerWeightControl[];
   rackDevices?: RackDeviceView[];
   appliedDeviceIds?: string[];
+  variantDensity?: VariantDensity;
   trackMeter?: TrackMeterModel;
   trackProfiler?: TrackProfilerModel;
   showDeviceRack?: boolean;
@@ -275,11 +334,16 @@ export interface TrackDeviceWorkspaceProps {
   onRandomizerPreview?: (trackId: string) => void;
   onRandomizerApply?: (trackId: string) => void;
   onRandomizerBypass?: (trackId: string, bypassed: boolean) => void;
+  onMorphChange?: (trackId: string, settings: GenomeMorphSettings) => void;
+  onMorphPreview?: (trackId: string) => void;
+  onMorphApply?: (trackId: string) => void;
+  onMorphBypass?: (trackId: string, bypassed: boolean) => void;
   onSelectDevice?: (trackId: string, deviceId: string) => void;
   onToggleDevice?: (trackId: string, deviceId: string, bypassed: boolean) => void;
   onRunDevice?: (trackId: string, deviceId: string) => void;
   onAddDevice?: (trackId: string, deviceId: string) => void;
   onRemoveDevice?: (trackId: string, deviceId: string) => void;
+  onResetDevice?: (trackId: string, deviceId: string) => void;
   onAnalyzeTrack?: (trackId: string) => void;
 }
 
@@ -323,9 +387,86 @@ function copyLabel(copy: GenomeTrackEditBlock["copy"]) {
   return "chromosome copy unknown";
 }
 
+function ContextMenu({ menu, onClose }: { menu: ContextMenuState; onClose: () => void }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const height = menu.items.length * CONTEXT_MENU_ROW_HEIGHT + 16;
+  const left = Math.max(8, Math.min(menu.x, window.innerWidth - CONTEXT_MENU_WIDTH - 8));
+  const top = Math.max(8, Math.min(menu.y, window.innerHeight - height - 8));
+
+  useEffect(() => {
+    const first = menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    first?.focus();
+    function dismissOnPointer(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) onClose();
+    }
+    function dismissOnWindowChange() {
+      onClose();
+    }
+    document.addEventListener("pointerdown", dismissOnPointer, true);
+    window.addEventListener("blur", dismissOnWindowChange);
+    window.addEventListener("resize", dismissOnWindowChange);
+    window.addEventListener("scroll", dismissOnWindowChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnPointer, true);
+      window.removeEventListener("blur", dismissOnWindowChange);
+      window.removeEventListener("resize", dismissOnWindowChange);
+      window.removeEventListener("scroll", dismissOnWindowChange, true);
+    };
+  }, [onClose]);
+
+  function moveFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const buttons = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+    if (event.key === "Escape" || event.key === "Tab") {
+      if (event.key === "Escape") event.preventDefault();
+      onClose();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || buttons.length === 0) return;
+    event.preventDefault();
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? buttons.length - 1
+        : event.key === "ArrowDown"
+          ? (current + 1 + buttons.length) % buttons.length
+          : (current - 1 + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  }
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="dgw-context-menu"
+      role="menu"
+      aria-label={menu.label}
+      style={{ left, top }}
+      onKeyDown={moveFocus}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      {menu.items.map((item) => <button
+        type="button"
+        role="menuitem"
+        className={`${item.danger ? "is-danger" : ""}${item.separatorBefore ? " has-separator" : ""}`}
+        disabled={item.disabled}
+        onClick={() => {
+          onClose();
+          item.action();
+        }}
+        key={item.id}
+      >
+        <span>{item.label}</span>
+        {item.hint && <small>{item.hint}</small>}
+      </button>)}
+    </div>,
+    document.body
+  );
+}
+
 function TrackRail({
   track,
   region,
+  density,
   selected,
   selectedEditId,
   selectedAlleleId,
@@ -342,10 +483,16 @@ function TrackRail({
   onSelectAllele,
   onMarqueeSelectAlleles,
   onToggleEdit,
-  onToggleMinimized
+  onToggleMinimized,
+  onAnalyze,
+  onFocusPosition,
+  onFocusRange,
+  onSelectDevice,
+  onOpenContextMenu
 }: {
   track: GenomeTrackModel;
   region: FocusContext;
+  density?: VariantDensity;
   selected: boolean;
   selectedEditId?: string;
   selectedAlleleId?: string;
@@ -363,13 +510,21 @@ function TrackRail({
   onMarqueeSelectAlleles?: (alleleIds: string[], additive: boolean) => void;
   onToggleEdit: (editId: string, enabled: boolean) => void;
   onToggleMinimized: () => void;
+  onAnalyze?: () => void;
+  onFocusPosition: (position: number) => void;
+  onFocusRange: (start: number, end: number) => void;
+  onSelectDevice?: (deviceId: string) => void;
+  onOpenContextMenu: OpenContextMenu;
 }) {
   const isSource = track.kind === "source";
   const [draftName, setDraftName] = useState(track.name);
   const [marquee, setMarquee] = useState<{ pointerId: number; start: number; current: number; additive: boolean }>();
   const suppressAlleleClick = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const showBaseGrid = viewportSpan(region) <= 240;
   const compactAlleles = viewportSpan(region) > 2_000;
+  const densityMode = Boolean(track.densityMode && density && density.context.contig === region.contig);
+  const densityMaximum = Math.max(1, ...(density?.bins.map((bin) => bin.count) ?? []));
 
   useEffect(() => setDraftName(track.name), [track.name]);
 
@@ -388,7 +543,7 @@ function TrackRail({
   }
 
   function beginMarquee(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!selected || !onMarqueeSelectAlleles || event.button !== 0) return;
+    if (densityMode || !selected || !onMarqueeSelectAlleles || event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest("input, select, textarea, .dgw-edit-anchor")) return;
     // Marquee selection starts on empty lane space only. Capturing the pointer
@@ -434,9 +589,98 @@ function TrackRail({
     onMarqueeSelectAlleles?.(ids, marquee.additive);
   }
 
+  function openPointerMenu(event: ReactMouseEvent<HTMLElement>, label: string, items: ContextMenuItem[]) {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.target instanceof HTMLElement ? event.target : event.currentTarget;
+    const invoker = target.closest<HTMLElement>("button, input, [tabindex]") ?? event.currentTarget;
+    onOpenContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      label,
+      items,
+      invoker
+    });
+  }
+
+  function openKeyboardMenu(event: ReactKeyboardEvent<HTMLElement>, label: string, items: ContextMenuItem[]) {
+    if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.target instanceof HTMLElement ? event.target : event.currentTarget;
+    const invoker = target.closest<HTMLElement>("button, input, [tabindex]") ?? event.currentTarget;
+    const bounds = invoker.getBoundingClientRect();
+    onOpenContextMenu({
+      x: bounds.left + Math.min(24, bounds.width / 2),
+      y: bounds.top + Math.min(bounds.height, 28),
+      label,
+      items,
+      invoker
+    });
+  }
+
+  function beginRename() {
+    onSelect();
+    window.requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    });
+  }
+
+  function trackMenuItems(): ContextMenuItem[] {
+    return [
+      { id: "select", label: "Select track", action: onSelect, disabled: busy || selected },
+      { id: "rename", label: "Rename…", action: beginRename, disabled: busy || isSource },
+      { id: "duplicate", label: "Duplicate track", action: onDuplicate, disabled: busy },
+      { id: "minimize", label: minimized ? "Expand track" : "Minimize track", action: onToggleMinimized, disabled: busy },
+      { id: "visibility", label: track.visible ? "Hide track" : "Show track", action: () => onToggleVisibility(!track.visible), disabled: busy },
+      { id: "profile", label: "Refresh Track Profile", action: () => onAnalyze?.(), disabled: busy || !onAnalyze || track.totalEditCount === 0, separatorBefore: true },
+      ...(!isSource ? [{ id: "archive", label: "Archive track…", action: onDelete, disabled: busy || !canDelete, danger: true, separatorBefore: true }] : [])
+    ];
+  }
+
+  function alleleMenuItems(allele: GenomeTrackAlleleMark): ContextMenuItem[] {
+    const isOnlySelection = selectedAlleleIds.length === 1 && selectedAlleleIds[0] === allele.id;
+    const items: ContextMenuItem[] = [
+      { id: "open", label: isSource ? "Inspect in Allele Roll" : "Edit in Allele Roll…", action: () => onSelectAllele(allele.id, false), disabled: busy },
+      { id: "focus", label: "Focus on allele", action: () => onFocusPosition(allele.position), disabled: busy },
+      { id: "select-only", label: "Select only this allele", action: () => onSelectAllele(allele.id, false), disabled: busy || isOnlySelection, separatorBefore: true },
+      { id: "remove-selection", label: "Remove from selection", action: () => onSelectAllele(allele.id, true), disabled: busy }
+    ];
+    if (!isSource) {
+      items.push(
+        { id: "mutation-generator", label: "Open selection in Mutation Generator", action: () => onSelectDevice?.(MUTATION_GENERATOR_DEVICE_ID), disabled: busy || !onSelectDevice, separatorBefore: true },
+        { id: "genome-optimizer", label: "Open selection in Genome Optimizer", action: () => onSelectDevice?.(GENOME_OPTIMIZER_DEVICE_ID), disabled: busy || !onSelectDevice }
+      );
+    }
+    return items;
+  }
+
+  function editMenuItems(edit: GenomeTrackEditBlock): ContextMenuItem[] {
+    const matchingAllele = track.alleles.find((allele) => allele.position === edit.position && allele.alternate === edit.alternate);
+    return [
+      { id: "open", label: "Open mutation", action: () => onSelectEdit(edit.id), disabled: busy },
+      { id: "focus", label: "Focus on position", action: () => onFocusPosition(edit.position), disabled: busy },
+      { id: "reveal", label: "Reveal effective allele", action: () => matchingAllele && onSelectAllele(matchingAllele.id, false), disabled: busy || !matchingAllele },
+      { id: "power", label: edit.enabled ? "Bypass mutation" : "Enable mutation", action: () => onToggleEdit(edit.id, !edit.enabled), disabled: busy, separatorBefore: true },
+      { id: "profile", label: "Refresh Track Profile", action: () => onAnalyze?.(), disabled: busy || !onAnalyze }
+    ];
+  }
+
   return (
     <article className={`dgw-track ${isSource ? "is-source" : "is-candidate"}${selected ? " is-selected" : ""}${track.visible ? "" : " is-hidden"}${minimized ? " is-minimized" : ""}`}>
-      <div className="dgw-track-controls">
+      <div
+        className="dgw-track-controls"
+        onContextMenu={(event) => {
+          if ((event.target as HTMLElement).closest("input")) return;
+          if (!selected) onSelect();
+          openPointerMenu(event, `${track.name} actions`, trackMenuItems());
+        }}
+        onKeyDown={(event) => {
+          if ((event.target as HTMLElement).closest("input")) return;
+          openKeyboardMenu(event, `${track.name} actions`, trackMenuItems());
+        }}
+      >
         <button
           className="dgw-track-select"
           type="button"
@@ -450,6 +694,7 @@ function TrackRail({
         <label className="dgw-track-name">
           <span className="dgw-visually-hidden">Track name</span>
           <input
+            ref={nameInputRef}
             value={draftName}
             readOnly={isSource}
             aria-label={`${isSource ? "Source" : "Candidate"} track name`}
@@ -490,7 +735,7 @@ function TrackRail({
             className="danger"
             onClick={onDelete}
             disabled={busy || !canDelete}
-            title={canDelete ? "Archive track" : "A project must keep at least one editable Genome Track"}
+            title="Archive track"
           >Delete</button>}
         </div>
       </div>
@@ -518,6 +763,23 @@ function TrackRail({
           ))}
         </div>
         <div className="dgw-track-baseline" />
+        {densityMode && density && <div className="dgw-track-density" aria-label={`${track.sourceVariantTotal?.toLocaleString() ?? density.total.toLocaleString()} source ALT alleles in density view`}>
+          {density.bins.map((bin, index) => {
+            const height = bin.count === 0 ? 2 : 5 + 58 * Math.log1p(bin.count) / Math.log1p(densityMaximum);
+            return <button
+              type="button"
+              style={{ height: `${height}%` }}
+              disabled={busy || bin.count === 0}
+              title={bin.count === 0
+                ? `${region.contig}:${bin.start.toLocaleString()}–${bin.end.toLocaleString()} · no source ALTs`
+                : `${region.contig}:${bin.start.toLocaleString()}–${bin.end.toLocaleString()} · ${bin.count.toLocaleString()} source ${bin.count === 1 ? "ALT" : "ALTs"} · click to zoom`}
+              aria-label={`Zoom to ${region.contig}:${bin.start}-${bin.end}, ${bin.count} source ALTs`}
+              onClick={() => onFocusRange(bin.start, bin.end)}
+              key={`${bin.start}-${index}`}
+            />;
+          })}
+          <span>{(track.sourceVariantTotal ?? density.total).toLocaleString()} source ALTs · density view · click a peak to zoom</span>
+        </div>}
         {(track.alleles ?? []).map((allele) => (
           <button
             type="button"
@@ -536,6 +798,13 @@ function TrackRail({
               }
               onSelectAllele(allele.id, event.metaKey || event.ctrlKey);
             }}
+            onContextMenu={(event) => {
+              suppressAlleleClick.current = true;
+              window.setTimeout(() => { suppressAlleleClick.current = false; }, 250);
+              if (!selected || !selectedAlleleIds.includes(allele.id)) onSelectAllele(allele.id, false);
+              openPointerMenu(event, `${region.contig}:${allele.position} allele actions`, alleleMenuItems(allele));
+            }}
+            onKeyDown={(event) => openKeyboardMenu(event, `${region.contig}:${allele.position} allele actions`, alleleMenuItems(allele))}
             disabled={busy && !selected}
           >
             <span className="dgw-allele-stem" />
@@ -543,7 +812,7 @@ function TrackRail({
             <span className="dgw-allele-label"><small>{isSource ? "SRC" : "EDIT"}</small>{compactAllele(allele.reference, allele.alternate)}</span>
           </button>
         ))}
-        {isSource && (track.alleles?.length ?? 0) === 0 && <span className="dgw-track-origin">No alternate alleles in view</span>}
+        {isSource && !densityMode && (track.alleles?.length ?? 0) === 0 && <span className="dgw-track-origin">No alternate alleles in view</span>}
         {track.edits.map((edit) => {
           const left = positionPercent(edit.position, region);
           const isEditSelected = edit.id === selectedEditId;
@@ -553,6 +822,11 @@ function TrackRail({
               className={`dgw-edit-anchor${edit.enabled ? "" : " is-bypassed"}${isEditSelected ? " is-selected" : ""}`}
               style={{ left: `${left}%` }}
               key={edit.id}
+              onContextMenu={(event) => {
+                if (!selected || !isEditSelected) onSelectEdit(edit.id);
+                openPointerMenu(event, `${region.contig}:${edit.position} mutation actions`, editMenuItems(edit));
+              }}
+              onKeyDown={(event) => openKeyboardMenu(event, `${region.contig}:${edit.position} mutation actions`, editMenuItems(edit))}
             >
               <button
                 type="button"
@@ -829,9 +1103,10 @@ function OptimizerDeviceCard({
   const settings = device.settings;
   const saturation = settings.mode === "saturation";
   const disabled = busy || device.status === "running";
+  const maximumPositions = Math.max(1, Math.min(100_000, Math.trunc(settings.maximumPositions || 1_000)));
   const maximumChanges = saturation
-    ? Math.max(1, Math.min(100, selectedCount))
-    : Math.max(1, Math.min(100, selectedCount || 100));
+    ? Math.max(1, Math.min(100_000, selectedCount))
+    : Math.max(1, Math.min(100_000, selectedCount || maximumPositions));
   const objective = objectives.find((item) => item.id === (saturation ? "predictedImpactBurden" : settings.objectiveId));
   const usesAnnotationWeights = Boolean(objective?.includedWeightIds.length);
   const bypassedScoringDeviceIds = new Set(device.bypassedScoringDeviceIds ?? []);
@@ -845,18 +1120,19 @@ function OptimizerDeviceCard({
       : total
   ), 0);
   const hasNoEffectiveWeight = usesAnnotationWeights && effectiveWeightTotal <= 0;
-  const hasActiveSnpeff = [...appliedScoringDeviceIds].some((id) => id.includes("snpeff"))
-    && ![...bypassedScoringDeviceIds].some((id) => id.includes("snpeff"));
+  const consequenceDeviceId = CONSEQUENCE_DEVICE_ID;
+  const hasActiveConsequences = appliedScoringDeviceIds.has(consequenceDeviceId)
+    && !bypassedScoringDeviceIds.has(consequenceDeviceId);
   const hasActiveClinvar = [...appliedScoringDeviceIds].some((id) => id.includes("clinvar"))
     && ![...bypassedScoringDeviceIds].some((id) => id.includes("clinvar"));
-  const selectionOverLimit = selectedCount > 100;
-  const saturationBlocked = saturation && (selectedCount === 0 || selectionOverLimit || !hasActiveSnpeff || !hasActiveClinvar);
+  const selectionOverLimit = selectedCount > maximumPositions;
+  const saturationBlocked = saturation && (selectedCount === 0 || selectionOverLimit || !hasActiveConsequences || !hasActiveClinvar);
   const hasGeneratedChanges = (device.result?.generatedEdits ?? 0) > 0;
   const update = (patch: Partial<GenomeOptimizerSettings>) => onChange({ ...settings, ...patch });
   const resource = [device.resource, device.version].filter(Boolean).join(" · ") || "Configured evidence devices";
 
   return (
-    <section className={`dgw-optimizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label={device.name ?? "Genome Optimizer"}>
+    <section className={`dgw-optimizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label={device.name ?? "Genome Optimizer"} data-context-help="genome-optimizer">
       <header className="dgw-device-header">
         <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
           <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
@@ -972,7 +1248,7 @@ function OptimizerDeviceCard({
       </div>
       <div className="dgw-knob-bank single">
         <NumberKnob
-          label={saturation ? "Maximum positions" : "Maximum edits"}
+          label={saturation ? "Maximum changes" : "Maximum edits"}
           value={Math.min(settings.maxEdits, maximumChanges)}
           min={1}
           max={maximumChanges}
@@ -982,14 +1258,35 @@ function OptimizerDeviceCard({
         />
       </div>
 
+      <label className="dgw-optimizer-run-limit">
+        <span>Maximum positions per run <output>{maximumPositions.toLocaleString()}</output></span>
+        <input
+          type="number"
+          min={1}
+          max={100000}
+          step={1000}
+          value={maximumPositions}
+          onChange={(event) => update({ maximumPositions: Math.max(1, Math.min(100_000, Math.trunc(Number(event.currentTarget.value) || 1))) })}
+          disabled={disabled}
+        />
+      </label>
+
       <div className="dgw-device-result" aria-live="polite">
-        <span>{selectionOverLimit
-          ? `${selectedCount.toLocaleString()} positions are selected across the track. Genome Optimizer accepts at most 100 per run; narrow the selection.`
-          : device.status === "running" ? "Generating…" : device.message ?? "Ready to generate candidates"}</span>
+        <span>{device.status === "running"
+          ? <span className="dgw-device-running"><i aria-hidden="true" /><b>{device.progress === undefined ? "Working" : `${device.progress}%`}</b>{device.message ?? "Genome Optimizer is running in the background…"}</span>
+          : selectionOverLimit
+            ? `${selectedCount.toLocaleString()} positions are selected across the track. Raise Maximum positions to run the complete scope, or narrow the selection.`
+            : device.message ?? "Ready to generate candidates"}</span>
         {device.result && (
           <div>
+            {device.result.generatedEdits === 0 && <p className="dgw-optimizer-no-op">
+              <b>No mutation layer created</b>
+              <span>{device.message ?? "The current alleles already satisfy the selected objective."} Nothing needs to be consolidated.</span>
+            </p>}
             <b>{settings.mode === "saturation"
-              ? `${device.result.changedPositions ?? device.result.generatedEdits} ${(device.result.changedPositions ?? device.result.generatedEdits) === 1 ? "position" : "positions"} changed · ${device.result.generatedEdits} mutation ${device.result.generatedEdits === 1 ? "block" : "blocks"}`
+              ? device.result.generatedEdits === 0
+                ? "No positions changed"
+                : `${device.result.changedPositions ?? device.result.generatedEdits} ${(device.result.changedPositions ?? device.result.generatedEdits) === 1 ? "position" : "positions"} changed · ${device.result.generatedEdits} mutation ${device.result.generatedEdits === 1 ? "block" : "blocks"}`
               : `${device.result.generatedEdits} discrete edits`}</b>
             {device.result.beforeScore !== undefined && device.result.afterScore !== undefined && (
               <small>
@@ -997,6 +1294,16 @@ function OptimizerDeviceCard({
               </small>
             )}
             {device.result.summary && <small>{device.result.summary}</small>}
+            {settings.mode === "saturation" && device.result.consideredPositions !== undefined && <div className="dgw-optimizer-audit" aria-label="Saturation run accounting">
+              <b>Saturation audit</b>
+              <span><strong>{device.result.consideredPositions.toLocaleString()}</strong> selected positions</span>
+              <span><strong>{(device.result.evaluatedCandidates ?? 0).toLocaleString()}</strong> candidate ALTs evaluated</span>
+              <span><strong>{(device.result.unchangedOrTiedPositions ?? 0).toLocaleString()}</strong> current ALT already best or tied</span>
+              <span><strong>{(device.result.excludedPositions ?? 0).toLocaleString()}</strong> excluded positions</span>
+              <span><strong>{(device.result.improvingPositions ?? device.result.changedPositions ?? 0).toLocaleString()}</strong> strictly improving positions</span>
+              <span className="is-applied"><strong>{(device.result.changedPositions ?? 0).toLocaleString()}</strong> positions changed</span>
+              {(device.result.deferredByChangeLimit ?? 0) > 0 && <small>{device.result.deferredByChangeLimit?.toLocaleString()} improving positions were not applied because of Maximum changes.</small>}
+            </div>}
             {device.result.candidateComparisons && device.result.candidateComparisons.length > 0 && <details className="dgw-saturation-comparisons">
               <summary>Candidate comparison · {device.result.candidateComparisons.length} alleles</summary>
               <table>
@@ -1020,9 +1327,9 @@ function OptimizerDeviceCard({
 
       <footer className="dgw-device-actions">
         <button type="button" className={hasGeneratedChanges ? undefined : "primary"} onClick={onRegenerate} disabled={disabled || device.bypassed || hasNoEffectiveWeight || selectionOverLimit || saturationBlocked} title={selectionOverLimit
-          ? "Genome Optimizer accepts at most 100 positions per run; narrow the selection"
+          ? `Raise Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection`
           : saturationBlocked
-          ? selectedCount === 0 ? "Select at least one SNV position" : "Apply and enable SnpEff and ClinVar first"
+          ? selectedCount === 0 ? "Select at least one SNV position" : "Apply and enable Variant Consequences and ClinVar first"
           : undefined}>
           {device.status === "running" ? "Generating…" : saturation ? "Run saturation" : device.result ? "Regenerate" : "Generate edits"}
         </button>
@@ -1031,7 +1338,9 @@ function OptimizerDeviceCard({
           className={hasGeneratedChanges ? "primary" : undefined}
           onClick={onConsolidate}
           disabled={disabled || device.bypassed || (track.totalEditCount ?? track.edits.length) === 0}
-          title="Materialize enabled edits into a new track baseline"
+          title={(track.totalEditCount ?? track.edits.length) === 0
+            ? "This track has no mutation blocks to consolidate"
+            : "Materialize enabled edits into a new track baseline"}
         >
           Consolidate
         </button>
@@ -1041,7 +1350,7 @@ function OptimizerDeviceCard({
         <div className="dgw-device-details-copy">
           <p>{objective?.description ?? "Choose a named score before generating candidate edits."}</p>
           <p>{saturation
-            ? `${settings.direction === "minimize" ? "Minimize" : "Maximize"} compares all three possible non-reference SNV bases at every selected position and chooses the ${settings.direction === "minimize" ? "lowest" : "highest"} SnpEff impact score.`
+            ? `${settings.direction === "minimize" ? "Minimize" : "Maximize"} compares all three possible non-reference SNV bases at every selected position and chooses the ${settings.direction === "minimize" ? "lowest" : "highest"} transcript-consequence impact score.`
             : settings.direction === "minimize"
               ? "Minimize removes eligible ALT copies by restoring REF. This minimizes distance from the reference; it does not claim that REF is benign."
               : "Maximize can reintroduce missing source-sample ALT copies; it measures reference distance and does not invent new alleles."}</p>
@@ -1140,7 +1449,11 @@ function RandomizerDeviceCard({
       </label>}
     </div>
     <div className="dgw-randomizer-result" aria-live="polite">
-      {preview ? <>
+      {device.status === "running" ? <div className="dgw-device-running">
+        <i aria-hidden="true" />
+        <b>Preparing mutation layer</b>
+        <small>{device.message ?? "The background preview is running…"}</small>
+      </div> : preview ? <>
         <b>{preview.randomizedPositions.toLocaleString()}/{preview.selectedPositions.toLocaleString()} positions · {preview.generatedEdits.toLocaleString()} {compoundPreview ? "copy-specific changes" : "mutation blocks"}</b>
         {compoundPreview && <small>Background result · ready as one reversible mutation layer</small>}
         <small>{preview.transitionPositions} transitions · {preview.transversionPositions} transversions</small>
@@ -1158,7 +1471,7 @@ function RandomizerDeviceCard({
         onClick={onPreview}
         disabled={disabled || device.bypassed || selectedCount === 0 || selectionOverLimit}
         title={selectionOverLimit ? `Raise Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection` : undefined}
-      >Preview</button>
+      >{device.status === "running" ? "Preparing…" : "Preview"}</button>
       <button
         type="button"
         className="primary"
@@ -1180,6 +1493,99 @@ function RandomizerDeviceCard({
       <dl className="dgw-device-metadata">
         <div><dt>Scope</dt><dd>Canonical SNVs · substitution class relative to REF</dd></div>
       </dl>
+      <p className="dgw-device-limitation optimizer-limit"><b>Limit</b>{device.limitation}</p>
+    </details>
+  </section>;
+}
+
+function GenomeMorphDeviceCard({
+  track,
+  targets,
+  device,
+  selected,
+  busy,
+  onSelect,
+  onChange,
+  onPreview,
+  onApply,
+  onBypass
+}: {
+  track: GenomeTrackModel;
+  targets: GenomeTrackModel[];
+  device: GenomeMorphDevice;
+  selected: boolean;
+  busy: boolean;
+  onSelect?: () => void;
+  onChange: (settings: GenomeMorphSettings) => void;
+  onPreview: () => void;
+  onApply: () => void;
+  onBypass: (bypassed: boolean) => void;
+}) {
+  const disabled = busy || device.status === "running";
+  const target = targets.find((candidate) => candidate.id === device.settings.targetTrackId);
+  const preview = device.preview;
+  const update = (patch: Partial<GenomeMorphSettings>) => onChange({ ...device.settings, ...patch });
+  return <section className={`dgw-randomizer dgw-morph${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label="Genome Morph">
+    <header className="dgw-device-header">
+      <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
+        <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
+        <span><small>edit</small><b>{device.name}</b></span>
+      </button>
+      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
+        {device.bypassed ? "Bypassed" : "Active"}
+      </button>
+    </header>
+    <dl className="dgw-device-metadata optimizer-metadata is-compact">
+      <div><dt>Source</dt><dd>{track.name}</dd></div>
+      <div><dt>Target</dt><dd>{target?.name ?? "Choose another track"}</dd></div>
+    </dl>
+    <div className="dgw-randomizer-controls dgw-morph-controls">
+      <label className="dgw-morph-target">
+        <span>Target track</span>
+        <select value={device.settings.targetTrackId} onChange={(event) => update({ targetTrackId: event.currentTarget.value })} disabled={disabled || targets.length === 0}>
+          <option value="">Choose target…</option>
+          {targets.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}
+        </select>
+      </label>
+      <label className="dgw-morph-amount">
+        <span>Morph <output>{device.settings.amount}%</output></span>
+        <input type="range" min={0} max={100} step={1} value={device.settings.amount} onChange={(event) => update({ amount: Number(event.currentTarget.value) })} disabled={disabled} />
+      </label>
+      <label>
+        <span>Ordering</span>
+        <select value={device.settings.ordering} onChange={(event) => update({ ordering: event.currentTarget.value as MorphOrdering })} disabled={disabled}>
+          <option value="genomic">Genomic order</option>
+          <option value="seededRandom">Seeded random</option>
+        </select>
+      </label>
+      {device.settings.ordering === "seededRandom" && <label>
+        <span>Seed</span>
+        <input type="number" min={0} step={1} value={device.settings.seed} onChange={(event) => update({ seed: Math.max(0, Math.trunc(Number(event.currentTarget.value) || 0)) })} disabled={disabled} />
+      </label>}
+    </div>
+    <div className="dgw-morph-result" aria-live="polite">
+      {device.status === "running" ? <>
+        <div><b>Preparing morph preview</b><strong>{device.progress ?? 0}%</strong></div>
+        <span className="dgw-morph-progress"><i style={{ width: `${device.progress ?? 0}%` }} /></span>
+        <small>{device.message}</small>
+      </> : preview ? <>
+        <b>{preview.selectedPositions.toLocaleString()} / {preview.differingPositions.toLocaleString()} differing positions</b>
+        <small>{preview.generatedEdits.toLocaleString()} copy-specific changes · {preview.amount}% toward {target?.name ?? "target"}</small>
+        {preview.noOpReason && <small>{preview.noOpReason}</small>}
+      </> : <span>{targets.length === 0
+        ? "Duplicate a track to create a compatible morph target."
+        : device.message ?? "Choose another project track and preview a discrete intermediate state."}</span>}
+    </div>
+    <footer className="dgw-device-actions">
+      <button type="button" onClick={onPreview} disabled={disabled || device.bypassed || track.kind === "source" || !target}>Preview</button>
+      <button type="button" className="primary" onClick={onApply} disabled={disabled || device.bypassed || !preview?.compoundLayerId || preview.generatedEdits === 0}>Apply morph state</button>
+    </footer>
+    <details className="dgw-device-details">
+      <summary>Details</summary>
+      {preview && <dl className="dgw-device-metadata">
+        <div><dt>Track differences</dt><dd>{preview.differingPositions.toLocaleString()} positions · {preview.differingAlleles.toLocaleString()} allele-copy changes</dd></div>
+        <div><dt>Preview state</dt><dd>{preview.selectedPositions.toLocaleString()} positions · {preview.generatedEdits.toLocaleString()} changes</dd></div>
+      </dl>}
       <p className="dgw-device-limitation optimizer-limit"><b>Limit</b>{device.limitation}</p>
     </details>
   </section>;
@@ -1253,7 +1659,7 @@ function TrackMeterCard({
         {meanDelta !== undefined && <div className={`dgw-meter-fill ${meanDelta > 0 ? "positive" : "negative"}`} style={{ height: `${fill}%` }} />}
       </div>
       <div className="dgw-meter-readout">
-        <small>Mean SnpEff impact Δ / mutation</small>
+        <small>Mean consequence impact Δ / mutation</small>
         <strong>{meanDelta === undefined ? "—" : `${meanDelta >= 0 ? "+" : ""}${meanDelta.toFixed(4)}`}</strong>
         <span>{meanDelta === undefined ? "Evaluate every active mutation" : meanDelta > 0 ? "Average above source · red" : meanDelta < 0 ? "Average below source" : "Same average as source"}</span>
         <div className="dgw-meter-total">
@@ -1273,10 +1679,11 @@ function TrackMeterCard({
         <span><i className="is-unchanged" />Unchanged <b>{distribution.unchanged.toLocaleString()}</b></span>
         <span><i className="is-higher" />Higher <b>{distribution.higher.toLocaleString()}</b></span>
       </div>
+      {distribution.unchanged === meter.activeMutations && <p className="muted">The DNA changed, but every evaluated allele remained in the same coarse consequence-impact class as its source allele.</p>}
     </section>}
     <div className="dgw-meter-devices">
-      {meter.deviceCoverage.map((device) => <div className={device.bypassed ? "is-bypassed" : ""} key={device.id} title={device.bypassed ? "Device bypassed; retained results do not contribute" : `${device.exactMatches} exact-match results`}>
-        <span>{device.label}</span><b>{device.bypassed ? "Bypassed" : `${device.evaluated}/${device.total}`}</b>
+      {meter.deviceCoverage.map((device) => <div className={device.bypassed ? "is-bypassed" : ""} key={device.id} title={device.bypassed ? "Device bypassed; retained results do not contribute" : (device.unavailable ?? 0) > 0 ? `${(device.unavailable ?? 0).toLocaleString()} mutations could not be evaluated because the resource is unavailable` : (device.errors ?? 0) > 0 ? `${(device.errors ?? 0).toLocaleString()} mutations returned an error` : device.id === CONSEQUENCE_DEVICE_ID ? `${(device.noTranscriptFeature ?? 0).toLocaleString()} current alleles had no overlapping transcript feature` : `${device.exactMatches} exact-match results`}>
+        <span>{device.label}</span><b>{device.bypassed ? "Bypassed" : (device.errors ?? 0) > 0 ? "Error" : (device.unavailable ?? 0) > 0 ? "Unavailable" : `${device.evaluated}/${device.total}`}</b>
       </div>)}
     </div>
     <div className="dgw-meter-edits">
@@ -1308,7 +1715,9 @@ function TrackMeterCard({
           ? "Profiling…"
           : profiler?.status === "complete"
             ? "Refresh profile"
-            : "Analyze track"}
+            : profiler?.status === "partial"
+              ? "Retry profile"
+              : "Analyze now"}
       </button>
     </div>
     <p className="dgw-meter-limit">Additive allele-level signal. It is not disease probability and does not model combined effects.</p>
@@ -1318,6 +1727,7 @@ function TrackMeterCard({
 type RackItem =
   | { type: "optimizer"; order: number; device: GenomeOptimizerDevice }
   | { type: "randomizer"; order: number; device: AlleleRandomizerDevice }
+  | { type: "morph"; order: number; device: GenomeMorphDevice }
   | { type: "compact"; order: number; device: RackDeviceView };
 
 type RackGroupId = "edit" | "evidence" | "analyze" | "visualize";
@@ -1330,7 +1740,7 @@ const RACK_GROUPS: Array<{ id: RackGroupId; label: string; description: string }
 ];
 
 function rackGroupId(item: RackItem): RackGroupId {
-  if (item.type === "randomizer") return "edit";
+  if (item.type === "randomizer" || item.type === "morph") return "edit";
   if (item.type === "optimizer") return "analyze";
   if (item.device.kind === "visualization") return "visualize";
   return item.device.kind === "editing" ? "edit" : "evidence";
@@ -1346,7 +1756,9 @@ function DeviceBrowserItem({ item, applied, onAdd }: {
     ? rackTargetLabel(item.device.target)
     : item.type === "optimizer"
       ? rackTargetLabel(item.device.target ?? "focusedRegion")
-      : "Selected variants";
+      : item.type === "morph"
+        ? "Another compatible track"
+        : "Selected variants";
   return <button type="button" className="dgw-device-browser-item" onClick={onAdd} disabled={applied || !onAdd}>
     <span className={`dgw-device-light ${deviceLightState(item.device.status, !applied || item.device.bypassed)}`} aria-hidden="true" />
     <span><b>{name}</b><small>{target}</small></span>
@@ -1380,6 +1792,12 @@ function VariantMapPanel({
   const activeEdits = (meter?.items ?? [])
     .filter((item) => item.enabled && item.contig === region.contig && item.position >= region.start && item.position <= region.end)
     .sort((left, right) => left.position - right.position || left.editId.localeCompare(right.editId));
+  const compactBulkLayers = (meter?.items ?? [])
+    .filter((item) => item.enabled && (item.mutationCount ?? 1) > 1);
+  const compactBulkMutations = compactBulkLayers.reduce(
+    (total, item) => total + (item.mutationCount ?? 1),
+    0
+  );
   const editMarks = sampleVariantMapMarks(activeEdits, 500);
   const evaluatedEdits = activeEdits.filter((item) => item.evaluated && item.impactDelta !== undefined);
   const scale = Math.max(0.33, ...evaluatedEdits.map((item) => Math.abs(item.impactDelta ?? 0)));
@@ -1403,7 +1821,8 @@ function VariantMapPanel({
       <div><small>Visible alleles</small><b>{track.alleles.length.toLocaleString()}</b></div>
       <div><small>Active edits</small><b>{activeEdits.length.toLocaleString()}</b></div>
       <div><small>Evaluated edits</small><b>{evaluatedEdits.length.toLocaleString()} / {activeEdits.length.toLocaleString()}</b></div>
-      <p>SnpEff molecular-impact Δ relative to the source allele</p>
+      {compactBulkMutations > 0 && <div className="bulk"><small>Compact bulk mutations</small><b>{compactBulkMutations.toLocaleString()}</b></div>}
+      <p>Transcript-consequence impact Δ relative to the source allele</p>
     </div>
 
     <div className="dgw-variant-map-chart">
@@ -1476,12 +1895,13 @@ function VariantMapPanel({
           </g>;
         })}
       </svg>
-      {activeEdits.length === 0 && <p className="dgw-variant-map-empty">No active mutation blocks in this region. Source VCF alleles remain visible on the center line.</p>}
+      {activeEdits.length === 0 && compactBulkMutations === 0 && <p className="dgw-variant-map-empty">No active mutation blocks in this region. Source VCF alleles remain visible on the center line.</p>}
+      {compactBulkMutations > 0 && <p className="dgw-variant-map-empty bulk-layer-note"><b>{compactBulkMutations.toLocaleString()} active mutations are stored in {compactBulkLayers.length === 1 ? "a compact bulk layer" : `${compactBulkLayers.length} compact bulk layers`}.</b> Variant Map does not yet expand bulk layers into position-level marks. Use Track Monitor for the aggregate profile; ordinary allele-level blocks remain visible here.</p>}
     </div>
 
     <footer className="dgw-variant-map-footer">
       <div className="dgw-variant-map-legend"><span className="higher"><i />Higher</span><span className="neutral"><i />No change</span><span className="lower"><i />Lower</span><span className="unknown"><i />Not evaluated</span></div>
-      <p>Higher and lower mean only the displayed source-relative SnpEff model output. They do not mean diseased, healthy, pathogenic, or benign. Nearby allele interactions are not modeled.</p>
+      <p>Higher and lower mean only the displayed source-relative consequence model output. They do not mean diseased, healthy, pathogenic, or benign. Nearby allele interactions are not modeled.</p>
       {(track.alleles.length > sourceMarks.length || activeEdits.length > editMarks.length) && <small>Dense view: showing {sourceMarks.length.toLocaleString()} representative allele marks and {editMarks.length.toLocaleString()} representative active edits.</small>}
     </footer>
   </section>;
@@ -1489,6 +1909,7 @@ function VariantMapPanel({
 
 function DeviceRack({
   track,
+  tracks,
   selectedAlleleCount,
   interactiveAlleleLimit,
   rackDevices,
@@ -1504,6 +1925,10 @@ function DeviceRack({
   onRandomizerPreview,
   onRandomizerApply,
   onRandomizerBypass,
+  onMorphChange,
+  onMorphPreview,
+  onMorphApply,
+  onMorphBypass,
   onSelectDevice,
   onToggleDevice,
   onRunDevice,
@@ -1511,9 +1936,11 @@ function DeviceRack({
   appliedDeviceIds,
   onAddDevice,
   onRemoveDevice,
+  onResetDevice,
   openBrowserRequest
 }: {
   track?: GenomeTrackModel;
+  tracks: GenomeTrackModel[];
   selectedAlleleCount: number;
   interactiveAlleleLimit: number;
   rackDevices: RackDeviceView[];
@@ -1529,6 +1956,10 @@ function DeviceRack({
   onRandomizerPreview?: () => void;
   onRandomizerApply?: () => void;
   onRandomizerBypass?: (bypassed: boolean) => void;
+  onMorphChange?: (settings: GenomeMorphSettings) => void;
+  onMorphPreview?: () => void;
+  onMorphApply?: () => void;
+  onMorphBypass?: (bypassed: boolean) => void;
   onSelectDevice?: (deviceId: string) => void;
   onToggleDevice?: (deviceId: string, bypassed: boolean) => void;
   onRunDevice?: (deviceId: string) => void;
@@ -1536,6 +1967,7 @@ function DeviceRack({
   appliedDeviceIds: string[];
   onAddDevice?: (deviceId: string) => void;
   onRemoveDevice?: (deviceId: string) => void;
+  onResetDevice?: (deviceId: string) => void;
   openBrowserRequest?: number;
 }) {
   const [deviceBrowserOpen, setDeviceBrowserOpen] = useState(false);
@@ -1543,7 +1975,7 @@ function DeviceRack({
     if (openBrowserRequest) setDeviceBrowserOpen(true);
   }, [openBrowserRequest]);
   if (!track) {
-    return <aside className="dgw-device-rack is-empty"><p>Select a genome track to see its devices.</p></aside>;
+    return <aside className="dgw-device-rack is-empty" data-context-help="device-rack"><p>Select a genome track to see its devices.</p></aside>;
   }
   const selectedRackTrack = track;
 
@@ -1554,6 +1986,9 @@ function DeviceRack({
   }
   if (track.randomizer) {
     catalogItems.push({ type: "randomizer", order: track.randomizer.rackOrder ?? 0, device: track.randomizer });
+  }
+  if (track.morph) {
+    catalogItems.push({ type: "morph", order: track.morph.rackOrder ?? 0, device: track.morph });
   }
   catalogItems.sort((left, right) => left.order - right.order || left.device.id.localeCompare(right.device.id));
   const appliedSet = new Set(appliedDeviceIds);
@@ -1570,6 +2005,8 @@ function DeviceRack({
   })).filter((group) => group.items.length > 0);
   const selectedItem = rackItems.find((item) => item.device.id === selectedDeviceId) ?? rackItems[0];
   const selectedRackDeviceId = selectedItem?.device.id;
+  const selectedDeviceCanReset = selectedItem?.type === "optimizer" || selectedItem?.type === "randomizer" || selectedItem?.type === "morph";
+  const selectedDeviceRunning = selectedItem?.device.status === "running";
 
   function openDeviceBrowser() {
     setDeviceBrowserOpen(true);
@@ -1606,6 +2043,20 @@ function DeviceRack({
         onApply={onRandomizerApply ?? (() => undefined)}
         onBypass={onRandomizerBypass ?? (() => undefined)}
       />
+    ) : item.type === "morph" ? (
+      <GenomeMorphDeviceCard
+        key={item.device.id}
+        track={selectedRackTrack}
+        targets={tracks.filter((candidate) => candidate.id !== selectedRackTrack.id)}
+        device={item.device}
+        selected={selectedRackDeviceId === item.device.id}
+        busy={busy}
+        onSelect={onSelectDevice ? () => onSelectDevice(item.device.id) : undefined}
+        onChange={onMorphChange ?? (() => undefined)}
+        onPreview={onMorphPreview ?? (() => undefined)}
+        onApply={onMorphApply ?? (() => undefined)}
+        onBypass={onMorphBypass ?? (() => undefined)}
+      />
     ) : (
       <CompactDeviceCard
         key={item.device.id}
@@ -1622,11 +2073,17 @@ function DeviceRack({
   }
 
   return (
-    <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}`}>
+    <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}`} data-context-help="device-rack">
       <div className="dgw-device-rack-title">
         <div><span>Device rack</span><small>{track.name} · {rackTemplateName} · full device panels in applied order</small></div>
         <div className="dgw-device-rack-actions">
           <button type="button" onClick={openDeviceBrowser} disabled={busy}>+ Add device</button>
+          <button
+            type="button"
+            onClick={() => selectedItem && onResetDevice?.(selectedItem.device.id)}
+            disabled={busy || selectedDeviceRunning || !selectedDeviceCanReset || !onResetDevice}
+            title={!selectedDeviceCanReset ? "The selected device has no adjustable state" : "Restore factory controls and discard the current uncommitted result"}
+          >Reset selected</button>
           <button
             type="button"
             onClick={() => selectedItem && onRemoveDevice?.(selectedItem.device.id)}
@@ -1674,6 +2131,7 @@ export function TrackDeviceWorkspace({
   weightControls,
   rackDevices = [],
   appliedDeviceIds = [],
+  variantDensity,
   trackMeter,
   trackProfiler,
   showDeviceRack = true,
@@ -1708,18 +2166,22 @@ export function TrackDeviceWorkspace({
   onRandomizerPreview,
   onRandomizerApply,
   onRandomizerBypass,
+  onMorphChange,
+  onMorphPreview,
+  onMorphApply,
+  onMorphBypass,
   onSelectDevice,
   onToggleDevice,
   onRunDevice,
   onAddDevice,
   onRemoveDevice,
+  onResetDevice,
   onAnalyzeTrack
 }: TrackDeviceWorkspaceProps) {
   const selectedTrack = tracks.find((track) => track.id === selectedTrackId);
   const semanticSelectedAlleleCount = selectedAlleleCount ?? selectedAlleleIds.length;
   const visibleSelectedAlleleCount = selectedTrack?.alleles.filter((allele) => selectedAlleleIds.includes(allele.id)).length ?? 0;
   const selectionExtendsBeyondView = semanticSelectedAlleleCount > visibleSelectedAlleleCount;
-  const editableTrackCount = tracks.filter((track) => track.kind === "candidate").length;
   const span = viewportSpan(region);
   const ticks = viewportTicks(region);
   const [trackHeight, setTrackHeight] = useState(() => {
@@ -1740,6 +2202,7 @@ export function TrackDeviceWorkspace({
   });
   const [openVisualizationId, setOpenVisualizationId] = useState<string>();
   const [resizingRack, setResizingRack] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>();
   const workspaceRef = useRef<HTMLDivElement>(null);
   const openVisualization = rackDevices.find((device) => (
     device.id === openVisualizationId
@@ -1747,6 +2210,15 @@ export function TrackDeviceWorkspace({
       && appliedDeviceIds.includes(device.id)
       && !device.bypassed
   ));
+
+  const openContextMenu = useCallback<OpenContextMenu>((menu) => setContextMenu(menu), []);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu((current) => {
+      const invoker = current?.invoker;
+      if (invoker?.isConnected) window.requestAnimationFrame(() => invoker.focus());
+      return undefined;
+    });
+  }, []);
 
   useEffect(() => {
     if (openVisualizationId && !openVisualization) setOpenVisualizationId(undefined);
@@ -1832,11 +2304,6 @@ export function TrackDeviceWorkspace({
 
   function pan(fraction: number) {
     updateViewport(panViewport(region, span * fraction, contigLength));
-  }
-
-  function scrollTo(center: number) {
-    const currentCenter = region.start + (span - 1) / 2;
-    updateViewport(panViewport(region, center - currentCenter, contigLength));
   }
 
   function handleTrackWheel(event: WheelEvent<HTMLDivElement>) {
@@ -1942,6 +2409,15 @@ export function TrackDeviceWorkspace({
               title="Fit selected allele (0)"
             >Fit allele</button>
             <span className="dgw-selection-controls" aria-label="Allele selection controls">
+              <output
+                className={`dgw-selection-count${semanticSelectedAlleleCount === 0 ? " is-empty" : ""}${selectionExtendsBeyondView ? " has-offscreen" : ""}`}
+                aria-live="polite"
+                title={selectionExtendsBeyondView ? `${visibleSelectedAlleleCount.toLocaleString()} selected alleles are shown in the current interval` : undefined}
+              >
+                <b>{semanticSelectedAlleleCount.toLocaleString()}</b>
+                <span>{semanticSelectedAlleleCount === 1 ? "allele selected" : "alleles selected"}</span>
+                {selectionExtendsBeyondView && <em>{visibleSelectedAlleleCount.toLocaleString()} shown</em>}
+              </output>
               <button type="button" onClick={() => onSelectVisibleAlleles?.(selectedTrackId)} disabled={busy || !onSelectVisibleAlleles || (selectedTrack?.alleles.length ?? 0) === 0} title="Select VCF alleles visible in the current interval">Select visible</button>
               <button
                 type="button"
@@ -1952,9 +2428,6 @@ export function TrackDeviceWorkspace({
                 title="Select every VCF allele in this track across all chromosomes (Ctrl/Command+A)"
               >{allAllelesSelected ? "All selected ✓" : "Select all in track"}</button>
               <button type="button" onClick={onClearAlleleSelection} disabled={busy || !onClearAlleleSelection || semanticSelectedAlleleCount === 0}>Clear</button>
-              <small>{selectionExtendsBeyondView
-                ? `${semanticSelectedAlleleCount.toLocaleString()} selected · ${visibleSelectedAlleleCount.toLocaleString()} shown here`
-                : `${semanticSelectedAlleleCount.toLocaleString()} selected`}</small>
             </span>
             <span className="dgw-height-controls" aria-label="Track height controls">
               <small>Height</small>
@@ -1989,12 +2462,13 @@ export function TrackDeviceWorkspace({
               key={track.id}
               track={track}
               region={region}
+              density={variantDensity}
               selected={track.id === selectedTrackId}
               selectedEditId={selectedEditId}
               selectedAlleleId={selectedAlleleId}
               selectedAlleleIds={selectedAlleleIds}
               busy={busy}
-              canDelete={track.kind === "candidate" && editableTrackCount > 1}
+              canDelete={track.kind === "candidate"}
               minimized={minimizedTrackIds.includes(track.id)}
               onSelect={() => onSelectTrack(track.id)}
               onDuplicate={() => onDuplicateTrack(track.id)}
@@ -2008,25 +2482,16 @@ export function TrackDeviceWorkspace({
               onSelectAllele={(alleleId, additive) => onSelectAllele(track.id, alleleId, additive)}
               onMarqueeSelectAlleles={onMarqueeSelectAlleles ? (alleleIds, additive) => onMarqueeSelectAlleles(track.id, alleleIds, additive) : undefined}
               onToggleEdit={(editId, enabled) => onToggleEdit(track.id, editId, enabled)}
+              onAnalyze={onAnalyzeTrack ? () => onAnalyzeTrack(track.id) : undefined}
+              onFocusPosition={(position) => updateViewport(focusViewport(region, position, contigLength))}
+              onFocusRange={(start, end) => updateViewport({ contig: region.contig, start, end })}
+              onSelectDevice={onSelectDevice ? (deviceId) => onSelectDevice(track.id, deviceId) : undefined}
+              onOpenContextMenu={openContextMenu}
             />
           ))}
           {tracks.length === 0 && <p className="dgw-track-empty">No genome tracks are available.</p>}
         </div>
 
-        <div className="dgw-horizontal-navigator">
-          <span>{region.contig}:1</span>
-          <input
-            type="range"
-            min={1}
-            max={contigLength ?? Math.max(region.end, 1)}
-            step={Math.max(1, Math.round(span / 100))}
-            value={Math.round(region.start + (span - 1) / 2)}
-            onChange={(event) => scrollTo(Number(event.currentTarget.value))}
-            disabled={busy || !onViewportChange || !contigLength}
-            aria-label="Scroll left or right along the contig"
-          />
-          <span>{contigLength?.toLocaleString() ?? "contig end"}</span>
-        </div>
       </div>
 
       {showLowerPane && <div
@@ -2057,6 +2522,7 @@ export function TrackDeviceWorkspace({
           onClose={() => setOpenVisualizationId(undefined)}
         /> : <DeviceRack
           track={selectedTrack}
+          tracks={tracks}
           selectedAlleleCount={semanticSelectedAlleleCount}
           interactiveAlleleLimit={interactiveAlleleLimit}
           rackDevices={rackDevices}
@@ -2072,6 +2538,10 @@ export function TrackDeviceWorkspace({
           onRandomizerPreview={onRandomizerPreview && selectedTrack ? () => onRandomizerPreview(selectedTrack.id) : undefined}
           onRandomizerApply={onRandomizerApply && selectedTrack ? () => onRandomizerApply(selectedTrack.id) : undefined}
           onRandomizerBypass={onRandomizerBypass && selectedTrack ? (bypassed) => onRandomizerBypass(selectedTrack.id, bypassed) : undefined}
+          onMorphChange={onMorphChange && selectedTrack ? (settings) => onMorphChange(selectedTrack.id, settings) : undefined}
+          onMorphPreview={onMorphPreview && selectedTrack ? () => onMorphPreview(selectedTrack.id) : undefined}
+          onMorphApply={onMorphApply && selectedTrack ? () => onMorphApply(selectedTrack.id) : undefined}
+          onMorphBypass={onMorphBypass && selectedTrack ? (bypassed) => onMorphBypass(selectedTrack.id, bypassed) : undefined}
           onSelectDevice={onSelectDevice && selectedTrack ? (deviceId) => onSelectDevice(selectedTrack.id, deviceId) : undefined}
           onToggleDevice={onToggleDevice && selectedTrack ? (deviceId, bypassed) => onToggleDevice(selectedTrack.id, deviceId, bypassed) : undefined}
           onRunDevice={onRunDevice && selectedTrack ? (deviceId) => onRunDevice(selectedTrack.id, deviceId) : undefined}
@@ -2079,11 +2549,12 @@ export function TrackDeviceWorkspace({
           appliedDeviceIds={appliedDeviceIds}
           onAddDevice={onAddDevice && selectedTrack ? (deviceId) => onAddDevice(selectedTrack.id, deviceId) : undefined}
           onRemoveDevice={onRemoveDevice && selectedTrack ? (deviceId) => onRemoveDevice(selectedTrack.id, deviceId) : undefined}
+          onResetDevice={onResetDevice && selectedTrack ? (deviceId) => onResetDevice(selectedTrack.id, deviceId) : undefined}
           openBrowserRequest={deviceBrowserRequest}
         />)}</div>
       </div>}
       </div>
-      {showTrackMeter && trackMeter && <aside className="dgw-track-monitor" aria-label="Track Monitor">
+      {showTrackMeter && trackMeter && <aside className="dgw-track-monitor" aria-label="Track Monitor" data-context-help="track-monitor">
         <header><span>Track Monitor</span><small>{selectedTrack?.name ?? "Selected track"}</small></header>
         <div className="dgw-track-monitor-body"><TrackMeterCard
           meter={trackMeter}
@@ -2092,6 +2563,7 @@ export function TrackDeviceWorkspace({
           onAnalyze={onAnalyzeTrack && selectedTrack ? () => onAnalyzeTrack(selectedTrack.id) : undefined}
         /></div>
       </aside>}
+      {contextMenu && <ContextMenu menu={contextMenu} onClose={closeContextMenu} />}
     </section>
   );
 }

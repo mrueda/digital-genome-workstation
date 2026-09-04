@@ -11,12 +11,15 @@ import type {
   FocusContext,
   FocusFastaExport,
   FocusView,
+  GeneSearchHit,
   GenomeTrackLane,
   GenomeState,
   Haplotype,
   OptimizerRequest,
+  OptimizerBackgroundResult,
   OptimizerRunResult,
   ProcessProgress,
+  ProjectResourceHealth,
   ProjectSnapshot,
   RandomizerPreviewResult,
   RandomizerRequest,
@@ -30,20 +33,24 @@ import type {
   VariantSelection,
   SelectionResolution,
   TrackEvidenceProfileResult,
+  TrackMorphPreviewResult,
+  TrackMorphRequest,
+  TransportTargetRequest,
+  TransportTargetResult,
   VcfInspection,
   WorkspaceSnapshot
 } from "./types";
 
 export const api = {
   deviceCatalog: () => invoke<DeviceManifest[]>("device_catalog"),
-  suggestedBundle: () => invoke<ResourceBundle>("suggested_development_bundle"),
-  exampleFixture: () => invoke<ExampleFixture>("example_fixture"),
+  suggestedBundles: () => invoke<ResourceBundle[]>("suggested_development_bundles"),
+  exampleFixture: (assembly: "b37" | "hg38") => invoke<ExampleFixture>("example_fixture", { assembly }),
   validateBundle: (bundle: ResourceBundle) =>
     invoke<string[]>("validate_bundle", { bundle }),
-  inspectVcf: (path: string, onProgress?: (progress: ProcessProgress) => void) => {
+  inspectVcf: (path: string, assembly: string, onProgress?: (progress: ProcessProgress) => void) => {
     const channel = new Channel<ProcessProgress>();
     channel.onmessage = (progress) => onProgress?.(progress);
-    return invoke<VcfInspection>("inspect_vcf_file", { path, assembly: "b37", onProgress: channel });
+    return invoke<VcfInspection>("inspect_vcf_file", { path, assembly, onProgress: channel });
   },
   createProject: (request: {
     projectPath: string;
@@ -59,8 +66,18 @@ export const api = {
   createProjectFromCurrent: (currentProjectPath: string, templateId: "standardEvidence" | "empty") =>
     invoke<CreatedProject>("create_project_from_current", { currentProjectPath, templateId }),
   openProject: (path: string) => invoke<ProjectSnapshot>("open_project", { path }),
+  projectResourceHealth: (projectPath: string) =>
+    invoke<ProjectResourceHealth>("project_resource_health", { projectPath }),
+  loadWorkstationSession: <TSession = unknown>(projectPath: string) =>
+    invoke<TSession | null>("load_workstation_session", { projectPath }),
+  saveWorkstationSession: (projectPath: string, session: unknown) =>
+    invoke<string>("save_workstation_session", { projectPath, session }),
+  saveProjectCopy: (projectPath: string, destinationPath: string) =>
+    invoke<CreatedProject>("save_project_copy", { projectPath, destinationPath }),
   focusRegion: (projectPath: string, context: FocusContext) =>
     invoke<FocusView>("focus_region", { projectPath, context }),
+  searchGenes: (projectPath: string, query: string, limit = 12) =>
+    invoke<GeneSearchHit[]>("search_genes", { projectPath, query, limit }),
   exportFocusFasta: (
     projectPath: string,
     trackId: string,
@@ -84,6 +101,8 @@ export const api = {
     invoke<VariantDensity>("variant_density", { projectPath, trackId, context }),
   resolveVariantSelection: (projectPath: string, selection: VariantSelection, limit: number) =>
     invoke<SelectionResolution>("resolve_variant_selection", { projectPath, selection, limit }),
+  transportTarget: (projectPath: string, request: TransportTargetRequest) =>
+    invoke<TransportTargetResult>("transport_target", { projectPath, request }),
   saveWorkspace: (projectPath: string, workspace: WorkspaceSnapshot) =>
     invoke<ProjectSnapshot>("save_workspace", { projectPath, workspace }),
   selectTrack: (projectPath: string, trackId: string) =>
@@ -94,10 +113,29 @@ export const api = {
     invoke<ProjectSnapshot>("rename_track", { projectPath, trackId, name }),
   deleteTrack: (projectPath: string, trackId: string) =>
     invoke<ProjectSnapshot>("delete_track", { projectPath, trackId }),
+  trackProfileInputFingerprint: (projectPath: string, trackId: string, deviceIds: string[]) =>
+    invoke<string>("track_profile_input_fingerprint", { projectPath, trackId, deviceIds }),
   consolidateTrack: (projectPath: string, trackId: string) =>
     invoke<ProjectSnapshot>("consolidate_track", { projectPath, trackId }),
   runOptimizer: (projectPath: string, trackId: string, focus: FocusContext, request: OptimizerRequest) =>
     invoke<OptimizerRunResult>("run_optimizer", { projectPath, trackId, focus, request }),
+  startOptimizerJob: (
+    projectPath: string,
+    trackId: string,
+    focus: FocusContext,
+    request: OptimizerRequest,
+    selection: VariantSelection | undefined,
+    selectionLimit: number | undefined,
+    workerThreads: number
+  ) => invoke<BackgroundJob<OptimizerBackgroundResult>>("start_optimizer_job", {
+    projectPath,
+    trackId,
+    focus,
+    request,
+    selection,
+    selectionLimit,
+    workerThreads
+  }),
   previewRandomizer: (
     projectPath: string,
     trackId: string,
@@ -145,6 +183,8 @@ export const api = {
     invoke<BackgroundJob<TResult>>("background_job", { projectPath, jobId }),
   listBackgroundJobs: (projectPath: string, limit = 50) =>
     invoke<BackgroundJob[]>("list_background_jobs", { projectPath, limit }),
+  deleteFinishedBackgroundJobs: (projectPath: string) =>
+    invoke<number>("delete_finished_background_jobs", { projectPath }),
   cancelBackgroundJob: (projectPath: string, jobId: string) =>
     invoke<BackgroundJob>("cancel_background_job", { projectPath, jobId }),
   startTrackEvidenceProfileJob: (
@@ -156,6 +196,19 @@ export const api = {
     projectPath,
     trackId,
     deviceIds,
+    workerThreads
+  }),
+  startTrackMorphPreviewJob: (
+    projectPath: string,
+    trackId: string,
+    targetTrackId: string,
+    request: TrackMorphRequest,
+    workerThreads: number
+  ) => invoke<BackgroundJob<TrackMorphPreviewResult>>("start_track_morph_preview_job", {
+    projectPath,
+    trackId,
+    targetTrackId,
+    request,
     workerThreads
   }),
   setTrackEditBypass: (projectPath: string, trackId: string, editId: string, bypassed: boolean) =>

@@ -26,6 +26,12 @@
 .states i { display: inline-block; width: 8px; height: 8px; margin: 0 5px 0 10px; border: 2px solid #65c5d8; border-radius: 50%; }
 .states i:first-child { margin-left: 0; }
 .states .branch { border-color: #f4bd68; }
+.product { padding: 72px 28px 64px; border-bottom: 1px solid #393c3e; background: #101112; }
+.productHeading { width: min(1180px, 100%); margin: 0 auto 28px; display: grid; grid-template-columns: .38fr 1fr .62fr; gap: 28px; align-items: end; }
+.productHeading p { margin: 0; color: #65c5d8; font: 600 11px/1.4 ui-monospace, monospace; letter-spacing: .16em; }
+.productHeading h2 { margin: 0; font-size: clamp(26px, 3vw, 39px); line-height: 1.08; letter-spacing: -.035em; }
+.productHeading span { color: #85918d; font-size: 12px; line-height: 1.6; }
+.product img { display: block; width: min(1440px, 100%); margin: 0 auto; border: 1px solid #3d4548; border-radius: 10px; box-shadow: 0 28px 70px rgba(0,0,0,.38); }
 .workflow { padding: 52px 28px 34px; background: #181a1b; text-align: center; }
 .workflow img { display: block; width: min(1100px, 100%); margin: 0 auto; }
 .workflow p { margin: 22px 0 0; color: #82968e; font-size: 13px; }
@@ -36,5 +42,5 @@
 .card > span { color: #65c5d8; font: 600 10px ui-monospace, monospace; letter-spacing: .13em; text-transform: uppercase; }
 .card h2 { margin: 12px 0 9px; font-size: 19px; }
 .card p { margin: 0; color: #8da098; font-size: 13px; line-height: 1.65; }
-@media (max-width: 900px) { .heroInner { grid-template-columns: 1fr; padding-top: 70px; } .audition { transform: none; } .grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .heroInner { grid-template-columns: 1fr; padding-top: 70px; } .audition { transform: none; } .productHeading { grid-template-columns: 1fr; gap: 12px; } .grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 600px) { .copy h1 { font-size: 43px; } .grid { grid-template-columns: 1fr; } .evidence { grid-template-columns: 1fr; } }

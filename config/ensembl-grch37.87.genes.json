@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "geneAnnotation",
+  "id": "org.ensembl.homo-sapiens.grch37.87.genes",
+  "assembly": "GRCh37",
+  "projectAssemblyAliases": ["b37", "hg19"],
+  "contigStyle": "no_chr_prefix",
+  "format": "gtf",
+  "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz",
+  "indexPath": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Ensembl.GRCh37.87.genes.sqlite",
+  "release": "Ensembl 87",
+  "sourceUrl": "https://ftp.ensembl.org/pub/grch37/release-87/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz",
+  "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+  "sha256": "56bc520f5e9cbc14ab4d03b472355b572818729fa422b905ba62d58291590058",
+  "size": 42400095,
+  "geneCount": 57905
+}

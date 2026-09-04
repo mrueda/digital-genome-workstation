@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A run can propose only a small, reviewable set of edit operations.
-pub const MAX_OPTIMIZER_EDITS: u32 = 100;
-pub const MAX_SATURATION_POSITIONS: usize = 100;
+/// Bulk optimizer runs remain bounded, but their proposals can be stored as one
+/// compound layer rather than materialized as thousands of visible blocks.
+pub const MAX_OPTIMIZER_EDITS: u32 = 100_000;
+pub const MAX_SATURATION_POSITIONS: usize = 100_000;
 
 pub const ADDITIVE_SCORE_LIMITATION: &str = "Scores are additive sums of independently scored allele copies in the analyzed scope. Interactions among nearby variants, phase-dependent combined consequences, penetrance, and whole-genome effects are not modeled.";
 
@@ -71,7 +72,7 @@ pub struct OptimizerRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerEvidence {
-    /// Normalized SnpEff ANN impact signal: HIGH=1, MODERATE=0.67,
+    /// Normalized transcript-consequence impact signal: HIGH=1, MODERATE=0.67,
     /// LOW=0.33, and MODIFIER=0.1.
     pub impact_signal: f64,
     pub impact_label: Option<String>,
@@ -122,7 +123,8 @@ pub struct OptimizerExclusion {
 pub struct SaturationAlleleInput {
     pub source_variant: VariantKey,
     pub candidate_variant: VariantKey,
-    pub snpeff: EvidenceResult,
+    #[serde(alias = "snpeff")]
+    pub consequence: EvidenceResult,
     pub clinvar: EvidenceResult,
     pub evidence_statuses: BTreeMap<String, String>,
     pub exact_evidence_sources: Vec<String>,
@@ -134,7 +136,8 @@ pub struct SaturationAlleleInput {
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerAlleleEvidenceInput {
     pub variant: VariantKey,
-    pub snpeff: EvidenceResult,
+    #[serde(alias = "snpeff")]
+    pub consequence: EvidenceResult,
     pub clinvar: EvidenceResult,
 }
 
@@ -417,22 +420,26 @@ pub fn plan_saturation_optimizer(
         let mut local = Vec::with_capacity(3);
         for input in valid_inputs {
             if matches!(
-                input.snpeff.status,
+                input.consequence.status,
                 EvidenceStatus::Error
                     | EvidenceStatus::ResourceUnavailable
                     | EvidenceStatus::NotComputed
             ) {
                 return Err(DgwError::InvalidEdit(format!(
-                    "SnpEff could not evaluate saturation candidate {} ({:?})",
+                    "The consequence engine could not evaluate saturation candidate {} ({:?})",
                     input.candidate_variant.display(),
-                    input.snpeff.status
+                    input.consequence.status
                 )));
             }
             ensure_completed_clinvar(&input.candidate_variant, &input.clinvar)?;
-            let (evidence, score_components) =
-                score_live_evidence(Some(&input.snpeff), Some(&input.clinvar), false, request);
-            let snpeff_found = input.snpeff.status == EvidenceStatus::Found;
-            let comparable = snpeff_found && evidence.impact_label.is_some();
+            let (evidence, score_components) = score_live_evidence(
+                Some(&input.consequence),
+                Some(&input.clinvar),
+                false,
+                request,
+            );
+            let consequence_found = input.consequence.status == EvidenceStatus::Found;
+            let comparable = consequence_found && evidence.impact_label.is_some();
             let guarded = clinvar_is_pathogenic_or_likely_pathogenic(&input.clinvar);
             local.push((input, evidence, score_components, comparable, guarded));
         }
@@ -453,7 +460,7 @@ pub fn plan_saturation_optimizer(
                     exact_evidence_sources: input.exact_evidence_sources.clone(),
                     note: if !comparable {
                         Some(
-                            "SnpEff did not return a recognized comparable impact category.".into(),
+                            "The consequence engine did not return a recognized comparable impact category.".into(),
                         )
                     } else if guarded {
                         Some(
@@ -468,7 +475,7 @@ pub fn plan_saturation_optimizer(
             exclusions.push(saturation_exclusion(
                 selected_key,
                 haplotypes.first().copied(),
-                "At least one possible ALT lacks a recognized SnpEff impact, so this position cannot be compared safely.",
+                "At least one possible ALT lacks a recognized consequence impact, so this position cannot be compared safely.",
             ));
             continue;
         }
@@ -487,6 +494,9 @@ pub fn plan_saturation_optimizer(
                     selected_key.display()
                 ))
             })?;
+        let before_per_copy = local[current_index].2.objective_score;
+        let copies = haplotypes.len() as f64;
+        score_before += before_per_copy * copies;
         let winner_index = local
             .iter()
             .enumerate()
@@ -502,17 +512,34 @@ pub fn plan_saturation_optimizer(
                     &right.0.candidate_variant,
                 )
             })
-            .map(|(index, _)| index)
-            .ok_or_else(|| {
-                DgwError::InvalidEdit(format!(
-                    "every saturation candidate for {} is excluded by the fixed ClinVar guard",
-                    selected_key.display()
-                ))
-            })?;
-        let before_per_copy = local[current_index].2.objective_score;
+            .map(|(index, _)| index);
+        let Some(winner_index) = winner_index else {
+            for (index, (input, evidence, score_components, comparable, guarded)) in
+                local.iter().enumerate()
+            {
+                comparisons.push(OptimizerCandidateComparison {
+                    source_variant: selected_key.clone(),
+                    candidate_variant: input.candidate_variant.clone(),
+                    current: index == current_index,
+                    selected: false,
+                    comparable: *comparable,
+                    evidence: evidence.clone(),
+                    score_components: score_components.clone(),
+                    evidence_statuses: input.evidence_statuses.clone(),
+                    exact_evidence_sources: input.exact_evidence_sources.clone(),
+                    note: (*guarded).then(|| {
+                        "Excluded by the fixed ClinVar Pathogenic/Likely pathogenic guard.".into()
+                    }),
+                });
+            }
+            exclusions.push(saturation_exclusion(
+                selected_key,
+                haplotypes.first().copied(),
+                "Every possible ALT is excluded by the fixed ClinVar Pathogenic/Likely pathogenic guard.",
+            ));
+            continue;
+        };
         let after_per_copy = local[winner_index].2.objective_score;
-        let copies = haplotypes.len() as f64;
-        score_before += before_per_copy * copies;
 
         for (index, (input, evidence, score_components, comparable, guarded)) in
             local.iter().enumerate()
@@ -556,6 +583,7 @@ pub fn plan_saturation_optimizer(
                 edit: EditKind::SetAllele {
                     key: winner.0.candidate_variant.clone(),
                     source_key: Some(selected_key.clone()),
+                    unphased_slot: None,
                 },
                 evidence: winner.1.clone(),
                 score_components: winner.2.clone(),
@@ -620,7 +648,7 @@ pub fn plan_saturation_optimizer(
         limitation: ADDITIVE_SCORE_LIMITATION.into(),
         constraints: vec![
             "Candidates are restricted to the three non-reference SNV bases at each explicitly selected imported VCF position, across any chromosome.".into(),
-            "Only normalized SnpEff impact contributes to the comparable saturation score; database absence never lowers the score.".into(),
+            "Only normalized transcript-consequence impact contributes to the comparable saturation score; database absence never lowers the score.".into(),
             "All active chromosome-copy placements at a position are changed together; a bounded run never emits a partial homozygous replacement.".into(),
             format!("One run changes at most {} selected positions; a homozygous position may emit two internal mutation blocks.", request.max_edits),
         ],
@@ -750,12 +778,12 @@ fn validate_request(focus: &FocusContext, request: &OptimizerRequest) -> Result<
         }
         if request.weights.source_evidence != 0.0 {
             return Err(DgwError::InvalidEdit(
-                "saturation mode uses comparable SnpEff impact only; ClinVar absence and source membership cannot contribute to its score".into(),
+                "saturation mode uses comparable transcript-consequence impact only; ClinVar absence and source membership cannot contribute to its score".into(),
             ));
         }
         if request.weights.impact <= 0.0 {
             return Err(DgwError::InvalidEdit(
-                "saturation mode requires a positive SnpEff impact weight".into(),
+                "saturation mode requires a positive consequence-impact weight".into(),
             ));
         }
     }
@@ -788,11 +816,11 @@ fn validate_live_evidence<'a>(
             if required.insert(variant.key.stable_key()) {
                 let input = evidence_by_key.get(&variant.key).copied().ok_or_else(|| {
                     DgwError::InvalidEdit(format!(
-                        "live SnpEff evidence is missing for {}",
+                        "live consequence evidence is missing for {}",
                         variant.key.display()
                     ))
                 })?;
-                ensure_comparable_snpeff(&variant.key, &input.snpeff)?;
+                ensure_comparable_consequence(&variant.key, &input.consequence)?;
             }
         }
     }
@@ -815,17 +843,17 @@ fn validate_live_evidence<'a>(
     Ok(())
 }
 
-fn ensure_comparable_snpeff(key: &VariantKey, evidence: &EvidenceResult) -> Result<()> {
+fn ensure_comparable_consequence(key: &VariantKey, evidence: &EvidenceResult) -> Result<()> {
     if evidence.status != EvidenceStatus::Found {
         return Err(DgwError::InvalidEdit(format!(
-            "SnpEff did not return comparable exact-allele evidence for {} ({:?})",
+            "The consequence engine did not return comparable exact-allele evidence for {} ({:?})",
             key.display(),
             evidence.status
         )));
     }
     if impact_signal_from_evidence(evidence).1.is_none() {
         return Err(DgwError::InvalidEdit(format!(
-            "SnpEff returned no recognized impact category for {}",
+            "The consequence engine returned no recognized impact category for {}",
             key.display()
         )));
     }
@@ -1021,6 +1049,7 @@ fn collect_maximize_candidates(
                     edit: EditKind::SetAllele {
                         key: source_variant.key.clone(),
                         source_key: replacement_key,
+                        unphased_slot: None,
                     },
                     evidence: evidence.clone(),
                     score_components: components.clone(),
@@ -1129,7 +1158,7 @@ fn score_variant(
 ) -> (OptimizerEvidence, OptimizerScoreComponents) {
     let input = evidence_by_key.get(key).copied();
     score_live_evidence(
-        input.map(|value| &value.snpeff),
+        input.map(|value| &value.consequence),
         input.map(|value| &value.clinvar),
         exact_source_allele,
         request,
@@ -1137,12 +1166,12 @@ fn score_variant(
 }
 
 fn score_live_evidence(
-    snpeff: Option<&EvidenceResult>,
+    consequence: Option<&EvidenceResult>,
     clinvar: Option<&EvidenceResult>,
     exact_source_allele: bool,
     request: &OptimizerRequest,
 ) -> (OptimizerEvidence, OptimizerScoreComponents) {
-    let (impact_signal, impact_label) = snpeff
+    let (impact_signal, impact_label) = consequence
         .map(impact_signal_from_evidence)
         .unwrap_or((0.0, None));
     let clinvar_classification = clinvar.and_then(clinvar_classification);
@@ -1274,14 +1303,14 @@ fn clean_zero(value: f64) -> f64 {
 
 fn score_description(request: &OptimizerRequest) -> &'static str {
     if request.mode == OptimizerMode::Saturation {
-        return "Comparable normalized SnpEff impact per allele copy across all non-reference SNV bases at the selected positions.";
+        return "Comparable normalized transcript-consequence impact per allele copy across all non-reference SNV bases at the selected positions.";
     }
     match request.objective {
         OptimizerObjective::AlternateAlleleBurden => {
             "Number of alternate allele copies in the focused region; this measures distance from the reference, not biological burden."
         }
         OptimizerObjective::PredictedImpactBurden => {
-            "Comparable normalized SnpEff molecular-impact proxy across live-evaluated non-reference alleles; ClinVar is a fixed exclusion guard, not a score weight."
+            "Comparable normalized transcript-consequence impact proxy across live-evaluated non-reference alleles; ClinVar is a fixed exclusion guard, not a score weight."
         }
     }
 }
@@ -1393,7 +1422,7 @@ mod tests {
             },
             selected_variants: vec![source.clone()],
             evidence_device_ids: vec![
-                "org.dgw.builtin.snpeff".into(),
+                "org.dgw.builtin.variant-consequences".into(),
                 "org.dgw.builtin.clinvar".into(),
             ],
         }
@@ -1404,8 +1433,8 @@ mod tests {
         alternate: &str,
         impact: Option<&str>,
     ) -> SaturationAlleleInput {
-        let snpeff = EvidenceResult {
-            source: "SnpEff".into(),
+        let consequence = EvidenceResult {
+            source: "Variant Consequences".into(),
             status: if impact.is_some() {
                 EvidenceStatus::Found
             } else {
@@ -1423,7 +1452,7 @@ mod tests {
                 alternate: alternate.into(),
                 ..source.clone()
             },
-            snpeff,
+            consequence,
             clinvar: EvidenceResult {
                 source: "ClinVar".into(),
                 status: EvidenceStatus::NoExactMatch,
@@ -1431,7 +1460,7 @@ mod tests {
                 message: None,
             },
             evidence_statuses: BTreeMap::from([(
-                "org.dgw.builtin.snpeff".into(),
+                "org.dgw.builtin.variant-consequences".into(),
                 if impact.is_some() {
                     "found"
                 } else {
@@ -1450,8 +1479,8 @@ mod tests {
     ) -> OptimizerAlleleEvidenceInput {
         OptimizerAlleleEvidenceInput {
             variant: variant.clone(),
-            snpeff: EvidenceResult {
-                source: "SnpEff".into(),
+            consequence: EvidenceResult {
+                source: "Variant Consequences".into(),
                 status: if impact.is_some() {
                     EvidenceStatus::Found
                 } else {
@@ -1529,7 +1558,8 @@ mod tests {
             plan.proposals[0].edit,
             EditKind::SetAllele {
                 key: key(101, "G", "A"),
-                source_key: None
+                source_key: None,
+                unphased_slot: None
             }
         );
         assert!(plan
@@ -1687,6 +1717,22 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_accepts_more_than_the_interactive_detail_boundary() {
+        let current: Vec<_> = (1..=101)
+            .map(|position| variant(key(position, "A", "G"), true, false, false, &[]))
+            .collect();
+        let mut request = request(
+            OptimizerObjective::AlternateAlleleBurden,
+            OptimizerDirection::Minimize,
+        );
+        request.max_edits = 101;
+        request.selected_variants = current.iter().map(|variant| variant.key.clone()).collect();
+        let plan = plan_optimizer(&current, &current, &focus(), &request).unwrap();
+        assert_eq!(plan.considered_variants, 101);
+        assert_eq!(plan.proposals.len(), 101);
+    }
+
+    #[test]
     fn saturation_minimize_compares_all_non_reference_bases_and_preserves_placement() {
         let source_key = key(160, "A", "G");
         let current = variant(source_key.clone(), false, false, true, &[]);
@@ -1711,7 +1757,8 @@ mod tests {
             plan.proposals[0].edit,
             EditKind::SetAllele {
                 key: key(160, "A", "T"),
-                source_key: Some(source_key)
+                source_key: Some(source_key),
+                unphased_slot: None
             }
         );
         assert_eq!(
@@ -1748,7 +1795,8 @@ mod tests {
             plan.proposals[0].edit,
             EditKind::SetAllele {
                 key: key(170, "A", "C"),
-                source_key: Some(source_key)
+                source_key: Some(source_key),
+                unphased_slot: None
             }
         );
         assert!((plan.score_after - 1.0).abs() < 1e-12);
@@ -1795,6 +1843,40 @@ mod tests {
                     .as_deref()
                     .is_some_and(|note| note.contains("ClinVar"))
         }));
+    }
+
+    #[test]
+    fn saturation_reports_an_all_guarded_position_without_aborting_the_run() {
+        let source_key = key(176, "A", "G");
+        let current = variant(source_key.clone(), true, false, false, &[]);
+        let candidates: Vec<_> = [("C", "MODIFIER"), ("G", "HIGH"), ("T", "LOW")]
+            .into_iter()
+            .map(|(alternate, impact)| {
+                let mut candidate = saturation_candidate(&source_key, alternate, Some(impact));
+                candidate.clinvar = EvidenceResult {
+                    source: "ClinVar".into(),
+                    status: EvidenceStatus::Found,
+                    records: vec![BTreeMap::from([("CLNSIG".into(), "Pathogenic".into())])],
+                    message: None,
+                };
+                candidate
+            })
+            .collect();
+
+        let plan = plan_saturation_optimizer(
+            &[current],
+            &focus(),
+            &saturation_request(&source_key, OptimizerDirection::Maximize),
+            &candidates,
+        )
+        .unwrap();
+
+        assert!(plan.proposals.is_empty());
+        assert_eq!(plan.candidate_comparisons.len(), 3);
+        assert!(plan
+            .exclusions
+            .iter()
+            .any(|exclusion| exclusion.reason.contains("Every possible ALT")));
     }
 
     #[test]

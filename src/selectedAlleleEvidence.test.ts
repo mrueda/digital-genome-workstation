@@ -8,7 +8,7 @@ import {
   type SelectedAlleleEvidenceCache
 } from "./selectedAlleleEvidence";
 
-const found: EvidenceResult = { source: "SnpEff", status: "found", records: [{ impact: "HIGH" }] };
+const found: EvidenceResult = { source: "Variant Consequences", status: "found", records: [{ impact: "HIGH" }] };
 const exactMiss: EvidenceResult = { source: "ClinVar", status: "noExactMatch", records: [] };
 
 describe("selected-allele live evidence", () => {
@@ -19,22 +19,22 @@ describe("selected-allele live evidence", () => {
 
   it("returns cached live results first and identifies only missing active devices", () => {
     const cache: SelectedAlleleEvidenceCache = new Map();
-    cacheStableEvidence(cache, "allele", "snpeff", found);
+    cacheStableEvidence(cache, "allele", "consequence", found);
     cacheStableEvidence(cache, "allele", "clinvar", exactMiss);
 
-    expect(cachedEvidenceForDevices(cache, "allele", ["snpeff", "dbnsfp", "clinvar"]))
-      .toEqual({ snpeff: found, clinvar: exactMiss });
-    expect(missingEvidenceDeviceIds(cache, "allele", ["snpeff", "dbnsfp", "clinvar"]))
+    expect(cachedEvidenceForDevices(cache, "allele", ["consequence", "dbnsfp", "clinvar"]))
+      .toEqual({ consequence: found, clinvar: exactMiss });
+    expect(missingEvidenceDeviceIds(cache, "allele", ["consequence", "dbnsfp", "clinvar"]))
       .toEqual(["dbnsfp"]);
   });
 
   it("does not retain transient unavailable or error responses", () => {
     const cache: SelectedAlleleEvidenceCache = new Map();
-    cacheStableEvidence(cache, "allele", "snpeff", { source: "SnpEff", status: "resourceUnavailable", records: [] });
+    cacheStableEvidence(cache, "allele", "consequence", { source: "Variant Consequences", status: "resourceUnavailable", records: [] });
     cacheStableEvidence(cache, "allele", "clinvar", { source: "ClinVar", status: "error", records: [] });
 
     expect(cache.get("allele")).toBeUndefined();
-    expect(missingEvidenceDeviceIds(cache, "allele", ["snpeff", "clinvar"]))
-      .toEqual(["snpeff", "clinvar"]);
+    expect(missingEvidenceDeviceIds(cache, "allele", ["consequence", "clinvar"]))
+      .toEqual(["consequence", "clinvar"]);
   });
 });

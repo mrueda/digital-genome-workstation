@@ -465,18 +465,29 @@ pub fn validate_device_response(
     Ok(())
 }
 
-pub fn snpeff_device_manifest() -> DeviceManifest {
+pub const CONSEQUENCE_DEVICE_ID: &str = "org.dgw.builtin.variant-consequences";
+pub const LEGACY_SNPEFF_DEVICE_ID: &str = "org.dgw.builtin.snpeff";
+
+pub fn canonical_device_id(device_id: &str) -> &str {
+    if device_id == LEGACY_SNPEFF_DEVICE_ID {
+        CONSEQUENCE_DEVICE_ID
+    } else {
+        device_id
+    }
+}
+
+pub fn consequence_device_manifest() -> DeviceManifest {
     built_in_manifest(
-        "org.dgw.builtin.snpeff",
-        "SnpEff",
+        CONSEQUENCE_DEVICE_ID,
+        "Variant Consequences",
         "Predict transcript consequences for one normalized allele.",
         DeviceKind::Analysis,
         ALLELE_INPUT_SCHEMA_ID,
         ANNOTATION_OUTPUT_SCHEMA_ID,
         vec![resource_requirement(
-            "org.dgw.resource.snpeff-data",
+            "org.dgw.resource.consequence-annotation",
             DeviceResourceKind::TranscriptAnnotation,
-            "Assembly-specific SnpEff transcript annotation data; release is bound at runtime.",
+            "Assembly-specific transcript annotation used by the registered consequence engine.",
         )],
         vec!["Consequences are predicted independently per allele; compound and phase-dependent transcript consequences are not computed."],
     )
@@ -541,6 +552,19 @@ pub fn mutation_generator_device_manifest() -> DeviceManifest {
     )
 }
 
+pub fn genome_morph_device_manifest() -> DeviceManifest {
+    built_in_manifest(
+        "org.dgw.builtin.genome-morph",
+        "Genome Morph",
+        "Progressively substitute the effective genotype state of one compatible project track toward another.",
+        DeviceKind::Editing,
+        FOCUSED_TRACK_INPUT_SCHEMA_ID,
+        EDIT_PROPOSALS_OUTPUT_SCHEMA_ID,
+        Vec::new(),
+        vec!["Morph positions are discrete, synthetic editing scenarios between tracks sharing one source genome. They are not evolutionary generations, ancestors, descendants, offspring, or predictions of biological viability."],
+    )
+}
+
 pub fn variant_map_device_manifest() -> DeviceManifest {
     built_in_manifest(
         "org.dgw.builtin.variant-map",
@@ -556,11 +580,12 @@ pub fn variant_map_device_manifest() -> DeviceManifest {
 
 pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
     vec![
-        snpeff_device_manifest(),
+        consequence_device_manifest(),
         dbnsfp_device_manifest(),
         clinvar_device_manifest(),
         cosmic_device_manifest(),
         mutation_generator_device_manifest(),
+        genome_morph_device_manifest(),
         genome_optimizer_device_manifest(),
         variant_map_device_manifest(),
     ]
@@ -571,6 +596,7 @@ pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
 /// Keeping this lookup beside the catalog gives cache callers a single source
 /// of truth for the device version that produced an evidence result.
 pub fn built_in_device_manifest(device_id: &str) -> Option<DeviceManifest> {
+    let device_id = canonical_device_id(device_id);
     built_in_device_manifests()
         .into_iter()
         .find(|manifest| manifest.id == device_id)
@@ -602,7 +628,7 @@ fn built_in_manifest(
         kind,
         capabilities: vec![capability],
         protocol_version: DGW_DEVICE_PROTOCOL_VERSION.into(),
-        supported_assemblies: vec!["b37".into()],
+        supported_assemblies: vec!["b37".into(), "hg38".into()],
         input_schema_ids: vec![input_schema_id.into()],
         output_schema_ids: vec![output_schema_id.into()],
         resource_requirements,
@@ -889,6 +915,7 @@ mod tests {
                     alternate: "T".into(),
                 },
                 source_key: None,
+                unphased_slot: None,
             },
             note: Some("device proposal; not yet applied".into()),
             rationale: "Lowest bounded additive score among permitted alleles.".into(),
@@ -899,7 +926,7 @@ mod tests {
     #[test]
     fn built_in_catalog_is_valid_and_resource_releases_are_runtime_bindings() {
         let manifests = built_in_device_manifests();
-        assert_eq!(manifests.len(), 7);
+        assert_eq!(manifests.len(), 8);
         let mut ids = BTreeSet::new();
         for manifest in &manifests {
             validate_device_manifest(manifest).unwrap();
@@ -916,11 +943,11 @@ mod tests {
         assert!(manifests[1..4]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Evidence));
-        assert!(manifests[4..6]
+        assert!(manifests[4..7]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Editing));
         assert_eq!(manifests[4].kind, DeviceKind::Editing);
-        assert_eq!(manifests[6].kind, DeviceKind::Visualization);
+        assert_eq!(manifests[7].kind, DeviceKind::Visualization);
         assert!(manifests[4].resource_requirements.is_empty());
         assert!(manifests[..4].iter().all(|manifest| manifest
             .resource_requirements
@@ -935,29 +962,29 @@ mod tests {
 
     #[test]
     fn manifest_validation_enforces_kind_schema_version_and_resource_ids() {
-        let mut manifest = snpeff_device_manifest();
+        let mut manifest = consequence_device_manifest();
         manifest.kind = DeviceKind::Evidence;
         assert!(validate_device_manifest(&manifest)
             .unwrap_err()
             .to_string()
             .contains("LookupEvidence"));
 
-        let mut manifest = snpeff_device_manifest();
+        let mut manifest = consequence_device_manifest();
         manifest.version = "version one".into();
         assert!(validate_device_manifest(&manifest).is_err());
 
-        let mut manifest = snpeff_device_manifest();
+        let mut manifest = consequence_device_manifest();
         manifest.protocol_version = "2.0".into();
         assert!(validate_device_manifest(&manifest)
             .unwrap_err()
             .to_string()
             .contains("incompatible"));
 
-        let mut manifest = snpeff_device_manifest();
+        let mut manifest = consequence_device_manifest();
         manifest.input_schema_ids = vec!["Schema.With.Uppercase".into()];
         assert!(validate_device_manifest(&manifest).is_err());
 
-        let mut manifest = snpeff_device_manifest();
+        let mut manifest = consequence_device_manifest();
         manifest
             .resource_requirements
             .push(manifest.resource_requirements.first().unwrap().clone());
@@ -965,6 +992,18 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("duplicate resource"));
+    }
+
+    #[test]
+    fn legacy_snpeff_device_id_resolves_to_variant_consequences() {
+        assert_eq!(
+            canonical_device_id(LEGACY_SNPEFF_DEVICE_ID),
+            CONSEQUENCE_DEVICE_ID
+        );
+        assert_eq!(
+            built_in_device_manifest(LEGACY_SNPEFF_DEVICE_ID).map(|manifest| manifest.id),
+            Some(CONSEQUENCE_DEVICE_ID.into())
+        );
     }
 
     #[test]
@@ -1007,15 +1046,15 @@ mod tests {
         let nested = temporary.path().join("nested");
         fs::create_dir_all(&nested).unwrap();
         let optimizer_path = temporary.path().join("z-optimizer.dgw-device.json");
-        let snpeff_path = nested.join("a-snpeff.dgw-device.json");
+        let consequence_path = nested.join("a-consequence.dgw-device.json");
         fs::write(
             &optimizer_path,
             serde_json::to_vec_pretty(&genome_optimizer_device_manifest()).unwrap(),
         )
         .unwrap();
         fs::write(
-            &snpeff_path,
-            serde_json::to_vec_pretty(&snpeff_device_manifest()).unwrap(),
+            &consequence_path,
+            serde_json::to_vec_pretty(&consequence_device_manifest()).unwrap(),
         )
         .unwrap();
         fs::write(temporary.path().join("ignored.json"), b"{}").unwrap();
@@ -1024,13 +1063,13 @@ mod tests {
         assert_eq!(discovered.len(), 2);
         assert!(discovered[0].path < discovered[1].path);
         assert_eq!(
-            load_device_manifest(&snpeff_path).unwrap(),
-            snpeff_device_manifest()
+            load_device_manifest(&consequence_path).unwrap(),
+            consequence_device_manifest()
         );
 
         fs::write(
             nested.join("duplicate.dgw-device.json"),
-            serde_json::to_vec_pretty(&snpeff_device_manifest()).unwrap(),
+            serde_json::to_vec_pretty(&consequence_device_manifest()).unwrap(),
         )
         .unwrap();
         assert!(discover_device_manifests(&[temporary.path().to_path_buf()])

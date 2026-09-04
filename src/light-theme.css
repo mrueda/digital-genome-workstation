@@ -1,0 +1,202 @@
+html[data-dgw-theme="light"] {
+  color: var(--text);
+  background: var(--bg);
+  --bg: #eef1f3;
+  --panel: #f8fafb;
+  --panel-2: #edf1f3;
+  --surface: #ffffff;
+  --surface-raised: #e6ecef;
+  --surface-hover: #dce5e8;
+  --surface-active: #d6e7eb;
+  --line: #b7c2c7;
+  --line-soft: #d5dde0;
+  --text: #20272a;
+  --muted: #5f6b70;
+  --green: #2f7950;
+  --green-deep: #dceee3;
+  --cyan: #14798c;
+  --yellow: #8a7100;
+  --amber: #9a5d14;
+  --orange: #b45220;
+  --blue: #286da8;
+  --red: #b83f37;
+  --theme-canvas-deep: #e1e7ea;
+  --theme-canvas: #eef1f3;
+  --theme-surface-low: #f3f6f7;
+  --theme-surface: #ffffff;
+  --theme-surface-raised: #e6ecef;
+  --theme-surface-hover: #dce5e8;
+  --theme-border-soft: #d5dde0;
+  --theme-border: #b7c2c7;
+  --theme-border-strong: #8f9da3;
+  --theme-text-strong: #111719;
+  --theme-text: #2d363a;
+  --theme-text-muted: #5f6b70;
+  --theme-text-faint: #7a8589;
+  --theme-on-accent: #101719;
+}
+
+html[data-dgw-theme="light"] select {
+  color-scheme: light;
+}
+
+html[data-dgw-theme="light"] .dgw-track-device-workspace {
+  --tdw-bg: #eef1f3;
+  --tdw-panel: #f8fafb;
+  --tdw-raised: #e6ecef;
+  --tdw-line: #b7c2c7;
+  --tdw-line-soft: #d5dde0;
+  --tdw-text: #20272a;
+  --tdw-muted: #5f6b70;
+  --tdw-accent: #14798c;
+  --tdw-green: #2f7950;
+  --tdw-blue: #286da8;
+  --tdw-yellow: #8a7100;
+  --tdw-amber: #9a5d14;
+  --tdw-orange: #b45220;
+  --tdw-violet: #6849bd;
+  --tdw-red: #b83f37;
+}
+
+html[data-dgw-theme="light"] .modal-backdrop {
+  background: rgba(45, 55, 60, .38);
+}
+
+html[data-dgw-theme="light"] .brand-panel {
+  background: radial-gradient(circle at 15% 30%, rgba(20, 121, 140, .12) 0, transparent 38%), linear-gradient(145deg, #f8fafb, #e8edef);
+}
+
+html[data-dgw-theme="light"] .setup-submit {
+  background: linear-gradient(transparent, #f8fafb 12px);
+}
+
+html[data-dgw-theme="light"] .selected-variant {
+  background: linear-gradient(140deg, rgba(20, 121, 140, .10), transparent);
+}
+
+html[data-dgw-theme="light"] .sequence-stage {
+  background: radial-gradient(circle at 50% 10%, rgba(20, 121, 140, .06), transparent 45%);
+}
+
+html[data-dgw-theme="light"] .variant-item.active,
+html[data-dgw-theme="light"] .gene-focus-actions button.selected {
+  background: #dbecef;
+}
+
+html[data-dgw-theme="light"] .gene-focus-actions button.primary {
+  color: #ffffff;
+  background: #14798c;
+}
+
+html[data-dgw-theme="light"] .gene-focus-actions button.primary:hover:not(:disabled) {
+  background: #0f6878;
+}
+
+html[data-dgw-theme="light"] .allele-comparison mark.before,
+html[data-dgw-theme="light"] .sequence-fragment.reference {
+  color: #713c38;
+  background: #f4dfdd;
+}
+
+html[data-dgw-theme="light"] .allele-comparison mark.after,
+html[data-dgw-theme="light"] .sequence-fragment.alternate {
+  color: #713f1d;
+  background: #f7e2ce;
+}
+
+html[data-dgw-theme="light"] .sequence-label.hap-one {
+  color: #245f3f;
+  background: #dceee3;
+}
+
+html[data-dgw-theme="light"] .sequence-label.hap-two {
+  color: #245f91;
+  background: #dceaf5;
+}
+
+html[data-dgw-theme="light"] .phase-notice,
+html[data-dgw-theme="light"] .compound-notice,
+html[data-dgw-theme="light"] .source-track-notice,
+html[data-dgw-theme="light"] .limitation,
+html[data-dgw-theme="light"] .context-help-copy p.context-help-limitation {
+  color: #75531f;
+}
+
+html[data-dgw-theme="light"] .phase-notice b,
+html[data-dgw-theme="light"] .warning-footer {
+  background: #f8ebd2;
+}
+
+html[data-dgw-theme="light"] .phase-lock-notice {
+  color: #5f4a83;
+}
+
+html[data-dgw-theme="light"] .phase-lock-notice b {
+  color: #503b76;
+}
+
+html[data-dgw-theme="light"] .mutation-save-feedback.saved {
+  color: #2f6f4a;
+}
+
+html[data-dgw-theme="light"] .mutation-save-feedback.error,
+html[data-dgw-theme="light"] .jobs-toolbar button.danger:not(:disabled) {
+  color: #a63b34;
+}
+
+html[data-dgw-theme="light"] .genome-overview-window-label,
+html[data-dgw-theme="light"] .track-viewport-window-label {
+  color: #ffffff;
+}
+
+html[data-dgw-theme="light"] .application-menu-popover,
+html[data-dgw-theme="light"] .settings-dialog,
+html[data-dgw-theme="light"] .gene-search-results,
+html[data-dgw-theme="light"] .transport-location form,
+html[data-dgw-theme="light"] .dgw-context-menu,
+html[data-dgw-theme="light"] .dgw-device-browser-dialog,
+html[data-dgw-theme="light"] .dgw-variant-map-dialog {
+  box-shadow: 0 14px 34px rgba(35, 45, 50, .18);
+}
+
+html[data-dgw-theme="light"] .dgw-track-density > span,
+html[data-dgw-theme="light"] .dgw-track.is-source .dgw-allele-label,
+html[data-dgw-theme="light"] .dgw-variant-map-empty {
+  color: var(--theme-text-muted);
+  background: rgba(248, 250, 251, .94);
+}
+
+html[data-dgw-theme="light"] .dgw-track.is-source .dgw-allele-mark.is-selected .dgw-allele-label {
+  color: var(--theme-text-strong);
+  background: var(--theme-surface-hover);
+}
+
+html[data-dgw-theme="light"] .dgw-track-kind.candidate {
+  color: #245f78;
+  background: #dcecf2;
+}
+
+html[data-dgw-theme="light"] .dgw-variant-map-header button {
+  color: #563b9d;
+  background: #eee9fa;
+}
+
+html[data-dgw-theme="light"] .dgw-rack-status.running,
+html[data-dgw-theme="light"] .dgw-rack-status.stale,
+html[data-dgw-theme="light"] .dgw-score-membership.is-bypassed,
+html[data-dgw-theme="light"] .dgw-bypass.is-active {
+  background: #f5ead5;
+}
+
+html[data-dgw-theme="light"] .dgw-rack-status.error,
+html[data-dgw-theme="light"] .dgw-rack-status.resourceUnavailable {
+  background: #f5dfdd;
+}
+
+html[data-dgw-theme="light"] .dgw-knob-face {
+  box-shadow: inset 0 0 0 4px #d5dde0, 0 2px 5px rgba(35, 45, 50, .2);
+}
+
+html[data-dgw-theme="light"] .allele-roll-scroll {
+  scrollbar-color: #8f9da3 #eef1f3;
+}

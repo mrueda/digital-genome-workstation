@@ -1,4 +1,5 @@
 use crate::error::{DgwError, Result};
+use crate::gene::gene_index_metadata;
 use crate::model::{FileFingerprint, ResourceBundle, RootVariant, VariantKey, VcfInspection};
 use flate2::read::MultiGzDecoder;
 use sha2::{Digest, Sha256};
@@ -18,6 +19,80 @@ fn reader_for(path: &Path) -> Result<Box<dyn BufRead>> {
         Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
     } else {
         Ok(Box::new(BufReader::new(file)))
+    }
+}
+
+pub const CONTIG_STYLE_CHR: &str = "chr_prefix";
+pub const CONTIG_STYLE_NO_CHR: &str = "no_chr_prefix";
+
+pub fn validate_contig_style(style: &str) -> Result<()> {
+    if matches!(style, CONTIG_STYLE_CHR | CONTIG_STYLE_NO_CHR) {
+        Ok(())
+    } else {
+        Err(DgwError::InvalidResource(format!(
+            "unsupported contig style '{style}'; expected chr_prefix or no_chr_prefix"
+        )))
+    }
+}
+
+/// Translate the two common human-reference naming conventions. This never
+/// changes coordinates or assemblies.
+pub fn translate_contig_style(contig: &str, target_style: &str) -> String {
+    let unprefixed = contig.strip_prefix("chr").unwrap_or(contig);
+    match target_style {
+        CONTIG_STYLE_CHR => match unprefixed {
+            "M" | "MT" => "chrM".into(),
+            value => format!("chr{value}"),
+        },
+        CONTIG_STYLE_NO_CHR => match unprefixed {
+            "M" => "MT".into(),
+            value => value.into(),
+        },
+        _ => contig.into(),
+    }
+}
+
+pub fn reference_contigs(fai_path: &Path) -> Result<BTreeSet<String>> {
+    let mut contigs = BTreeSet::new();
+    for line in reader_for(fai_path)?.lines() {
+        let line = line?;
+        if let Some(contig) = line.split('\t').next().filter(|value| !value.is_empty()) {
+            contigs.insert(contig.to_owned());
+        }
+    }
+    if contigs.is_empty() {
+        return Err(DgwError::InvalidResource(format!(
+            "reference FAI contains no contigs: {}",
+            fai_path.display()
+        )));
+    }
+    Ok(contigs)
+}
+
+pub fn resolve_reference_contig(contig: &str, references: &BTreeSet<String>) -> Result<String> {
+    if references.contains(contig) {
+        return Ok(contig.into());
+    }
+    let mut candidates = BTreeSet::new();
+    for style in [CONTIG_STYLE_CHR, CONTIG_STYLE_NO_CHR] {
+        let candidate = translate_contig_style(contig, style);
+        if references.contains(&candidate) {
+            candidates.insert(candidate);
+        }
+    }
+    for candidate in ["M", "MT", "chrM"] {
+        if matches!(contig, "M" | "MT" | "chrM") && references.contains(candidate) {
+            candidates.insert(candidate.into());
+        }
+    }
+    match candidates.len() {
+        1 => Ok(candidates.into_iter().next().expect("one candidate")),
+        0 => Err(DgwError::InvalidVcf(format!(
+            "contig '{contig}' has no exact or safe alias in the configured reference"
+        ))),
+        _ => Err(DgwError::InvalidVcf(format!(
+            "contig '{contig}' maps ambiguously in the configured reference"
+        ))),
     }
 }
 
@@ -175,11 +250,24 @@ pub fn inspect_vcf(path: impl AsRef<Path>, assembly: &str) -> Result<VcfInspecti
         ));
     }
 
+    let contigs: Vec<String> = contigs.into_iter().collect();
+    let prefixed = contigs
+        .iter()
+        .filter(|contig| contig.starts_with("chr"))
+        .count();
+    let input_contig_style = if prefixed == 0 {
+        CONTIG_STYLE_NO_CHR
+    } else if prefixed == contigs.len() {
+        CONTIG_STYLE_CHR
+    } else {
+        "mixed"
+    };
     Ok(VcfInspection {
         path: path.to_path_buf(),
         file_format,
         samples,
-        contigs: contigs.into_iter().collect(),
+        contigs,
+        input_contig_style: input_contig_style.into(),
         has_ann,
         record_count,
         pass_record_count,
@@ -496,10 +584,19 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
             bundle.schema_version
         )));
     }
-    if bundle.assembly != "b37" {
+    if !matches!(bundle.assembly.as_str(), "b37" | "hg38") {
         return Err(DgwError::InvalidResource(
-            "v1 currently requires assembly b37".into(),
+            "v1 currently supports assembly b37 or hg38".into(),
         ));
+    }
+    validate_contig_style(&bundle.contig_style)?;
+    for resource in [&bundle.dbnsfp, &bundle.clinvar, &bundle.cosmic] {
+        if let Some(style) = &resource.contig_style {
+            validate_contig_style(style)?;
+        }
+    }
+    if let Some(resource) = &bundle.consequence_annotation {
+        validate_contig_style(&resource.contig_style)?;
     }
     let required_files = [
         (&bundle.reference_path, "reference FASTA"),
@@ -516,31 +613,51 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
             )));
         }
     }
+    let reference_names = reference_contigs(&bundle.reference_fai_path)?;
+    let observed_reference_style = if reference_names.iter().any(|name| name == "chr1") {
+        CONTIG_STYLE_CHR
+    } else if reference_names.iter().any(|name| name == "1") {
+        CONTIG_STYLE_NO_CHR
+    } else {
+        &bundle.contig_style
+    };
+    if observed_reference_style != bundle.contig_style {
+        return Err(DgwError::InvalidResource(format!(
+            "reference FAI uses {observed_reference_style}, but the bundle declares {}",
+            bundle.contig_style
+        )));
+    }
 
     let mut warnings = Vec::new();
-    let snpeff_ready = bundle.java_path.is_file()
-        && bundle.snpeff_jar_path.is_file()
-        && !bundle.snpeff_genome.trim().is_empty();
-    if !snpeff_ready {
+    if bundle.bcftools_version.trim().is_empty() {
         warnings.push(
-            "SnpEff resources are incomplete; its device will remain unavailable until configured"
+            "The configured bcftools version is not recorded; new projects should pin it for provenance."
                 .into(),
         );
-    } else if bundle.snpeff_genome != "hg19" {
-        warnings.push(format!(
-            "SnpEff genome '{}' is configured for a b37 project; verify that this database uses the same assembly",
-            bundle.snpeff_genome
-        ));
     }
-    if bundle
-        .snpeff_config_path
-        .as_ref()
-        .is_some_and(|path| !path.is_file())
-    {
+    if bundle.consequence_annotation.is_none() {
         warnings.push(
-            "The configured SnpEff config file is missing; the SnpEff device will remain unavailable"
-                .into(),
+            "Consequence annotation GFF3 is not configured; Variant Consequences will remain unavailable."
+                .into()
         );
+    } else if let Some(resource) = &bundle.consequence_annotation {
+        let expected_assembly = if bundle.assembly == "b37" {
+            "GRCh37"
+        } else {
+            "GRCh38"
+        };
+        if resource.assembly != expected_assembly {
+            return Err(DgwError::InvalidResource(format!(
+                "consequence annotation assembly mismatch: project {}, resource {}",
+                bundle.assembly, resource.assembly
+            )));
+        }
+        if !resource.path.is_file() {
+            warnings.push(format!(
+                "{} consequence annotation is missing; Variant Consequences will remain unavailable",
+                resource.release
+            ));
+        }
     }
     for resource in [&bundle.dbnsfp, &bundle.clinvar, &bundle.cosmic] {
         if !resource.path.is_file() || !resource.index_path.is_file() {
@@ -560,6 +677,42 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
                 "{} index is older than its data file; queryability will be tested at use time",
                 resource.path.display()
             ));
+        }
+    }
+    if let Some(resource) = &bundle.gene_annotation {
+        if !resource.path.is_file() || !resource.index_path.is_file() {
+            warnings.push(format!(
+                "{} gene annotation is incomplete; gene navigation will remain unavailable",
+                resource.release
+            ));
+        } else {
+            let metadata = gene_index_metadata(&resource.index_path)?;
+            let expected_assembly = match bundle.assembly.as_str() {
+                "b37" => "GRCh37",
+                "hg38" | "GRCh38" => "GRCh38",
+                assembly => assembly,
+            };
+            if resource.assembly != expected_assembly || metadata.assembly != expected_assembly {
+                return Err(DgwError::InvalidResource(format!(
+                    "gene annotation assembly mismatch: project {}, resource {}, index {}",
+                    bundle.assembly, resource.assembly, metadata.assembly
+                )));
+            }
+            if resource.contig_style != metadata.contig_style {
+                return Err(DgwError::InvalidResource(format!(
+                    "gene annotation contig style '{}' does not match its index style '{}'",
+                    resource.contig_style, metadata.contig_style
+                )));
+            }
+            if let Some(fingerprint) = &resource.fingerprint {
+                if fingerprint.sha256 != metadata.source_sha256
+                    || fingerprint.size != metadata.source_size
+                {
+                    return Err(DgwError::InvalidResource(
+                        "gene annotation GTF fingerprint does not match its SQLite index".into(),
+                    ));
+                }
+            }
         }
     }
     Ok(warnings)
@@ -760,5 +913,21 @@ mod tests {
         assert_eq!(g.unphased_slot, Some(2));
         assert_eq!(c.sample_values, vec!["1/0"]);
         assert_eq!(g.sample_values, vec!["0/1"]);
+    }
+
+    #[test]
+    fn translates_common_contig_styles_without_changing_coordinates() {
+        assert_eq!(translate_contig_style("1", CONTIG_STYLE_CHR), "chr1");
+        assert_eq!(translate_contig_style("chr7", CONTIG_STYLE_NO_CHR), "7");
+        assert_eq!(translate_contig_style("MT", CONTIG_STYLE_CHR), "chrM");
+        assert_eq!(translate_contig_style("chrM", CONTIG_STYLE_NO_CHR), "MT");
+    }
+
+    #[test]
+    fn resolves_only_aliases_present_in_the_reference() {
+        let references = BTreeSet::from(["chr1".to_owned(), "chrM".to_owned()]);
+        assert_eq!(resolve_reference_contig("1", &references).unwrap(), "chr1");
+        assert_eq!(resolve_reference_contig("MT", &references).unwrap(), "chrM");
+        assert!(resolve_reference_contig("2", &references).is_err());
     }
 }

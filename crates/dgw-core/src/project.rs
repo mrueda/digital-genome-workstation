@@ -4,7 +4,10 @@ use crate::state::{
     effective_variants, materialize_haplotype, materialize_haplotype_masking_unphased,
     validate_edit_shape, validate_no_overlap,
 };
-use crate::vcf::{contig_rank, fingerprint_file, stream_selected_sample, validate_resource_bundle};
+use crate::vcf::{
+    contig_rank, fingerprint_file, reference_contigs, resolve_reference_contig,
+    stream_selected_sample, validate_resource_bundle,
+};
 use chrono::Utc;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
@@ -28,6 +31,7 @@ const WORKING_TRACK_NAME: &str = "Working track";
 pub const MAX_TRACK_REGION_VARIANTS: usize = 500;
 pub const VARIANT_PAGE_SIZE: u32 = 200;
 pub const VARIANT_DENSITY_BINS: u32 = 256;
+pub const MAX_SEQUENCE_FOCUS_BASES: u64 = 50_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +77,9 @@ struct EvidenceResourceIdentity<'a> {
     id: &'a str,
     assembly: &'a str,
     fingerprint: &'a str,
-    snpeff_version: &'a str,
+    consequence_engine: &'static str,
+    bcftools_version: &'a str,
+    consequence_annotation_release: Option<&'a str>,
     dbnsfp_release: &'a str,
     clinvar_release: &'a str,
     cosmic_release: &'a str,
@@ -84,6 +90,18 @@ struct EvidenceResourceIdentity<'a> {
 struct EvidenceCoverage {
     cached_exact_allele_entries: usize,
     scope: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceRunsSidecar {
+    schema_version: u32,
+    project_id: String,
+    generated_at: chrono::DateTime<Utc>,
+    scope: &'static str,
+    run_count: usize,
+    runs: Vec<DeviceRunRecord>,
+    limitation: &'static str,
 }
 
 struct CachedEvaluationEntries<'a> {
@@ -197,6 +215,7 @@ impl Project {
             resource_bundle_fingerprint,
             root_state_id: root_state_id.clone(),
             selected_vcf_path,
+            copied_from_project_id: None,
         };
 
         let project = Self {
@@ -385,6 +404,20 @@ impl Project {
              );
              CREATE INDEX IF NOT EXISTS background_jobs_updated_idx
                ON background_jobs(updated_at DESC);
+             CREATE TABLE IF NOT EXISTS device_runs (
+               id TEXT PRIMARY KEY,
+               completed_at TEXT NOT NULL,
+               device_id TEXT NOT NULL,
+               track_id TEXT NOT NULL,
+               input_state_id TEXT NOT NULL,
+               payload TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS device_runs_completed_idx
+               ON device_runs(completed_at DESC, id DESC);
+             CREATE INDEX IF NOT EXISTS device_runs_device_idx
+               ON device_runs(device_id, completed_at DESC);
+             CREATE INDEX IF NOT EXISTS device_runs_track_idx
+               ON device_runs(track_id, completed_at DESC);
              CREATE TABLE IF NOT EXISTS compound_mutation_layers (
                id TEXT PRIMARY KEY,
                track_id TEXT NOT NULL,
@@ -403,7 +436,13 @@ impl Project {
                PRIMARY KEY(layer_id, ordinal)
              );
              CREATE INDEX IF NOT EXISTS compound_mutation_changes_region_idx
-               ON compound_mutation_changes(layer_id, assembly, contig, position, end_position);",
+               ON compound_mutation_changes(layer_id, assembly, contig, position, end_position);
+             CREATE TABLE IF NOT EXISTS workstation_session (
+               singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+               schema_version INTEGER NOT NULL,
+               updated_at TEXT NOT NULL,
+               payload TEXT NOT NULL
+             );",
         )?;
         Ok(())
     }
@@ -580,6 +619,8 @@ impl Project {
         let projected_path = self.root.join("artifacts/root.selected.projected.tmp.vcf");
         let normalized_path = self.root.join("artifacts/root.selected.normalized.tmp.vcf");
         let mut body = File::create(&body_path)?;
+        let reference_names = reference_contigs(&self.manifest.resource_bundle.reference_fai_path)?;
+        let mut contig_mapping = BTreeMap::<String, String>::new();
         let (headers, import_warnings) = stream_selected_sample(
             source_path,
             &self.manifest.assembly,
@@ -592,10 +633,31 @@ impl Project {
                         variant.key.display()
                     )));
                 }
+                let canonical_contig = resolve_reference_contig(fields[0], &reference_names)?;
+                if contig_mapping
+                    .iter()
+                    .any(|(source, target)| source != fields[0] && target == &canonical_contig)
+                {
+                    return Err(DgwError::InvalidVcf(format!(
+                        "input uses multiple names for reference contig {canonical_contig}; use one contig convention per VCF"
+                    )));
+                }
+                if let Some(previous) =
+                    contig_mapping.insert(fields[0].into(), canonical_contig.clone())
+                {
+                    if previous != canonical_contig {
+                        return Err(DgwError::InvalidVcf(format!(
+                            "contig {} maps inconsistently to the configured reference",
+                            fields[0]
+                        )));
+                    }
+                }
+                let mut projected_fields = fields[..9].to_vec();
+                projected_fields[0] = &canonical_contig;
                 writeln!(
                     body,
                     "{}\t{}",
-                    fields[..9].join("\t"),
+                    projected_fields.join("\t"),
                     variant.sample_values.join(":")
                 )?;
                 Ok(())
@@ -607,7 +669,11 @@ impl Project {
         // original VCF remains external and immutable.
         let mut selected = File::create(&projected_path)?;
         for header in headers {
-            writeln!(selected, "{header}")?;
+            writeln!(
+                selected,
+                "{}",
+                rewrite_vcf_contig_header(&header, &reference_names)?
+            )?;
         }
         writeln!(selected, "##DGWProject={}", self.manifest.project_id)?;
         writeln!(
@@ -619,6 +685,15 @@ impl Project {
             selected,
             "##DGWImportNormalization=<Method=bcftools_norm,ResourceBundleFingerprint={}>",
             self.manifest.resource_bundle_fingerprint
+        )?;
+        let renamed_contigs = contig_mapping
+            .iter()
+            .filter(|(source, target)| source.as_str() != target.as_str())
+            .count();
+        writeln!(
+            selected,
+            "##DGWContigMapping=<CanonicalStyle={},RenamedContigs={}>",
+            self.manifest.resource_bundle.contig_style, renamed_contigs
         )?;
         writeln!(
             selected,
@@ -717,6 +792,21 @@ impl Project {
             [serde_json::to_string(&workspace)?],
         )?;
         let mut warnings = import_warnings;
+        if renamed_contigs > 0 {
+            let examples = contig_mapping
+                .iter()
+                .filter(|(source, target)| source.as_str() != target.as_str())
+                .take(4)
+                .map(|(source, target)| format!("{source}->{target}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warnings.push(format!(
+                "DGW mapped {renamed_contigs} input contig name{} to the configured reference convention{}{}",
+                if renamed_contigs == 1 { "" } else { "s" },
+                if examples.is_empty() { "" } else { ": " },
+                examples
+            ));
+        }
         warnings.extend(normalized_warnings);
         if let Some(warning) = normalization.warning() {
             warnings.push(warning);
@@ -818,7 +908,7 @@ impl Project {
         Ok(count.max(0) as u64)
     }
 
-    fn root_variant_count_in_context(&self, context: &FocusContext) -> Result<u64> {
+    pub fn source_variant_count_in_context(&self, context: &FocusContext) -> Result<u64> {
         let connection = self.connection()?;
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM root_variants
@@ -981,6 +1071,264 @@ impl Project {
             jobs.push(serde_json::from_str(&row?)?);
         }
         Ok(jobs)
+    }
+
+    /// Insert one terminal device-run record. Device runs are deliberately
+    /// immutable: reusing an id is an error rather than an upsert.
+    pub fn save_device_run(&self, run: &DeviceRunRecord) -> Result<()> {
+        if run.id.trim().is_empty()
+            || run.device_id.trim().is_empty()
+            || run.device_version.trim().is_empty()
+            || run.track_id.trim().is_empty()
+            || run.input_state_id.trim().is_empty()
+            || run.input_fingerprint.trim().is_empty()
+        {
+            return Err(DgwError::Project(
+                "device-run identity fields must not be empty".into(),
+            ));
+        }
+        if run.resource_bundle_fingerprint != self.manifest.resource_bundle_fingerprint {
+            return Err(DgwError::Project(
+                "device run was produced with a different resource bundle".into(),
+            ));
+        }
+        if run.completed_at < run.started_at {
+            return Err(DgwError::Project(
+                "device run completed before it started".into(),
+            ));
+        }
+        let connection = self.connection()?;
+        let state_exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM states WHERE id = ?1)",
+            [&run.input_state_id],
+            |row| row.get(0),
+        )?;
+        if !state_exists {
+            return Err(DgwError::Project(format!(
+                "unknown device-run input state {}",
+                run.input_state_id
+            )));
+        }
+        let track_exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tracks WHERE id = ?1)",
+            [&run.track_id],
+            |row| row.get(0),
+        )?;
+        if !track_exists {
+            return Err(DgwError::Project(format!(
+                "unknown device-run track {}",
+                run.track_id
+            )));
+        }
+        connection
+            .execute(
+                "INSERT INTO device_runs(id, completed_at, device_id, track_id, input_state_id, payload)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    run.id,
+                    run.completed_at.to_rfc3339(),
+                    run.device_id,
+                    run.track_id,
+                    run.input_state_id,
+                    serde_json::to_string(run)?,
+                ],
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::SqliteFailure(ref failure, _)
+                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    DgwError::Project(format!(
+                        "device run {} already exists and is immutable",
+                        run.id
+                    ))
+                }
+                other => other.into(),
+            })?;
+        Ok(())
+    }
+
+    pub fn device_run(&self, run_id: &str) -> Result<DeviceRunRecord> {
+        let connection = self.connection()?;
+        let payload: String = connection
+            .query_row(
+                "SELECT payload FROM device_runs WHERE id = ?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| DgwError::Project(format!("unknown device run {run_id}")))?;
+        Ok(serde_json::from_str(&payload)?)
+    }
+
+    pub fn list_device_runs(&self, limit: u32) -> Result<Vec<DeviceRunRecord>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT payload FROM device_runs ORDER BY completed_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.clamp(1, 10_000)], |row| row.get::<_, String>(0))?;
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(serde_json::from_str(&row?)?);
+        }
+        Ok(runs)
+    }
+
+    /// Stable hash of the exact invocation inputs, separate from mutable job
+    /// progress and terminal messages.
+    pub fn device_run_input_fingerprint(
+        &self,
+        device_id: &str,
+        device_version: &str,
+        track_id: &str,
+        input_state_id: &str,
+        selection: &serde_json::Value,
+        parameters: &serde_json::Value,
+    ) -> Result<String> {
+        let payload = serde_json::json!({
+            "projectId": self.manifest.project_id,
+            "resourceBundleFingerprint": self.manifest.resource_bundle_fingerprint,
+            "deviceId": device_id,
+            "deviceVersion": device_version,
+            "trackId": track_id,
+            "inputStateId": input_state_id,
+            "selection": selection,
+            "parameters": parameters,
+        });
+        Ok(hex::encode(Sha256::digest(serde_json::to_vec(&payload)?)))
+    }
+
+    pub fn device_run_resource_context(&self) -> serde_json::Value {
+        serde_json::json!({
+            "bundleId": self.manifest.resource_bundle.id,
+            "assembly": self.manifest.assembly,
+            "bundleFingerprint": self.manifest.resource_bundle_fingerprint,
+            "bcftoolsVersion": self.manifest.resource_bundle.bcftools_version,
+            "consequenceEngine": "bcftools csq",
+            "consequenceAnnotationRelease": self.manifest.resource_bundle.consequence_annotation.as_ref().map(|resource| &resource.release),
+            "dbnsfpRelease": self.manifest.resource_bundle.dbnsfp.release,
+            "clinvarRelease": self.manifest.resource_bundle.clinvar.release,
+            "cosmicRelease": self.manifest.resource_bundle.cosmic.release,
+        })
+    }
+
+    /// Remove terminal job-history records without touching queued/running work
+    /// or the mutation layers and genome history produced by completed jobs.
+    pub fn delete_finished_background_jobs(&self) -> Result<u64> {
+        let connection = self.connection()?;
+        let deleted = connection.execute(
+            "DELETE FROM background_jobs
+              WHERE status IN ('Completed', 'Failed', 'Cancelled')",
+            [],
+        )?;
+        Ok(deleted as u64)
+    }
+
+    pub fn workstation_session(&self) -> Result<Option<serde_json::Value>> {
+        let connection = self.connection()?;
+        let payload: Option<String> = connection
+            .query_row(
+                "SELECT payload FROM workstation_session WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| serde_json::from_str(&payload).map_err(DgwError::from))
+            .transpose()
+    }
+
+    pub fn save_workstation_session(&self, session: &serde_json::Value) -> Result<String> {
+        let schema_version = session
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                DgwError::Project("workstation session is missing schemaVersion".into())
+            })?;
+        if schema_version != 1 {
+            return Err(DgwError::Project(format!(
+                "unsupported workstation-session schema {schema_version}"
+            )));
+        }
+        if !session.is_object() {
+            return Err(DgwError::Project(
+                "workstation session must be a JSON object".into(),
+            ));
+        }
+        let payload = serde_json::to_string(session)?;
+        if payload.len() > 2 * 1024 * 1024 {
+            return Err(DgwError::Project(
+                "workstation session exceeds the 2 MiB safety limit".into(),
+            ));
+        }
+        let updated_at = Utc::now().to_rfc3339();
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO workstation_session(singleton, schema_version, updated_at, payload)
+             VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT(singleton) DO UPDATE SET
+               schema_version = excluded.schema_version,
+               updated_at = excluded.updated_at,
+               payload = excluded.payload",
+            params![schema_version, &updated_at, payload],
+        )?;
+        Ok(updated_at)
+    }
+
+    pub fn save_copy(&self, destination: impl AsRef<Path>) -> Result<Project> {
+        let destination = destination.as_ref();
+        if destination.exists() {
+            return Err(DgwError::Project(format!(
+                "project destination already exists: {}",
+                destination.display()
+            )));
+        }
+        let parent = destination.parent().ok_or_else(|| {
+            DgwError::Project("project destination has no parent directory".into())
+        })?;
+        fs::create_dir_all(parent)?;
+        let source_root = self.root.canonicalize()?;
+        let destination_parent = parent.canonicalize()?;
+        if destination_parent.starts_with(&source_root) {
+            return Err(DgwError::Project(
+                "a project copy cannot be created inside its source package".into(),
+            ));
+        }
+        let temporary = parent.join(format!(".dgw-copy-{}.tmp", Uuid::new_v4()));
+        fs::create_dir(&temporary)?;
+        let outcome = (|| -> Result<()> {
+            let database_copy = temporary.join(DATABASE_FILE);
+            let connection = self.connection()?;
+            connection.execute("VACUUM INTO ?1", [database_copy.to_string_lossy().as_ref()])?;
+
+            for directory in ["artifacts", "exports"] {
+                let source = self.root.join(directory);
+                if source.is_dir() {
+                    copy_directory(&source, &temporary.join(directory))?;
+                }
+            }
+
+            let mut manifest = self.manifest.clone();
+            manifest.copied_from_project_id = Some(manifest.project_id.clone());
+            manifest.project_id = Uuid::new_v4().to_string();
+            manifest.name = destination
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&manifest.name)
+                .to_owned();
+            manifest.created_at = Utc::now();
+            // Keep package-owned files relative so the copied project remains
+            // portable if its .dgw directory is moved later.
+            let manifest_file = File::create(temporary.join(MANIFEST_FILE))?;
+            serde_json::to_writer_pretty(manifest_file, &manifest)?;
+            fs::rename(&temporary, destination)?;
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            let _ = fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+        Project::open(destination)
     }
 
     /// Persist a device result without attaching it to genome history yet.
@@ -1215,6 +1563,38 @@ impl Project {
         Ok(mutations)
     }
 
+    /// Identify the exact scientific inputs aggregated by Track Profiler.
+    /// Track identity and edit history IDs are deliberately excluded so an
+    /// unchanged duplicate can reuse a compatible profile safely.
+    pub fn track_profile_input_fingerprint(
+        &self,
+        track_id: &str,
+        device_ids: &[String],
+    ) -> Result<String> {
+        let mut devices = device_ids.to_vec();
+        devices.sort();
+        devices.dedup();
+        let mut mutations: Vec<String> = self
+            .active_track_mutations(track_id)?
+            .into_iter()
+            .map(|mutation| {
+                serde_json::to_string(&serde_json::json!({
+                    "haplotype": mutation.haplotype,
+                    "sourceVariant": mutation.source_variant,
+                    "currentVariant": mutation.current_variant,
+                }))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        mutations.sort();
+        Ok(hash_text(&serde_json::to_string(&serde_json::json!({
+            "contract": "dgw-track-profile-input-v1",
+            "dgwCoreVersion": env!("CARGO_PKG_VERSION"),
+            "resourceBundleFingerprint": self.manifest.resource_bundle_fingerprint,
+            "deviceIds": devices,
+            "mutations": mutations,
+        }))?))
+    }
+
     pub fn list_tracks(&self) -> Result<Vec<GenomeTrack>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare("SELECT payload FROM tracks ORDER BY rowid")?;
@@ -1315,25 +1695,33 @@ impl Project {
                 "the read-only source genome track cannot be deleted".into(),
             ));
         }
-        if self.workspace()?.active_track_id == track.id {
-            return Err(DgwError::Project(
-                "select another genome track before deleting the active track".into(),
-            ));
-        }
-        let editable_remaining = self
+        let remaining_tracks: Vec<_> = self
             .list_tracks()?
             .into_iter()
-            .filter(|candidate| !candidate.read_only && candidate.id != track.id)
-            .count();
-        if editable_remaining == 0 {
-            return Err(DgwError::Project(
-                "a project must keep at least one editable genome track".into(),
-            ));
+            .filter(|candidate| candidate.id != track.id)
+            .collect();
+
+        let mut workspace = self.workspace()?;
+        if workspace.active_track_id == track.id {
+            let fallback = remaining_tracks
+                .iter()
+                .find(|candidate| !candidate.read_only)
+                .or_else(|| remaining_tracks.first())
+                .ok_or_else(|| DgwError::Project("no fallback genome track is available".into()))?;
+            workspace.active_track_id = fallback.id.clone();
+            workspace.current_state_id = fallback.head_state_id.clone();
+            workspace.bypassed_edit_ids = fallback.bypassed_edit_ids.clone();
         }
         track.archived = true;
         track.updated_at = Utc::now();
-        let connection = self.connection()?;
-        update_track(&connection, &track)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        update_track(&transaction, &track)?;
+        transaction.execute(
+            "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
+            [serde_json::to_string(&workspace)?],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -1918,7 +2306,7 @@ impl Project {
                     track_id.clone(),
                     exclusions.clone(),
                     candidates,
-                    self.root_variant_count_in_context(&context)?,
+                    self.source_variant_count_in_context(&context)?,
                 )
             }
             VariantSelection::AllTrack {
@@ -1969,6 +2357,169 @@ impl Project {
             variants,
             truncated,
         })
+    }
+
+    /// Resolve one transport target while keeping the desktop payload bounded.
+    /// The current implementation builds only a compact key list in Rust; the
+    /// complete allele payload never crosses IPC.
+    pub fn transport_target(
+        &self,
+        request: &TransportTargetRequest,
+    ) -> Result<TransportTargetResult> {
+        let track_id = match &request.selection {
+            VariantSelection::Explicit { track_id, .. }
+            | VariantSelection::Interval { track_id, .. }
+            | VariantSelection::AllTrack { track_id, .. } => track_id,
+        };
+        let track = self.track(track_id)?;
+        let excluded: BTreeSet<String> = match &request.selection {
+            VariantSelection::Explicit { .. } => BTreeSet::new(),
+            VariantSelection::Interval { exclusions, .. }
+            | VariantSelection::AllTrack { exclusions, .. } => {
+                exclusions.iter().map(VariantKey::stable_key).collect()
+            }
+        };
+        let in_scope = |key: &VariantKey| -> bool {
+            if excluded.contains(&key.stable_key()) {
+                return false;
+            }
+            match &request.selection {
+                VariantSelection::Explicit { variants, .. } => variants
+                    .iter()
+                    .any(|candidate| candidate.stable_key() == key.stable_key()),
+                VariantSelection::Interval {
+                    contig, start, end, ..
+                } => key.contig == *contig && key.position <= *end && key.end() >= *start,
+                VariantSelection::AllTrack { .. } => true,
+            }
+        };
+
+        let mut candidates: Vec<(VariantKey, Option<String>)> = match request.target_kind {
+            TransportTargetKind::Variants => self
+                .transport_source_keys(&request.selection)?
+                .into_iter()
+                .filter(&in_scope)
+                .map(|key| (key, None))
+                .collect(),
+            TransportTargetKind::ActiveEdits => {
+                let bypassed: BTreeSet<&str> =
+                    track.bypassed_edit_ids.iter().map(String::as_str).collect();
+                self.active_track_mutations(track_id)?
+                    .into_iter()
+                    .filter(|mutation| !bypassed.contains(mutation.edit_id.as_str()))
+                    .filter(|mutation| in_scope(&mutation.source_variant))
+                    .map(|mutation| (mutation.source_variant, Some(mutation.edit_id)))
+                    .collect()
+            }
+        };
+        candidates.sort_by(|left, right| {
+            contig_rank(&left.0.contig)
+                .cmp(&contig_rank(&right.0.contig))
+                .then_with(|| left.0.position.cmp(&right.0.position))
+                .then_with(|| left.0.reference.cmp(&right.0.reference))
+                .then_with(|| left.0.alternate.cmp(&right.0.alternate))
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+        let total = candidates.len() as u64;
+        if candidates.is_empty() {
+            return Ok(TransportTargetResult {
+                target: None,
+                total,
+            });
+        }
+
+        let locate = request.cursor.as_ref().and_then(|cursor| {
+            candidates.iter().position(|(key, edit_id)| {
+                key == &cursor.source_key
+                    && (request.target_kind == TransportTargetKind::Variants
+                        || cursor.edit_id.as_ref() == edit_id.as_ref())
+            })
+        });
+        let (index, wrapped) = match request.action {
+            TransportAction::First => (0, false),
+            TransportAction::Last => (candidates.len() - 1, false),
+            TransportAction::Locate => (locate.unwrap_or(0), false),
+            TransportAction::Next => match locate {
+                Some(index) if index + 1 < candidates.len() => (index + 1, false),
+                Some(_) if request.wrap => (0, true),
+                Some(index) => (index, false),
+                None => (0, false),
+            },
+            TransportAction::Previous => match locate {
+                Some(index) if index > 0 => (index - 1, false),
+                Some(_) if request.wrap => (candidates.len() - 1, true),
+                Some(index) => (index, false),
+                None => (candidates.len() - 1, false),
+            },
+        };
+        let (source_key, edit_id) = candidates[index].clone();
+        let current_variant = self
+            .effective_variants_for_track_at_loci(track_id, std::slice::from_ref(&source_key))?
+            .into_iter()
+            .find(|variant| {
+                variant.source_key.as_ref() == Some(&source_key) || variant.key == source_key
+            });
+        let cursor = TransportCursor {
+            source_key: source_key.clone(),
+            edit_id: edit_id.clone(),
+            compound_ordinal: None,
+        };
+        Ok(TransportTargetResult {
+            target: Some(TransportTarget {
+                cursor,
+                source_key,
+                locus_status: if current_variant.is_some() {
+                    "alternate".into()
+                } else {
+                    "reference".into()
+                },
+                current_variant,
+                edit_id,
+                ordinal: index as u64 + 1,
+                total,
+                wrapped,
+            }),
+            total,
+        })
+    }
+
+    fn transport_source_keys(&self, selection: &VariantSelection) -> Result<Vec<VariantKey>> {
+        if let VariantSelection::Explicit { variants, .. } = selection {
+            return Ok(variants.clone());
+        }
+        let connection = self.connection()?;
+        let (sql, contig, start, end) = match selection {
+            VariantSelection::Interval {
+                contig, start, end, ..
+            } => (
+                "SELECT assembly, contig, position, reference, alternate FROM root_variants
+                  WHERE contig = ?1 AND position <= ?2 AND end_position >= ?3",
+                Some(contig.as_str()),
+                Some(*end),
+                Some(*start),
+            ),
+            VariantSelection::AllTrack { .. } => (
+                "SELECT assembly, contig, position, reference, alternate FROM root_variants
+                  WHERE ?1 IS NULL AND ?2 IS NULL AND ?3 IS NULL",
+                None,
+                None,
+                None,
+            ),
+            VariantSelection::Explicit { .. } => unreachable!(),
+        };
+        let mut statement = connection.prepare(sql)?;
+        let rows = statement.query_map(params![contig, start, end], |row| {
+            Ok(VariantKey {
+                assembly: row.get(0)?,
+                contig: row.get(1)?,
+                position: row.get(2)?,
+                reference: row.get(3)?,
+                alternate: row.get(4)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DgwError::from)
     }
 
     pub fn apply_edit_to_track(
@@ -2385,27 +2936,38 @@ impl Project {
     }
 
     pub fn focus_view(&self, context: FocusContext) -> Result<FocusView> {
-        if context.start == 0 || context.end < context.start || context.end - context.start > 50_000
-        {
+        if context.start == 0 || context.end < context.start {
             return Err(DgwError::Project(
-                "focus must be a valid reference interval no wider than 50 kb".into(),
+                "focus must be a valid 1-based reference interval".into(),
             ));
         }
         let workspace = self.workspace()?;
         let active_stored = self.stored_track(&workspace.active_track_id)?;
         let active_track = active_stored.track.clone();
-        let variants = self.effective_variants_in_context(
-            &active_track.head_state_id,
-            &effective_bypassed_edit_ids(&active_stored),
-            &context,
-        )?;
+        let span = context.end - context.start + 1;
+        let source_variant_total = self.source_variant_count_in_context(&context)?;
+        let detailed = source_variant_total <= MAX_TRACK_REGION_VARIANTS as u64;
+        let variants = if detailed {
+            self.effective_variants_in_context(
+                &active_track.head_state_id,
+                &effective_bypassed_edit_ids(&active_stored),
+                &context,
+            )?
+        } else {
+            Vec::new()
+        };
         let mut warnings = Vec::new();
-        let reference_sequence = match self.fetch_reference(&context) {
-            Ok(sequence) => Some(sequence),
-            Err(error) => {
-                warnings.push(format!("Reference sequence unavailable: {error}"));
-                None
+        let sequence_detail = detailed && span <= MAX_SEQUENCE_FOCUS_BASES;
+        let reference_sequence = if sequence_detail {
+            match self.fetch_reference(&context) {
+                Ok(sequence) => Some(sequence),
+                Err(error) => {
+                    warnings.push(format!("Reference sequence unavailable: {error}"));
+                    None
+                }
             }
+        } else {
+            None
         };
         let haplotype1_sequence = match reference_sequence.as_deref() {
             Some(reference) => {
@@ -2441,10 +3003,13 @@ impl Project {
                     .into(),
             );
         }
-        if variants.len() > MAX_TRACK_REGION_VARIANTS {
+        if !detailed {
             warnings.push(format!(
-                "This focus contains {} active alleles. The track canvas shows the first {}; use density navigation or a narrower focus to inspect the rest.",
-                variants.len(), MAX_TRACK_REGION_VARIANTS
+                "This interval contains {source_variant_total} source alleles. Track View is using density mode; zoom in to inspect individual alleles."
+            ));
+        } else if !sequence_detail {
+            warnings.push(format!(
+                "This interval spans {span} bases. Individual alleles remain available, but reference and genome-copy sequences appear only at 50 kb or less."
             ));
         }
         let contig_length = self.reference_contig_length(&context.contig).ok();
@@ -2454,10 +3019,7 @@ impl Project {
             reference_sequence,
             haplotype1_sequence,
             haplotype2_sequence,
-            variants: variants
-                .into_iter()
-                .take(MAX_TRACK_REGION_VARIANTS)
-                .collect(),
+            variants,
             states: self.states()?,
             edits: self.edits_to_state(&active_track.head_state_id)?,
             tracks: self.list_tracks()?,
@@ -2721,7 +3283,14 @@ impl Project {
                 id: &self.manifest.resource_bundle.id,
                 assembly: &self.manifest.assembly,
                 fingerprint: &self.manifest.resource_bundle_fingerprint,
-                snpeff_version: &self.manifest.resource_bundle.snpeff_version,
+                consequence_engine: "bcftools csq",
+                bcftools_version: &self.manifest.resource_bundle.bcftools_version,
+                consequence_annotation_release: self
+                    .manifest
+                    .resource_bundle
+                    .consequence_annotation
+                    .as_ref()
+                    .map(|resource| resource.release.as_str()),
                 dbnsfp_release: &self.manifest.resource_bundle.dbnsfp.release,
                 clinvar_release: &self.manifest.resource_bundle.clinvar.release,
                 cosmic_release: &self.manifest.resource_bundle.cosmic.release,
@@ -2741,6 +3310,39 @@ impl Project {
         encoder.finish()?;
         let fingerprint = fingerprint_file(&sidecar_path)?;
         Ok((sidecar_path, fingerprint, entry_count))
+    }
+
+    fn write_device_runs_sidecar(
+        &self,
+        output_path: &Path,
+    ) -> Result<(PathBuf, FileFingerprint, usize)> {
+        let connection = self.connection()?;
+        let mut statement =
+            connection.prepare("SELECT payload FROM device_runs ORDER BY completed_at, id")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(serde_json::from_str(&row?)?);
+        }
+        let run_count = runs.len();
+        let sidecar_path = PathBuf::from(format!("{}.device-runs.json.gz", output_path.display()));
+        let file = File::create(&sidecar_path)?;
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        serde_json::to_writer(
+            &mut encoder,
+            &DeviceRunsSidecar {
+                schema_version: 1,
+                project_id: self.manifest.project_id.clone(),
+                generated_at: Utc::now(),
+                scope: "All immutable device runs recorded in this project, including failed and cancelled invocations.",
+                run_count,
+                runs,
+                limitation: "A device run records its declared inputs, resources and terminal result. It does not by itself establish biological validity or clinical meaning.",
+            },
+        )?;
+        encoder.finish()?;
+        let fingerprint = fingerprint_file(&sidecar_path)?;
+        Ok((sidecar_path, fingerprint, run_count))
     }
 
     pub fn render_state(
@@ -2777,6 +3379,8 @@ impl Project {
         affected_variants.sort_by(|left, right| left.key.cmp(&right.key));
         let (evidence_path, evidence_fingerprint, evidence_entry_count) =
             self.write_evidence_sidecar(state_id, &output_path)?;
+        let (device_runs_path, device_runs_fingerprint, device_run_count) =
+            self.write_device_runs_sidecar(&output_path)?;
         let provenance_path = PathBuf::from(format!("{}.provenance.json", output_path.display()));
         let provenance = serde_json::json!({
             "schemaVersion": 1,
@@ -2790,6 +3394,12 @@ impl Project {
                 "sha256": evidence_fingerprint.sha256,
                 "size": evidence_fingerprint.size,
                 "cachedExactAlleleEntries": evidence_entry_count
+            },
+            "deviceRunsSidecar": {
+                "path": device_runs_path,
+                "sha256": device_runs_fingerprint.sha256,
+                "size": device_runs_fingerprint.size,
+                "runCount": device_run_count
             },
             "inputAnnotationPolicy": "Imported VCF INFO annotations are preserved only in the frozen source artifact and are never copied into this rendered VCF or used as DGW evidence.",
             "limitation": "Evidence is evaluated independently per exact allele; compound haplotype consequences are not computed in DGW v1."
@@ -2828,6 +3438,11 @@ impl Project {
             output,
             "##DGWEvidenceSHA256={}",
             evidence_fingerprint.sha256
+        )?;
+        writeln!(
+            output,
+            "##DGWDeviceRunsSHA256={}",
+            device_runs_fingerprint.sha256
         )?;
         writeln!(
             output,
@@ -2948,6 +3563,26 @@ impl Project {
     }
 }
 
+fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_directory(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target)?;
+        } else {
+            return Err(DgwError::Project(format!(
+                "project package contains an unsupported link or special file: {}",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn observed_effective_variant(root: &RootVariant) -> EffectiveVariant {
     EffectiveVariant {
         key: root.key.clone(),
@@ -3047,6 +3682,23 @@ struct NormalizationSummary {
     input_records: u64,
     output_records: u64,
     first_change: Option<(Option<VcfKeyTuple>, Option<VcfKeyTuple>)>,
+}
+
+fn rewrite_vcf_contig_header(header: &str, reference_names: &BTreeSet<String>) -> Result<String> {
+    const PREFIX: &str = "##contig=<ID=";
+    let Some(rest) = header.strip_prefix(PREFIX) else {
+        return Ok(header.into());
+    };
+    let end = rest
+        .find([',', '>'])
+        .ok_or_else(|| DgwError::InvalidVcf(format!("malformed contig header: {header}")))?;
+    let source = &rest[..end];
+    let Ok(target) = resolve_reference_contig(source, reference_names) else {
+        // Headers commonly describe unused decoys. Retained records are
+        // validated separately and are never allowed to remain unresolved.
+        return Ok(header.into());
+    };
+    Ok(format!("{PREFIX}{target}{}", &rest[end..]))
 }
 
 impl NormalizationSummary {
@@ -3188,7 +3840,9 @@ impl VariantLocusIndex {
 
 fn edit_keys(edit: &EditKind) -> Vec<&VariantKey> {
     match edit {
-        EditKind::SetAllele { key, source_key } => {
+        EditKind::SetAllele {
+            key, source_key, ..
+        } => {
             let mut keys = vec![key];
             if let Some(source_key) = source_key {
                 keys.push(source_key);
@@ -3233,7 +3887,9 @@ fn track_mutation_from_edit(
     edit: &EditKind,
 ) -> Option<TrackMutation> {
     match edit {
-        EditKind::SetAllele { key, source_key } => Some(TrackMutation {
+        EditKind::SetAllele {
+            key, source_key, ..
+        } => Some(TrackMutation {
             edit_id: edit_id.into(),
             haplotype,
             source_variant: source_key.clone().unwrap_or_else(|| key.clone()),
@@ -3545,6 +4201,107 @@ mod tests {
     }
 
     #[test]
+    fn device_runs_are_immutable_and_survive_reopen() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let selection = serde_json::json!({"kind": "allTrack", "selectedPositions": 42});
+        let parameters = serde_json::json!({"mode": "randomizer", "seed": 7});
+        let input_fingerprint = project
+            .device_run_input_fingerprint(
+                "org.dgw.builtin.mutation-generator",
+                "0.1.0",
+                &track.id,
+                &track.head_state_id,
+                &selection,
+                &parameters,
+            )
+            .unwrap();
+        let now = Utc::now();
+        let run = DeviceRunRecord {
+            id: "device-run-fixture".into(),
+            device_id: "org.dgw.builtin.mutation-generator".into(),
+            device_version: "0.1.0".into(),
+            operation: "mutationGeneratorPreview".into(),
+            track_id: track.id,
+            input_state_id: track.head_state_id,
+            input_fingerprint,
+            selection,
+            parameters,
+            resource_bundle_fingerprint: project.manifest().resource_bundle_fingerprint.clone(),
+            resource_context: project.device_run_resource_context(),
+            result_summary: serde_json::json!({"randomizedPositions": 42}),
+            output_edit_ids: Vec::new(),
+            compound_layer_id: Some("layer-fixture".into()),
+            status: DeviceRunStatus::Completed,
+            error: None,
+            limitation: "Randomized alleles are synthetic edits, not predictions.".into(),
+            started_at: now,
+            completed_at: now,
+        };
+
+        project.save_device_run(&run).unwrap();
+        let duplicate_error = project.save_device_run(&run).unwrap_err();
+        assert!(duplicate_error.to_string().contains("immutable"));
+
+        let reopened = Project::open(project.root()).unwrap();
+        assert_eq!(reopened.device_run(&run.id).unwrap(), run);
+        assert_eq!(reopened.list_device_runs(10).unwrap(), vec![run]);
+        assert_eq!(reopened.delete_finished_background_jobs().unwrap(), 0);
+        assert_eq!(reopened.list_device_runs(10).unwrap().len(), 1);
+
+        let rendered = reopened
+            .render_track(
+                &reopened.active_track().unwrap().id,
+                reopened.root().join("device-run-export.vcf.gz"),
+            )
+            .unwrap();
+        let sidecar = PathBuf::from(format!("{}.device-runs.json.gz", rendered.display()));
+        let exported: serde_json::Value =
+            serde_json::from_reader(MultiGzDecoder::new(File::open(sidecar).unwrap())).unwrap();
+        assert_eq!(exported["schemaVersion"], 1);
+        assert_eq!(exported["runCount"], 1);
+        assert_eq!(exported["runs"][0]["id"], "device-run-fixture");
+    }
+
+    #[test]
+    fn deletes_only_finished_background_job_records() {
+        let (_temporary, project) = test_project();
+        let now = Utc::now();
+        let base = BackgroundJob {
+            id: "completed-job".into(),
+            operation: "test".into(),
+            device_id: "test-device".into(),
+            track_id: project.workspace().unwrap().active_track_id,
+            status: BackgroundJobStatus::Completed,
+            progress: 100,
+            stage: "completed".into(),
+            message: "Complete".into(),
+            worker_threads: 1,
+            request: serde_json::json!({}),
+            result: None,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let mut failed = base.clone();
+        failed.id = "failed-job".into();
+        failed.status = BackgroundJobStatus::Failed;
+        let mut cancelled = base.clone();
+        cancelled.id = "cancelled-job".into();
+        cancelled.status = BackgroundJobStatus::Cancelled;
+        let mut running = base.clone();
+        running.id = "running-job".into();
+        running.status = BackgroundJobStatus::Running;
+        running.progress = 30;
+        for job in [&base, &failed, &cancelled, &running] {
+            project.save_background_job(job).unwrap();
+        }
+
+        assert_eq!(project.delete_finished_background_jobs().unwrap(), 3);
+        assert_eq!(project.list_background_jobs(10).unwrap(), vec![running]);
+    }
+
+    #[test]
     fn compound_mutation_layer_is_one_reversible_block_with_exact_projection() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -3561,6 +4318,7 @@ mod tests {
                         ..root.key.clone()
                     },
                     source_key: Some(root.key.clone()),
+                    unphased_slot: None,
                 },
             })
             .collect();
@@ -3630,6 +4388,72 @@ mod tests {
     }
 
     #[test]
+    fn large_compound_layer_keeps_history_and_variant_pages_bounded() {
+        const POSITION_COUNT: u64 = 10_000;
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let roots: Vec<_> = (1..=POSITION_COUNT)
+            .map(|position| observed_variant("1", position))
+            .collect();
+        insert_root_variants(&project, &roots);
+        let changes: Vec<_> = roots
+            .iter()
+            .map(|root| CompoundMutationChange {
+                haplotype: Haplotype::One,
+                edit: EditKind::SetAllele {
+                    key: VariantKey {
+                        alternate: "G".into(),
+                        ..root.key.clone()
+                    },
+                    source_key: Some(root.key.clone()),
+                    unphased_slot: None,
+                },
+            })
+            .collect();
+
+        let layer = project
+            .stage_compound_mutation_layer(
+                &working.id,
+                &working.head_state_id,
+                "org.dgw.builtin.mutation-generator",
+                POSITION_COUNT as u32,
+                &changes,
+                Some("10k acceptance layer".into()),
+            )
+            .unwrap();
+        project
+            .apply_compound_mutation_layer(&working.id, &layer.id)
+            .unwrap();
+
+        assert_eq!(project.edits_for_track(&working.id).unwrap().len(), 1);
+        assert_eq!(
+            project
+                .compound_mutation_layer(&layer.id)
+                .unwrap()
+                .change_count,
+            POSITION_COUNT as u32
+        );
+        let page = project.variant_page(&working.id, 0, 10_000).unwrap();
+        assert_eq!(page.total, POSITION_COUNT);
+        assert_eq!(page.variants.len(), VARIANT_PAGE_SIZE as usize);
+        assert!(page.has_more);
+        assert!(page
+            .variants
+            .iter()
+            .all(|variant| variant.key.alternate == "G"));
+
+        let reopened = Project::open(&project.root).unwrap();
+        assert_eq!(reopened.edits_for_track(&working.id).unwrap().len(), 1);
+        assert_eq!(
+            reopened
+                .compound_mutation_layer(&layer.id)
+                .unwrap()
+                .change_count,
+            POSITION_COUNT as u32
+        );
+    }
+
+    #[test]
     fn compound_mutation_layer_rejects_a_changed_track_head() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -3661,6 +4485,7 @@ mod tests {
             index_path: path.join("resource.vcf.gz.tbi"),
             release: "test".into(),
             license_label: "test".into(),
+            contig_style: None,
             fingerprint: None,
         }
     }
@@ -3678,17 +4503,15 @@ mod tests {
             reference_path: temporary.path().join("reference.fa.gz"),
             reference_fai_path: temporary.path().join("reference.fa.gz.fai"),
             reference_gzi_path: None,
-            java_path: temporary.path().join("java"),
-            snpeff_jar_path: temporary.path().join("snpEff.jar"),
-            snpeff_config_path: None,
-            snpeff_genome: "hg19".into(),
-            snpeff_version: "test".into(),
             bcftools_path: temporary.path().join("bcftools"),
+            bcftools_version: "test".into(),
             bgzip_path: "gzip".into(),
             tabix_path: "true".into(),
             dbnsfp: test_resource(temporary.path()),
             clinvar: test_resource(temporary.path()),
             cosmic: test_resource(temporary.path()),
+            gene_annotation: None,
+            consequence_annotation: None,
             bundle_fingerprint: None,
         };
         let root_state_id = "test-root-state".to_string();
@@ -3709,6 +4532,7 @@ mod tests {
             resource_bundle_fingerprint: "bundle-sha".into(),
             root_state_id: root_state_id.clone(),
             selected_vcf_path: "artifacts/root.selected.vcf.gz".into(),
+            copied_from_project_id: None,
         };
         let project = Project { root, manifest };
         project
@@ -3739,6 +4563,7 @@ mod tests {
                 alternate: alternate.into(),
             },
             source_key: None,
+            unphased_slot: None,
         }
     }
 
@@ -3862,6 +4687,90 @@ mod tests {
     }
 
     #[test]
+    fn transport_steps_in_canonical_contig_order_and_wraps() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        insert_root_variants(
+            &project,
+            &[
+                observed_variant("10", 20),
+                observed_variant("2", 30),
+                observed_variant("X", 40),
+            ],
+        );
+        let selection = VariantSelection::AllTrack {
+            track_id: working.id,
+            exclusions: Vec::new(),
+        };
+        let first = project
+            .transport_target(&TransportTargetRequest {
+                selection: selection.clone(),
+                target_kind: TransportTargetKind::Variants,
+                action: TransportAction::First,
+                cursor: None,
+                wrap: false,
+            })
+            .unwrap()
+            .target
+            .unwrap();
+        assert_eq!(first.source_key.contig, "2");
+        assert_eq!((first.ordinal, first.total), (1, 3));
+        let previous = project
+            .transport_target(&TransportTargetRequest {
+                selection,
+                target_kind: TransportTargetKind::Variants,
+                action: TransportAction::Previous,
+                cursor: Some(first.cursor),
+                wrap: true,
+            })
+            .unwrap()
+            .target
+            .unwrap();
+        assert_eq!(previous.source_key.contig, "X");
+        assert!(previous.wrapped);
+    }
+
+    #[test]
+    fn transport_active_edits_resolves_the_current_track_allele() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let source = observed_variant("1", 100);
+        insert_root_variants(&project, std::slice::from_ref(&source));
+        project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::One,
+                EditKind::SetAllele {
+                    key: VariantKey {
+                        alternate: "G".into(),
+                        ..source.key.clone()
+                    },
+                    source_key: Some(source.key.clone()),
+                    unphased_slot: None,
+                },
+                Some("transport test".into()),
+            )
+            .unwrap();
+        let target = project
+            .transport_target(&TransportTargetRequest {
+                selection: VariantSelection::AllTrack {
+                    track_id: working.id,
+                    exclusions: Vec::new(),
+                },
+                target_kind: TransportTargetKind::ActiveEdits,
+                action: TransportAction::First,
+                cursor: None,
+                wrap: false,
+            })
+            .unwrap()
+            .target
+            .unwrap();
+        assert_eq!(target.source_key.alternate, "C");
+        assert_eq!(target.current_variant.unwrap().key.alternate, "G");
+        assert_eq!(target.locus_status, "alternate");
+    }
+
+    #[test]
     fn variant_navigation_groups_contigs_and_returns_only_occupied_bins() {
         let (_temporary, project) = test_project();
         let mut second_x_allele = observed_variant("X", 50);
@@ -3960,6 +4869,34 @@ mod tests {
     }
 
     #[test]
+    fn wide_dense_focus_uses_density_mode_instead_of_truncating_alleles() {
+        let (_temporary, project) = test_project();
+        let variants: Vec<RootVariant> = (1..=600)
+            .map(|index| observed_variant("1", index * 10_000))
+            .collect();
+        insert_root_variants(&project, &variants);
+
+        let context = FocusContext {
+            contig: "1".into(),
+            start: 1,
+            end: 10_000_000,
+        };
+        assert_eq!(
+            project.source_variant_count_in_context(&context).unwrap(),
+            600
+        );
+        let focus = project.focus_view(context).unwrap();
+        assert!(focus.variants.is_empty());
+        assert!(focus.reference_sequence.is_none());
+        assert!(focus.haplotype1_sequence.is_none());
+        assert!(focus.haplotype2_sequence.is_none());
+        assert!(focus
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("density mode")));
+    }
+
+    #[test]
     fn symbolic_selections_resolve_exclusions_and_report_truncation() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -4036,6 +4973,7 @@ mod tests {
                 ..absent_source.clone()
             },
             source_key: Some(absent_source),
+            unphased_slot: None,
         };
 
         let error = project
@@ -4275,6 +5213,61 @@ mod tests {
     }
 
     #[test]
+    fn track_profile_fingerprint_is_reusable_across_unchanged_duplicates() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        let state = project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::One,
+                create_allele(100, "T"),
+                Some("profiled edit".into()),
+            )
+            .unwrap();
+        let duplicate = project
+            .duplicate_track(&working.id, "Profile-compatible duplicate")
+            .unwrap();
+        let devices = vec![
+            "org.dgw.builtin.variant-consequences".to_string(),
+            "org.dgw.builtin.clinvar".to_string(),
+        ];
+
+        let original_fingerprint = project
+            .track_profile_input_fingerprint(&working.id, &devices)
+            .unwrap();
+        assert_eq!(
+            project
+                .track_profile_input_fingerprint(&duplicate.id, &devices)
+                .unwrap(),
+            original_fingerprint
+        );
+        let mut reversed_devices = devices.clone();
+        reversed_devices.reverse();
+        assert_eq!(
+            project
+                .track_profile_input_fingerprint(&duplicate.id, &reversed_devices)
+                .unwrap(),
+            original_fingerprint
+        );
+        assert_ne!(
+            project
+                .track_profile_input_fingerprint(&duplicate.id, &devices[..1])
+                .unwrap(),
+            original_fingerprint
+        );
+
+        project
+            .toggle_track_edit_bypass(&duplicate.id, state.edit_id.as_deref().unwrap(), true)
+            .unwrap();
+        assert_ne!(
+            project
+                .track_profile_input_fingerprint(&duplicate.id, &devices)
+                .unwrap(),
+            original_fingerprint
+        );
+    }
+
+    #[test]
     fn track_selection_and_bypass_are_isolated_and_mirrored() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -4348,7 +5341,7 @@ mod tests {
     }
 
     #[test]
-    fn source_active_and_last_editable_tracks_are_protected_from_deletion() {
+    fn source_is_protected_and_active_track_deletion_selects_a_fallback() {
         let (_temporary, project) = test_project();
         let tracks = project.list_tracks().unwrap();
         let source = tracks.iter().find(|track| track.read_only).unwrap().clone();
@@ -4359,21 +5352,23 @@ mod tests {
             .clone();
 
         assert!(project.delete_track(&source.id).is_err());
-        assert!(project.delete_track(&working.id).is_err());
 
         let duplicate = project.duplicate_track(&working.id, "Disposable").unwrap();
-        assert!(project.delete_track(&duplicate.id).is_err());
-        project.select_track(&working.id).unwrap();
         project.delete_track(&duplicate.id).unwrap();
+        assert_eq!(project.active_track().unwrap().id, working.id);
         assert!(!project
             .list_tracks()
             .unwrap()
             .iter()
             .any(|track| track.id == duplicate.id));
 
-        project.select_track(&source.id).unwrap();
-        let error = project.delete_track(&working.id).unwrap_err();
-        assert!(error.to_string().contains("at least one editable"));
+        project.delete_track(&working.id).unwrap();
+        assert_eq!(project.active_track().unwrap().id, source.id);
+        assert!(project
+            .list_tracks()
+            .unwrap()
+            .iter()
+            .all(|track| track.read_only));
     }
 
     #[test]
@@ -4465,6 +5460,7 @@ mod tests {
                         ..replacement_source.clone()
                     },
                     source_key: Some(replacement_source),
+                    unphased_slot: None,
                 },
                 Some("streamed replacement".into()),
             )
@@ -4491,8 +5487,8 @@ mod tests {
         let cached = EvaluationResult {
             variant: roots[0].key.clone(),
             cache_key: "fixture-evaluation".into(),
-            snpeff: EvidenceResult {
-                source: "SnpEff".into(),
+            consequence: EvidenceResult {
+                source: "Variant Consequences".into(),
                 status: EvidenceStatus::NoExactMatch,
                 records: Vec::new(),
                 message: None,
@@ -4657,6 +5653,64 @@ mod tests {
             .find(|track| track.read_only)
             .unwrap();
         assert!(project.consolidate_track(&source.id).is_err());
+    }
+
+    #[test]
+    fn workstation_session_round_trips_through_project_database() {
+        let (_temporary, project) = test_project();
+        assert!(project.workstation_session().unwrap().is_none());
+
+        let session = serde_json::json!({
+            "schemaVersion": 1,
+            "context": {
+                "contig": "1",
+                "position": 200,
+                "window": 500
+            },
+            "selectedAlleleIds": ["b37:1:200:A:T"],
+            "hiddenTrackIds": ["track-2"]
+        });
+        let updated_at = project.save_workstation_session(&session).unwrap();
+
+        assert!(!updated_at.is_empty());
+        assert_eq!(project.workstation_session().unwrap(), Some(session));
+    }
+
+    #[test]
+    fn save_copy_creates_a_portable_independent_project_snapshot() {
+        let (temporary, project) = test_project();
+        let session = serde_json::json!({
+            "schemaVersion": 1,
+            "context": { "contig": "1", "position": 100, "window": 1000 }
+        });
+        project.save_workstation_session(&session).unwrap();
+        fs::create_dir_all(project.root.join("exports")).unwrap();
+        fs::write(project.root.join("exports/example.txt"), "snapshot export").unwrap();
+
+        let destination = temporary.path().join("analysis-copy.dgw");
+        let copied = project.save_copy(&destination).unwrap();
+
+        assert_eq!(copied.root(), destination);
+        assert_ne!(copied.manifest().project_id, project.manifest().project_id);
+        assert_eq!(
+            copied.manifest().copied_from_project_id.as_deref(),
+            Some(project.manifest().project_id.as_str())
+        );
+        assert_eq!(copied.manifest().name, "analysis-copy");
+        assert_eq!(
+            copied.manifest().selected_vcf_path,
+            PathBuf::from("artifacts/root.selected.vcf.gz")
+        );
+        assert!(destination.join("artifacts/root.selected.vcf.gz").is_file());
+        assert_eq!(
+            fs::read_to_string(destination.join("exports/example.txt")).unwrap(),
+            "snapshot export"
+        );
+        assert_eq!(copied.workstation_session().unwrap(), Some(session));
+        assert_eq!(
+            copied.list_tracks().unwrap(),
+            project.list_tracks().unwrap()
+        );
     }
 
     #[test]

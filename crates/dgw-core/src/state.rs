@@ -19,7 +19,9 @@ pub fn validate_edit_shape(edit: &EditKind) -> Result<()> {
             Ok(())
         }
         EditKind::RestoreReference { source_key } => validate_key(source_key),
-        EditKind::SetAllele { key, source_key } => {
+        EditKind::SetAllele {
+            key, source_key, ..
+        } => {
             validate_key(key)?;
             if let Some(source) = source_key {
                 validate_key(source)?;
@@ -146,7 +148,11 @@ pub fn effective_variants(
                 source.edit_ids.push(operation.id.clone());
                 source.origin = VariantOrigin::Edited;
             }
-            EditKind::SetAllele { key, source_key } => {
+            EditKind::SetAllele {
+                key,
+                source_key,
+                unphased_slot,
+            } => {
                 let mut inherited_unphased_slot = None;
                 if let Some(source_key) = source_key {
                     let source = variants.get_mut(source_key).ok_or_else(|| {
@@ -176,7 +182,7 @@ pub fn effective_variants(
                         haplotype1_alt: false,
                         haplotype2_alt: false,
                         unphased_alt: false,
-                        unphased_slot: inherited_unphased_slot,
+                        unphased_slot: inherited_unphased_slot.or(*unphased_slot),
                         origin: if source_key.is_some() {
                             VariantOrigin::Edited
                         } else {
@@ -186,6 +192,9 @@ pub fn effective_variants(
                         source_key: source_key.clone(),
                         source_info: BTreeMap::new(),
                     });
+                let target_unphased_slot = inherited_unphased_slot
+                    .or(*unphased_slot)
+                    .or(variant.unphased_slot);
                 // A replacement allele must never inherit annotations from
                 // the source ALT, including when it resolves to an existing
                 // state entry.
@@ -193,8 +202,8 @@ pub fn effective_variants(
                 if operation.haplotype == Haplotype::Unphased
                     && variant.unphased_alt
                     && variant.unphased_slot.is_some()
-                    && inherited_unphased_slot.is_some()
-                    && variant.unphased_slot != inherited_unphased_slot
+                    && target_unphased_slot.is_some()
+                    && variant.unphased_slot != target_unphased_slot
                 {
                     // Two different `/` slots now carry the same exact ALT,
                     // e.g. editing C/G to G/G. Phase is irrelevant for a
@@ -207,7 +216,7 @@ pub fn effective_variants(
                 } else {
                     set_haplotype(variant, operation.haplotype, true);
                     if operation.haplotype == Haplotype::Unphased {
-                        variant.unphased_slot = inherited_unphased_slot;
+                        variant.unphased_slot = target_unphased_slot;
                     }
                 }
                 variant.edit_ids.push(operation.id.clone());
@@ -245,7 +254,9 @@ pub fn validate_no_overlap(
             ));
         }
         EditKind::RestoreReference { .. } => return Ok(()),
-        EditKind::SetAllele { key, source_key } => (key, source_key.as_ref()),
+        EditKind::SetAllele {
+            key, source_key, ..
+        } => (key, source_key.as_ref()),
     };
     for variant in effective {
         if !haplotype_is_alt(variant, haplotype) {
@@ -541,6 +552,7 @@ mod tests {
             edit: EditKind::SetAllele {
                 key: key(3, "G", "T"),
                 source_key: Some(key(3, "G", "C")),
+                unphased_slot: None,
             },
             note: None,
             created_at: Utc::now(),
@@ -579,6 +591,7 @@ mod tests {
         let long = EditKind::SetAllele {
             key: key(1, "A", &format!("A{}", "T".repeat(50))),
             source_key: None,
+            unphased_slot: None,
         };
         assert!(validate_edit_shape(&long).is_err());
     }
@@ -601,6 +614,7 @@ mod tests {
             edit: EditKind::SetAllele {
                 key: key(3, "G", "C"),
                 source_key: Some(root.key.clone()),
+                unphased_slot: None,
             },
             note: None,
             created_at: Utc::now(),

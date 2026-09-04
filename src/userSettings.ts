@@ -1,11 +1,14 @@
 export const UI_SCALES = [0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5] as const;
 
 export type UiScale = typeof UI_SCALES[number];
+export type ColorTheme = "system" | "dark" | "light";
 
 export interface UserSettings {
   uiScale: UiScale;
+  colorTheme: ColorTheme;
   showVariantBrowser: boolean;
   showEvidenceInspector: boolean;
+  showContextHelp: boolean;
   showDeviceRack: boolean;
   showTrackMonitor: boolean;
   reduceMotion: boolean;
@@ -15,8 +18,10 @@ export interface UserSettings {
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   uiScale: 1.1,
+  colorTheme: "system",
   showVariantBrowser: true,
   showEvidenceInspector: true,
+  showContextHelp: true,
   showDeviceRack: true,
   showTrackMonitor: true,
   reduceMotion: false,
@@ -34,12 +39,18 @@ export function parseUserSettings(value: string | null): UserSettings {
       uiScale: UI_SCALES.includes(candidate.uiScale as UiScale)
         ? candidate.uiScale as UiScale
         : DEFAULT_USER_SETTINGS.uiScale,
+      colorTheme: candidate.colorTheme === "dark" || candidate.colorTheme === "light" || candidate.colorTheme === "system"
+        ? candidate.colorTheme
+        : DEFAULT_USER_SETTINGS.colorTheme,
       showVariantBrowser: typeof candidate.showVariantBrowser === "boolean"
         ? candidate.showVariantBrowser
         : DEFAULT_USER_SETTINGS.showVariantBrowser,
       showEvidenceInspector: typeof candidate.showEvidenceInspector === "boolean"
         ? candidate.showEvidenceInspector
         : DEFAULT_USER_SETTINGS.showEvidenceInspector,
+      showContextHelp: typeof candidate.showContextHelp === "boolean"
+        ? candidate.showContextHelp
+        : DEFAULT_USER_SETTINGS.showContextHelp,
       showDeviceRack: typeof candidate.showDeviceRack === "boolean"
         ? candidate.showDeviceRack
         : DEFAULT_USER_SETTINGS.showDeviceRack,

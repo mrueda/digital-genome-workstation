@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "local-hg38-grch38",
+  "assembly": "hg38",
+  "contigStyle": "chr_prefix",
+  "referencePath": "/media/mrueda/2TBS/Databases/genomes/hg38.fa.gz",
+  "referenceFaiPath": "/media/mrueda/2TBS/Databases/genomes/hg38.fa.gz.fai",
+  "referenceGziPath": "/media/mrueda/2TBS/Databases/genomes/hg38.fa.gz.gzi",
+  "bcftoolsPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bcftools",
+  "bcftoolsVersion": "1.24",
+  "bgzipPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bgzip",
+  "tabixPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/tabix",
+  "dbnsfp": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/dbNSFP4.1a_hg38.txt.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/dbNSFP4.1a_hg38.txt.gz.tbi",
+    "release": "dbNSFP 4.1a",
+    "licenseLabel": "user-supplied",
+    "contigStyle": "no_chr_prefix"
+  },
+  "clinvar": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/clinvar_20250312.vcf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/clinvar_20250312.vcf.gz.tbi",
+    "release": "ClinVar 20250312",
+    "licenseLabel": "user-supplied",
+    "contigStyle": "no_chr_prefix"
+  },
+  "cosmic": {
+    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/CosmicCodingMuts.normal.hg38.vcf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg38/CosmicCodingMuts.normal.hg38.vcf.gz.tbi",
+    "release": "COSMIC local snapshot",
+    "licenseLabel": "user-supplied; not redistributed",
+    "contigStyle": "no_chr_prefix"
+  },
+  "geneAnnotation": {
+    "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh38/Homo_sapiens.GRCh38.116.gtf.gz",
+    "indexPath": "/media/mrueda/2TBS/Databases/ensembl/GRCh38/Ensembl.GRCh38.116.genes.sqlite",
+    "assembly": "GRCh38",
+    "contigStyle": "no_chr_prefix",
+    "release": "Ensembl 116",
+    "sourceUrl": "https://ftp.ensembl.org/pub/release-116/gtf/homo_sapiens/Homo_sapiens.GRCh38.116.gtf.gz",
+    "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+    "fingerprint": {
+      "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh38/Homo_sapiens.GRCh38.116.gtf.gz",
+      "sha256": "ed992f0eac7197d9627bda618f8f831ba355c95bd5d0796af785387d462828b6",
+      "size": 141121632
+    }
+  },
+  "consequenceAnnotation": {
+    "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh38/116/Homo_sapiens.GRCh38.116.gff3.gz",
+    "assembly": "GRCh38",
+    "contigStyle": "no_chr_prefix",
+    "release": "Ensembl 116",
+    "sourceUrl": "https://ftp.ensembl.org/pub/release-116/gff3/homo_sapiens/Homo_sapiens.GRCh38.116.gff3.gz",
+    "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+    "fingerprint": {
+      "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh38/116/Homo_sapiens.GRCh38.116.gff3.gz",
+      "sha256": "08e881d96ab6385a2c31f063a018be4b2c36860b323f2724be07022deeef21ce",
+      "size": 108378077
+    }
+  }
+}

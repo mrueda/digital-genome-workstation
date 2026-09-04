@@ -16,6 +16,8 @@ describe("genome viewport", () => {
       .toEqual({ contig: "1", start: 901, end: 1_000 });
     expect(viewportSpan(zoomViewport({ contig: "1", start: 1, end: 100 }, 0.01))).toBe(20);
     expect(viewportSpan(zoomViewport({ contig: "1", start: 1, end: 10_000 }, 10))).toBe(50_000);
+    expect(zoomViewport({ contig: "1", start: 1, end: 50_000 }, 10, 0.5, 248_000_000))
+      .toEqual({ contig: "1", start: 1, end: 500_000 });
   });
 
   it("fits a selected allele into an 81-base window", () => {

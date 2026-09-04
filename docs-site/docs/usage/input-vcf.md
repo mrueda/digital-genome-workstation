@@ -1,6 +1,6 @@
 # Choose a VCF and Sample
 
-DGW v0.1 creates one project per selected genome. A multisample cohort VCF is accepted, but only one sample is projected into a project. The current bundled resource contract is human-first and uses b37/hs37d5; the workstation model itself is not intended to remain human-specific.
+DGW v0.1 creates one project per selected genome. A multisample cohort VCF is accepted, but only one sample is projected into a project. The current resource contract is human-first and supports b37/hs37d5 and GRCh38/hg38; the workstation model itself is not intended to remain human-specific.
 
 When VCF inspection or project creation takes time, DGW shows the current processing phase and completed steps. Import progress corresponds to real backend boundaries—including PASS projection, normalization, database insertion, compression, and indexing—rather than an estimated animation.
 
@@ -15,7 +15,7 @@ The VCF must be:
 - one or more sequence-resolved ALT alleles;
 - diploid, with `GT` for the selected sample.
 
-The input need not already be left-aligned, minimal, or sorted. DGW first excludes every record whose FILTER field is not exactly `PASS`; `FILTER=.` means filtering was not applied and is not silently treated as passing. DGW reports the excluded count. It then projects the selected sample and runs `bcftools norm -c e` against the configured reference, followed by sorting, before creating the source genome track. A true REF mismatch stops import rather than being silently repaired. Normalization is mandatory because SnpEff and the exact-match Evidence resources identify a variant by its canonical `REF→ALT`, not by position alone. DGW changes only its private project copy and reports how many projected records changed; the source VCF remains untouched.
+The input need not already be left-aligned, minimal, or sorted. DGW first excludes every record whose FILTER field is not exactly `PASS`; `FILTER=.` means filtering was not applied and is not silently treated as passing. DGW reports the excluded count. It then projects the selected sample and runs `bcftools norm -c e` against the configured reference, followed by sorting, before creating the source genome track. A true REF mismatch stops import rather than being silently repaired. Normalization is mandatory because consequence prediction and exact-match Evidence resources identify a variant by its canonical `REF→ALT`, not by position alone. DGW changes only its private project copy and reports how many projected records changed; the source VCF remains untouched.
 
 The VCF may be annotated or unannotated. DGW does not read imported `ANN`, `CSQ`, `CLNSIG`, dbNSFP, COSMIC, or other consequence/evidence INFO fields. They therefore cannot become a current result for a different edited ALT. The same exact allele produces the same DGW result whether those fields were present in the input or not.
 
