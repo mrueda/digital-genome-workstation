@@ -1,5 +1,3 @@
-mod local_compute;
-
 use dgw_core::evaluation::{normalize_variant, BatchEvidenceSignal};
 use dgw_core::{
     built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
@@ -7,13 +5,13 @@ use dgw_core::{
     BackgroundJobStatus, CompoundMutationChange, CreateProjectRequest, DeviceManifest,
     DeviceRunRecord, DeviceRunStatus, EditKind, EditOperation, EffectiveVariant, EvaluationResult,
     EvaluationService, EvidenceResult, EvidenceStatus, FocusContext, FocusFastaExport, FocusView,
-    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, OptimizerAlleleEvidenceInput,
-    OptimizerDirection, OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest,
-    ProcessProgress, Project, ProjectSnapshot, RandomizerPlan, RandomizerPreviewResult,
-    RandomizerRequest, ResourceBundle, SaturationAlleleInput, SelectionResolution,
-    TrackMorphRequest, TransportTargetRequest, TransportTargetResult, VariantContigSummary,
-    VariantDensity, VariantNavigationBin, VariantPage, VariantSelection, VcfInspection,
-    WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
+    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, LocalComputePool,
+    OptimizerAlleleEvidenceInput, OptimizerDirection, OptimizerMode, OptimizerObjective,
+    OptimizerPlan, OptimizerRequest, ProcessProgress, Project, ProjectSnapshot, RandomizerPlan,
+    RandomizerPreviewResult, RandomizerRequest, ResourceBundle, SaturationAlleleInput,
+    SelectionResolution, TrackMorphRequest, TransportTargetRequest, TransportTargetResult,
+    VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage, VariantSelection,
+    VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,8 +20,6 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tauri::{ipc::Channel, Manager};
 use uuid::Uuid;
-
-use local_compute::{merge_track_profile_results, LocalComputePool};
 
 struct AppState {
     evaluation: Arc<EvaluationService>,
@@ -2332,91 +2328,61 @@ fn start_track_evidence_profile_job(
         let mut last_reported = BTreeMap::<String, usize>::new();
         let mut device_progress = BTreeMap::<String, (usize, usize)>::new();
         let job_id = job.id.clone();
-        let profile_track_id = track_id.clone();
-        let profile_worker_threads = usize::from(job.worker_threads);
-        let outcome = compute_pool
-            .parallel_map_with_progress(
-                job.worker_threads,
-                device_ids.clone(),
-                |device_id, progress| {
-                    dgw_core::profile_track_with_threads(
-                        &evaluation,
-                        &project,
-                        &profile_track_id,
-                        std::slice::from_ref(&device_id),
-                        profile_worker_threads,
-                        |reported_device, processed, total| {
-                            if job_was_cancelled(&cancelled_jobs, &job_id) {
-                                return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
+        let outcome = dgw_core::profile_track_parallel_with_threads(
+            &compute_pool,
+            &evaluation,
+            &project,
+            &track_id,
+            &device_ids,
+            job.worker_threads,
+            |device_id, processed, total| {
+                if job_was_cancelled(&cancelled_jobs, &job_id) {
+                    return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
+                }
+                device_progress.insert(device_id.to_owned(), (processed, total));
+                let last = last_reported.entry(device_id.to_owned()).or_default();
+                if processed != 0 && processed != total && processed.saturating_sub(*last) < 250 {
+                    return Ok(());
+                }
+                *last = processed;
+                let completed: f64 = device_ids
+                    .iter()
+                    .map(|candidate| {
+                        device_progress.get(candidate).map_or(0.0, |(done, count)| {
+                            if *count == 0 {
+                                1.0
+                            } else {
+                                *done as f64 / *count as f64
                             }
-                            progress
-                                .send((reported_device.to_owned(), processed, total))
-                                .map_err(|error| dgw_core::DgwError::Tool(error.to_string()))
-                        },
-                    )
-                    .map_err(error_text)
-                },
-                |(device_id, processed, total)| {
-                    device_progress.insert(device_id.clone(), (processed, total));
-                    let last = last_reported.entry(device_id.clone()).or_default();
-                    if processed != 0 && processed != total && processed.saturating_sub(*last) < 250
-                    {
-                        return Ok(());
-                    }
-                    *last = processed;
-                    let completed: f64 = device_ids
-                        .iter()
-                        .map(|candidate| {
-                            device_progress.get(candidate).map_or(0.0, |(done, count)| {
-                                if *count == 0 {
-                                    1.0
-                                } else {
-                                    *done as f64 / *count as f64
-                                }
-                            })
                         })
-                        .sum();
-                    let progress = 5 + ((completed / device_ids.len() as f64) * 90.0).round() as u8;
-                    let label = evidence_device_label(&device_id);
-                    let message = if processed == 0 {
-                        format!("{label}: preparing {total} unique alleles")
-                    } else {
-                        format!("{label}: {processed} of {total} unique alleles")
-                    };
-                    update_job(
-                        &project,
-                        &mut job,
-                        BackgroundJobStatus::Running,
-                        progress,
-                        "evidence",
-                        message,
-                    )
-                },
-            )
-            .and_then(|results| {
-                let current_fingerprint = project
-                    .track_profile_input_fingerprint(&track_id, &device_ids)
-                    .map_err(error_text)?;
-                if current_fingerprint != profile_input_fingerprint {
-                    return Err(
-                        "the track changed while Evidence profiling was running; run it again"
-                            .into(),
-                    );
-                }
-                merge_track_profile_results(
-                    track_id.clone(),
-                    captured_track.head_state_id.clone(),
-                    profile_input_fingerprint.clone(),
-                    results,
-                )
-            })
-            .map_err(|error| {
-                if error.contains("__cancelled__") {
-                    "__cancelled__".into()
+                    })
+                    .sum();
+                let progress = 5 + ((completed / device_ids.len() as f64) * 90.0).round() as u8;
+                let label = evidence_device_label(device_id);
+                let message = if processed == 0 {
+                    format!("{label}: preparing {total} unique alleles")
                 } else {
-                    error
-                }
-            });
+                    format!("{label}: {processed} of {total} unique alleles")
+                };
+                update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Running,
+                    progress,
+                    "evidence",
+                    message,
+                )
+                .map_err(dgw_core::DgwError::Tool)
+            },
+        )
+        .map_err(error_text)
+        .map_err(|error| {
+            if error.contains("__cancelled__") {
+                "__cancelled__".into()
+            } else {
+                error
+            }
+        });
 
         match outcome {
             Ok(result) => {

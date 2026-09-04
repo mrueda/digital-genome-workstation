@@ -2,7 +2,7 @@
 
 DGW includes a local Model Context Protocol server so an agent can operate on DGW projects through commands instead of clicking the interface. The server is a separate executable called `dgw-mcp`. It calls `dgw-core` directly; it does not drive the desktop interface and does not expose an HTTP service.
 
-The server exposes bounded inspection plus a small set of controlled project changes. It can select, duplicate, and rename tracks, and it can preview and apply one manual allele edit at a time. Mutation Generator Randomizer mode is the first device workflow. It runs previews as persistent background jobs and applies a completed result as one reversible mutation layer. The server cannot create projects, run other devices, consolidate, export, archive tracks, or delete anything. Opening a project uses DGW's normal `Project::open` path, including the same idempotent schema maintenance used by the desktop for older compatible packages.
+The server exposes bounded inspection plus a small set of controlled project changes. It can select, duplicate, and rename tracks, and it can preview and apply one manual allele edit at a time. Mutation Generator Randomizer mode runs previews as persistent background jobs and applies a completed result as one reversible mutation layer. Track Profiler is the first analysis workflow: it evaluates active mutations with selected Evidence devices and persists the result read by Track Monitor. The server cannot create projects, run Genome Optimizer or Genome Morph, consolidate, export, archive tracks, or delete anything. Opening a project uses DGW's normal `Project::open` path, including the same idempotent schema maintenance used by the desktop for older compatible packages.
 
 ## Build the server
 
@@ -29,7 +29,7 @@ MCP clients differ in where they store server configuration, but the server entr
 }
 ```
 
-Restart or reload the client after adding the entry. The client should report a server named `dgw-mcp` with 15 tools.
+Restart or reload the client after adding the entry. The client should report a server named `dgw-mcp` with 16 tools.
 
 ## Available tools
 
@@ -47,6 +47,7 @@ Restart or reload the client after adding the entry. The client should report a 
 | `apply_allele_edit` | Apply the unchanged preview if the explicit target track still has the expected head state. |
 | `start_mutation_generator_preview` | Start a Randomizer preview for explicit alleles, an interval, an exact gene, or the whole track. |
 | `apply_mutation_generator_preview` | Apply a completed Randomizer preview as one compact reversible mutation layer. |
+| `start_track_profiler` | Analyze active track mutations with a bounded set of exact-allele Evidence devices. |
 | `search_genes` | Search the project's assembly-matched gene index and count imported variants overlapping each result. |
 | `list_jobs` | Return bounded summaries of recent persistent background jobs and their progress. |
 | `get_job` | Return one complete persistent job, including its request and any result, by identifier. |
@@ -63,7 +64,9 @@ For an allele edit, first call `list_tracks` and `list_variants`. Use an editabl
 
 For Mutation Generator, call `start_mutation_generator_preview` with the editable track ID, its current `headStateId`, Amount, Seed, substitution pattern, and one selection. Gene selection requires an exact symbol or stable identifier; interval coordinates are one-based and inclusive. Whole-track and interval selections remain compact in the request. `max_positions` defaults to 100,000 and fails explicitly instead of truncating a larger selection. Poll `get_job` until it reports `completed`, inspect the aggregate result, and pass that job and captured head to `apply_mutation_generator_preview`. Preview may persist a candidate layer, but it does not move the track head. Apply moves the head once and returns the active mutation count. A no-op preview has no layer and returns `applied: false`.
 
-The MCP process executes Mutation Generator work away from protocol handling and serializes its own device jobs through one local compute slot. Jobs and terminal device-run provenance are saved in the project, so the desktop Jobs view can inspect them. Applying through MCP does not yet start Track Profiler automatically; the returned mutation count is immediate, while evidence-based Track Monitor values require analysis from the desktop until Track Profiler receives its own command contract.
+The MCP process executes device work away from protocol handling and serializes its own jobs through one local compute slot. Jobs and terminal device-run provenance are saved in the project, so the desktop Jobs view can inspect them. Applying a mutation layer returns its immediate mutation count. Call `start_track_profiler` with that new `headStateId`, then poll `get_job` for the evidence-based Track Monitor result. Omit `device_ids` to run Variant Consequences, dbNSFP, ClinVar, and COSMIC, or provide a non-empty subset of those identifiers. `worker_threads` is bounded to 1–256 and defaults to the available processors minus one.
+
+Track Profiler captures the track head, bypass state, Evidence-device order, and scientific input fingerprint before queueing. It rejects a result if any of those inputs change before or during analysis. Desktop and MCP use the same bounded Rayon coordinator, exact-allele evaluation functions, result merge, cache, and profile schema. The score remains the documented additive evidence signal; it is not a joint biological-effect or disease model.
 
 ## Boundary
 

@@ -1,12 +1,9 @@
-#[path = "../src/local_compute.rs"]
-mod local_compute;
-
 use dgw_core::{
-    plan_randomizer, profile_track, CompoundMutationChange, CreateProjectRequest,
-    EvaluationService, Project, RandomizerRequest, ResourceBundle, SubstitutionPattern,
-    TrackEvidenceProfileResult, VariantSelection, CONSEQUENCE_DEVICE_ID,
+    plan_randomizer, profile_track, profile_track_parallel_with_threads, CompoundMutationChange,
+    CreateProjectRequest, EvaluationService, LocalComputePool, Project, RandomizerRequest,
+    ResourceBundle, SubstitutionPattern, TrackEvidenceProfileResult, VariantSelection,
+    CONSEQUENCE_DEVICE_ID,
 };
-use local_compute::{merge_track_profile_results, LocalComputePool};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::File;
@@ -27,28 +24,17 @@ fn run_profile(
     track_id: &str,
     threads: u16,
 ) -> Result<TrackEvidenceProfileResult, String> {
-    let track = project.track(track_id).map_err(|error| error.to_string())?;
     let device_ids: Vec<_> = DEVICES.iter().map(|device| (*device).to_owned()).collect();
-    let fingerprint = project
-        .track_profile_input_fingerprint(track_id, &device_ids)
-        .map_err(|error| error.to_string())?;
-    let results = pool.parallel_map_with_progress(
+    profile_track_parallel_with_threads(
+        pool,
+        evaluation,
+        project,
+        track_id,
+        &device_ids,
         threads,
-        device_ids,
-        |device_id, _progress| {
-            dgw_core::profile_track_with_threads(
-                evaluation,
-                project,
-                track_id,
-                std::slice::from_ref(&device_id),
-                usize::from(threads),
-                |_, _, _| Ok(()),
-            )
-            .map_err(|error| error.to_string())
-        },
-        |_: ()| Ok(()),
-    )?;
-    merge_track_profile_results(track_id.into(), track.head_state_id, fingerprint, results)
+        |_, _, _| Ok(()),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn median(samples: &mut [Duration]) -> Duration {

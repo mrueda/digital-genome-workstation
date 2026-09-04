@@ -1,8 +1,9 @@
 use dgw_core::{
     AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind, EffectiveVariant,
-    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, Project, RandomizerPreviewResult,
-    RandomizerRequest, SubstitutionPattern, VariantContigSummary, VariantKey, VariantPage,
-    VariantSelection, MAX_RANDOMIZER_POSITIONS,
+    EvaluationService, GeneSearchHit, GenomeState, GenomeTrack, Haplotype, LocalComputePool,
+    Project, RandomizerPreviewResult, RandomizerRequest, SubstitutionPattern, VariantContigSummary,
+    VariantKey, VariantPage, VariantSelection, MAX_RANDOMIZER_POSITIONS,
+    TRACK_PROFILE_EVIDENCE_DEVICES,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -12,6 +13,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
 };
@@ -205,6 +207,20 @@ pub struct ApplyMutationGeneratorPreviewRequest {
     pub job_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct StartTrackProfilerRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable track identifier to analyze")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Optional supported Evidence device IDs; omit to run all four")]
+    pub device_ids: Option<Vec<String>>,
+    #[schemars(description = "Bounded local worker count; omit for available CPUs minus one")]
+    pub worker_threads: Option<u16>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
@@ -309,7 +325,7 @@ struct AppliedAlleleEditResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MutationGeneratorJobResult {
+struct StartedBackgroundJobResult {
     project_path: String,
     job: BackgroundJob,
 }
@@ -326,11 +342,13 @@ struct AppliedMutationGeneratorResult {
     active_mutation_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DgwMcpServer {
     tool_router: ToolRouter<Self>,
     active_project: Arc<RwLock<Option<PathBuf>>>,
     job_lock: Arc<Mutex<()>>,
+    evaluation: Arc<EvaluationService>,
+    compute_pool: Arc<LocalComputePool>,
 }
 
 impl Default for DgwMcpServer {
@@ -345,6 +363,8 @@ impl DgwMcpServer {
             tool_router: Self::tool_router(),
             active_project: Arc::new(RwLock::new(None)),
             job_lock: Arc::new(Mutex::new(())),
+            evaluation: Arc::new(EvaluationService::new()),
+            compute_pool: Arc::new(LocalComputePool::new()),
         }
     }
 
@@ -686,7 +706,7 @@ impl DgwMcpServer {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_mutation_generator_job(&worker_path, &job_id);
         });
-        structured(MutationGeneratorJobResult {
+        structured(StartedBackgroundJobResult {
             project_path: display_path,
             job,
         })
@@ -763,6 +783,127 @@ impl DgwMcpServer {
             })
         })
         .await
+    }
+
+    #[tool(
+        description = "Start persistent Track Profiler analysis for an explicit track head. The job evaluates active mutations with selected exact-allele Evidence devices on a bounded local Rayon pool. Omit device_ids to use all four supported Evidence devices and poll progress with get_job."
+    )]
+    async fn start_track_profiler(
+        &self,
+        Parameters(request): Parameters<StartTrackProfilerRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty() || request.expected_head_state_id.trim().is_empty() {
+            return Ok(tool_error(
+                "track_id and expected_head_state_id must not be empty",
+            ));
+        }
+        if request
+            .worker_threads
+            .is_some_and(|threads| threads == 0 || threads > 256)
+        {
+            return Ok(tool_error("worker_threads must be between 1 and 256"));
+        }
+        let requested_devices = request.device_ids.unwrap_or_else(|| {
+            TRACK_PROFILE_EVIDENCE_DEVICES
+                .iter()
+                .map(|device| (*device).to_owned())
+                .collect()
+        });
+        let device_ids = dgw_core::normalized_track_profile_devices(&requested_devices);
+        let unsupported: Vec<_> = requested_devices
+            .iter()
+            .filter(|device| !TRACK_PROFILE_EVIDENCE_DEVICES.contains(&device.as_str()))
+            .cloned()
+            .collect();
+        if !unsupported.is_empty() {
+            return Ok(tool_error(format!(
+                "unsupported Track Profiler Evidence devices: {}",
+                unsupported.join(", ")
+            )));
+        }
+        if device_ids.is_empty() {
+            return Ok(tool_error(
+                "Track Profiler requires at least one Evidence device",
+            ));
+        }
+        let path = match self.resolve_project_path(request.project_path) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let display_path = path.display().to_string();
+        let worker_path = path.clone();
+        let track_id = request.track_id;
+        let expected_head_state_id = request.expected_head_state_id;
+        let worker_threads = request
+            .worker_threads
+            .unwrap_or_else(default_worker_threads);
+        let outcome = tokio::task::spawn_blocking(move || {
+            let project = Project::open(&path).map_err(|error| error.to_string())?;
+            let track = project
+                .track(&track_id)
+                .map_err(|error| error.to_string())?;
+            if track.head_state_id != expected_head_state_id {
+                return Err(String::from(
+                    "the selected track head changed; inspect the track and retry",
+                ));
+            }
+            let active_mutations = project
+                .active_track_mutations(&track_id)
+                .map_err(|error| error.to_string())?;
+            if active_mutations.is_empty() {
+                return Err("the selected track has no active mutations to profile".into());
+            }
+            let fingerprint = project
+                .track_profile_input_fingerprint(&track_id, &device_ids)
+                .map_err(|error| error.to_string())?;
+            let now = chrono::Utc::now();
+            let job = BackgroundJob {
+                id: Uuid::new_v4().to_string(),
+                operation: "trackEvidenceProfile".into(),
+                device_id: "org.dgw.builtin.track-profiler".into(),
+                track_id: track_id.clone(),
+                status: BackgroundJobStatus::Queued,
+                progress: 0,
+                stage: "queued".into(),
+                message: "Waiting for the MCP background compute slot".into(),
+                worker_threads,
+                request: json!({
+                    "stateId": expected_head_state_id,
+                    "bypassedEditIds": track.bypassed_edit_ids,
+                    "deviceIds": device_ids,
+                    "profileInputFingerprint": fingerprint,
+                    "host": "mcp"
+                }),
+                result: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            };
+            project
+                .save_background_job(&job)
+                .map_err(|error| error.to_string())?;
+            Ok(job)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let job = match outcome {
+            Ok(job) => job,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let job_id = job.id.clone();
+        let job_lock = Arc::clone(&self.job_lock);
+        let evaluation = Arc::clone(&self.evaluation);
+        let compute_pool = Arc::clone(&self.compute_pool);
+        tokio::task::spawn_blocking(move || {
+            let _guard = job_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = execute_track_profiler_job(&worker_path, &job_id, &evaluation, &compute_pool);
+        });
+        structured(StartedBackgroundJobResult {
+            project_path: display_path,
+            job,
+        })
     }
 
     #[tool(
@@ -896,7 +1037,7 @@ impl ServerHandler for DgwMcpServer {
                 ),
             },
             instructions: Some(
-                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator uses start_mutation_generator_preview, get_job until completed, then apply_mutation_generator_preview."
+                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator uses start_mutation_generator_preview, get_job until completed, then apply_mutation_generator_preview. Analyze the resulting head with start_track_profiler and poll get_job for the Track Monitor result."
                     .into(),
             ),
             ..Default::default()
@@ -1298,6 +1439,174 @@ fn execute_mutation_generator_job(project_path: &PathBuf, job_id: &str) -> Resul
     }
 }
 
+fn default_worker_threads() -> u16 {
+    std::thread::available_parallelism()
+        .map(|count| count.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
+        .min(256) as u16
+}
+
+fn evidence_device_label(device_id: &str) -> &'static str {
+    match device_id {
+        dgw_core::CONSEQUENCE_DEVICE_ID => "Variant Consequences",
+        "org.dgw.builtin.dbnsfp" => "dbNSFP",
+        "org.dgw.builtin.clinvar" => "ClinVar",
+        "org.dgw.builtin.cosmic" => "COSMIC",
+        _ => "Evidence",
+    }
+}
+
+fn execute_track_profiler_job(
+    project_path: &PathBuf,
+    job_id: &str,
+    evaluation: &EvaluationService,
+    compute_pool: &LocalComputePool,
+) -> Result<(), String> {
+    let project = Project::open(project_path).map_err(|error| error.to_string())?;
+    let mut job = project
+        .background_job(job_id)
+        .map_err(|error| error.to_string())?;
+    let device_ids: Vec<String> = serde_json::from_value(
+        job.request
+            .get("deviceIds")
+            .cloned()
+            .ok_or_else(|| "Track Profiler job has no device list".to_owned())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let expected_state_id = job
+        .request
+        .get("stateId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "Track Profiler job has no captured state".to_owned())?;
+    let expected_fingerprint = job
+        .request
+        .get("profileInputFingerprint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "Track Profiler job has no input fingerprint".to_owned())?;
+    let current_track = project
+        .track(&job.track_id)
+        .map_err(|error| error.to_string())?;
+    if current_track.head_state_id != expected_state_id
+        || project
+            .track_profile_input_fingerprint(&job.track_id, &device_ids)
+            .map_err(|error| error.to_string())?
+            != expected_fingerprint
+    {
+        let error = "the track changed before Evidence profiling started; run it again".to_owned();
+        job.error = Some(error.clone());
+        return update_persistent_job(
+            &project,
+            &mut job,
+            BackgroundJobStatus::Failed,
+            100,
+            "failed",
+            error,
+        );
+    }
+    update_persistent_job(
+        &project,
+        &mut job,
+        BackgroundJobStatus::Running,
+        5,
+        "mutations",
+        "Expanding active track mutations",
+    )?;
+
+    let mut last_reported = BTreeMap::<String, usize>::new();
+    let mut device_progress = BTreeMap::<String, (usize, usize)>::new();
+    let track_id = job.track_id.clone();
+    let worker_threads = job.worker_threads;
+    let outcome = dgw_core::profile_track_parallel_with_threads(
+        compute_pool,
+        evaluation,
+        &project,
+        &track_id,
+        &device_ids,
+        worker_threads,
+        |device_id, processed, total| {
+            device_progress.insert(device_id.to_owned(), (processed, total));
+            let last = last_reported.entry(device_id.to_owned()).or_default();
+            if processed != 0 && processed != total && processed.saturating_sub(*last) < 250 {
+                return Ok(());
+            }
+            *last = processed;
+            let completed: f64 = device_ids
+                .iter()
+                .map(|candidate| {
+                    device_progress.get(candidate).map_or(0.0, |(done, count)| {
+                        if *count == 0 {
+                            1.0
+                        } else {
+                            *done as f64 / *count as f64
+                        }
+                    })
+                })
+                .sum();
+            let progress = 5 + ((completed / device_ids.len() as f64) * 90.0).round() as u8;
+            let label = evidence_device_label(device_id);
+            let message = if processed == 0 {
+                format!("{label}: preparing {total} unique alleles")
+            } else {
+                format!("{label}: {processed} of {total} unique alleles")
+            };
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                progress,
+                "evidence",
+                message,
+            )
+            .map_err(dgw_core::DgwError::Tool)
+        },
+    );
+    match outcome {
+        Ok(result) if result.profile_input_fingerprint == expected_fingerprint => {
+            let message = format!(
+                "Profiled {} mutations with {} Evidence devices",
+                result.active_mutations,
+                result.device_coverage.len()
+            );
+            job.result = Some(serde_json::to_value(result).map_err(|error| error.to_string())?);
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Completed,
+                100,
+                "completed",
+                message,
+            )
+        }
+        Ok(_) => {
+            let error =
+                "the track profile no longer matches its captured inputs; run it again".to_owned();
+            job.error = Some(error.clone());
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+        Err(error) => {
+            let error = error.to_string();
+            job.error = Some(error.clone());
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+    }
+}
+
 impl From<BackgroundJob> for JobSummary {
     fn from(job: BackgroundJob) -> Self {
         Self {
@@ -1346,6 +1655,7 @@ mod tests {
                 "search_genes",
                 "select_track",
                 "start_mutation_generator_preview",
+                "start_track_profiler",
             ]
         );
     }
