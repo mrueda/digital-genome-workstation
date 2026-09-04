@@ -44,7 +44,8 @@ import type {
 export const api = {
   deviceCatalog: () => invoke<DeviceManifest[]>("device_catalog"),
   suggestedBundles: () => invoke<ResourceBundle[]>("suggested_development_bundles"),
-  exampleFixture: (assembly: "b37" | "hg38") => invoke<ExampleFixture>("example_fixture", { assembly }),
+  exampleFixture: (assembly: "b37" | "hg38", exampleId = "alleleEditing") =>
+    invoke<ExampleFixture>("example_fixture", { assembly, exampleId }),
   validateBundle: (bundle: ResourceBundle) =>
     invoke<string[]>("validate_bundle", { bundle }),
   inspectVcf: (path: string, assembly: string, onProgress?: (progress: ProcessProgress) => void) => {

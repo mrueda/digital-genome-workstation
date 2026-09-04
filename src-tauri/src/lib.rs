@@ -725,21 +725,34 @@ fn available_project_path(parent: PathBuf, stem: &str) -> PathBuf {
 }
 
 #[tauri::command]
-fn example_fixture(app: tauri::AppHandle, assembly: String) -> Result<ExampleFixture, String> {
-    let (file_name, project_name, project_stem) = match assembly.as_str() {
-        "b37" => (
+fn example_fixture(
+    app: tauri::AppHandle,
+    assembly: String,
+    example_id: Option<String>,
+) -> Result<ExampleFixture, String> {
+    let example_id = example_id.as_deref().unwrap_or("alleleEditing");
+    let (file_name, sample, project_name, project_stem) = match (assembly.as_str(), example_id) {
+        ("b37", "alleleEditing") => (
             "dgw-cluster.synthetic.vcf",
+            "DGW_DEMO",
             "DGW Allele Editing — GRCh37",
             "dgw-allele-editing-grch37-example",
         ),
-        "hg38" => (
+        ("hg38", "alleleEditing") => (
             "dgw-cluster.grch38.synthetic.vcf",
+            "DGW_DEMO",
             "DGW Allele Editing — GRCh38",
             "dgw-allele-editing-grch38-example",
         ),
+        ("b37", "hg00103Wes") => (
+            "1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz",
+            "SRR1596639",
+            "HG00103 exome — GRCh37",
+            "hg00103-wes-grch37-example",
+        ),
         _ => {
             return Err(format!(
-                "no bundled example is available for assembly {assembly}"
+                "no bundled example {example_id} is available for assembly {assembly}"
             ))
         }
     };
@@ -772,7 +785,7 @@ fn example_fixture(app: tauri::AppHandle, assembly: String) -> Result<ExampleFix
 
     Ok(ExampleFixture {
         path,
-        sample: "DGW_DEMO".into(),
+        sample: sample.into(),
         project_name: project_name.into(),
         project_path: available_project_path(projects_dir, project_stem),
     })

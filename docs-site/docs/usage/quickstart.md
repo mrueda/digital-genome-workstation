@@ -63,8 +63,10 @@ You can perform the same bounded change through the experimental Genome Optimize
 
 Maximize does not search for a more damaging allele. It only reintroduces an exact allele from the immutable source sample when that increases the selected additive score. See [Tracks, Devices, and Edit Blocks](edit-and-compare.md#optimizer-behavior) for the scoring rules and persistence limit.
 
-## 4. Try the selected-sample cohort fixture
+## 4. Try the public exome
 
-Open `fixtures/1000G-HG00096.public.vcf.gz` and select `HG00096`. This small fixture was extracted from a 2,504-sample public 1000 Genomes cohort and contains only the selected sample’s 35 phased non-reference records. It is public human variation data, not synthetic data; private project samples must not be used as fixtures.
+**File → Open Example Project → HG00103 exome — GRCh37** opens a public 1000 Genomes WES call set spanning the autosomes and chromosome X. DGW imports 19,598 exact alleles, creates an untouched editable track, and focuses initially on `LDLR`. The call set also provides gene-level regions in `BRCA2`, `PCSK9`, `TP53`, and `HBB`. These are useful, recognizable places to explore; their presence does not mean that this individual carries a pathogenic allele in each gene.
+
+Use this example to test navigation, gene selection, track duplication, Saturation, Mutation Generator, and other bulk operations on a realistic multi-chromosome project. No optimizer result is pre-applied. The bundled VCF contains only the selected sample and `GT`; imported INFO annotations are absent and unnecessary. Its source identity, extraction command, counts, and hashes are recorded in `fixtures/README.md`. It is public human variation data, not synthetic data; private project samples must not be used as fixtures.
 
 For a command-line integration check of the same engine, see [Testing](../technical-details/testing.md).

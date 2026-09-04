@@ -196,8 +196,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let maximize_request = optimizer_request(OptimizerDirection::Maximize);
     let saturation_evidence =
         evaluation.evaluate_saturation_candidates(&project, &minimize_request)?;
+    let saturation_positions = resolution
+        .variants
+        .iter()
+        .filter(|variant| {
+            variant.reference.len() == 1
+                && variant.alternate.len() == 1
+                && matches!(
+                    variant.reference.as_bytes()[0].to_ascii_uppercase(),
+                    b'A' | b'C' | b'G' | b'T'
+                )
+        })
+        .count();
     require(
-        saturation_evidence.len() == resolution.variants.len() * 3,
+        saturation_evidence.len() == saturation_positions * 3,
         "Saturation did not evaluate three non-reference candidates per selected SNV",
     )?;
     let minimize = plan_saturation_optimizer(

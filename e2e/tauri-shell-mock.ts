@@ -37,6 +37,16 @@ export async function installTauriShellMock(page: Page) {
         licenseLabel: "Ensembl terms"
       }
     };
+    const hg38Bundle = {
+      ...bundle,
+      id: "dgw-e2e-grch38",
+      assembly: "hg38",
+      contigStyle: "chr_prefix",
+      referencePath: "/synthetic/hg38.fa",
+      referenceFaiPath: "/synthetic/hg38.fa.fai",
+      geneAnnotation: { ...bundle.geneAnnotation, assembly: "hg38", release: "Ensembl 116" },
+      consequenceAnnotation: { ...bundle.consequenceAnnotation, assembly: "hg38", release: "Ensembl 116" }
+    };
     const now = "2026-09-03T12:00:00Z";
     const rootState = { id: "state-root", createdAt: now, label: "Imported source" };
     const sourceTrack = {
@@ -122,6 +132,9 @@ export async function installTauriShellMock(page: Page) {
     ];
     const focus = { contig: "7", start: 140_453_090, end: 140_453_190 };
     let activeTrackId = restoredTrack.id;
+    let exampleKind: "synthetic" | "wes" = "synthetic";
+    let exampleAssembly: "b37" | "hg38" = "b37";
+    let workspaceFocus = focus;
 
     function activeTrack() {
       return tracks.find((track) => track.id === activeTrackId) ?? restoredTrack;
@@ -133,17 +146,23 @@ export async function installTauriShellMock(page: Page) {
 
     function snapshot() {
       const active = activeTrack();
+      const activeBundle = exampleAssembly === "hg38" ? hg38Bundle : bundle;
+      const projectName = exampleKind === "wes" ? "HG00103 exome — GRCh37" : "DGW Allele Editing Demo";
+      const selectedSample = exampleKind === "wes" ? "SRR1596639" : "DGW_DEMO";
+      const sourcePath = exampleKind === "wes"
+        ? "/synthetic/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz"
+        : "/synthetic/dgw-cluster.synthetic.vcf";
       return {
         manifest: {
           projectId: "dgw-e2e-project",
-          name: "DGW Allele Editing Demo",
-          selectedSample: "DGW_DEMO",
-          assembly: "b37",
-          resourceBundle: bundle,
+          name: projectName,
+          selectedSample,
+          assembly: activeBundle.assembly,
+          resourceBundle: activeBundle,
           rootStateId: "state-root",
-          sourceVcf: { path: "/synthetic/dgw-cluster.synthetic.vcf", sha256: "synthetic", size: 2048 }
+          sourceVcf: { path: sourcePath, sha256: "synthetic", size: 2048 }
         },
-        workspace: { currentStateId: active.headStateId, bypassedEditIds: [], focus, activeTrackId },
+        workspace: { currentStateId: active.headStateId, bypassedEditIds: [], focus: workspaceFocus, activeTrackId },
         tracks,
         activeTrack: active,
         states,
@@ -201,15 +220,39 @@ export async function installTauriShellMock(page: Page) {
 
     async function command(commandName: string, args: JsonObject = {}) {
       if (commandName === "plugin:webview|set_webview_zoom") return null;
-      if (commandName === "suggested_development_bundles") return [bundle];
-      if (commandName === "example_fixture") return { path: "/synthetic/dgw-cluster.synthetic.vcf", sample: "DGW_DEMO", projectName: "DGW Allele Editing Demo", projectPath: "/synthetic/DGW-Allele-Editing-Demo.dgw" };
-      if (commandName === "create_project") { activeTrackId = sourceTrack.id; return snapshot(); }
+      if (commandName === "suggested_development_bundles") return [bundle, hg38Bundle];
+      if (commandName === "example_fixture") {
+        exampleKind = args.exampleId === "hg00103Wes" ? "wes" : "synthetic";
+        exampleAssembly = args.assembly === "hg38" ? "hg38" : "b37";
+        if (exampleKind === "wes") {
+          return { path: "/synthetic/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz", sample: "SRR1596639", projectName: "HG00103 exome — GRCh37", projectPath: "/synthetic/HG00103-WES.dgw" };
+        }
+        return { path: "/synthetic/dgw-cluster.synthetic.vcf", sample: "DGW_DEMO", projectName: "DGW Allele Editing Demo", projectPath: "/synthetic/DGW-Allele-Editing-Demo.dgw" };
+      }
+      if (commandName === "create_project") { activeTrackId = exampleKind === "synthetic" ? sourceTrack.id : restoredTrack.id; return snapshot(); }
       if (commandName === "duplicate_track") {
         activeTrackId = String(args.name).includes("alternative") ? alternativeTrack.id : restoredTrack.id;
         return snapshot();
       }
       if (commandName === "apply_edit") return states.find((state) => state.id === activeTrack().headStateId) ?? rootState;
       if (commandName === "select_track") { activeTrackId = String(args.trackId); return snapshot(); }
+      if (commandName === "rename_track") {
+        activeTrackId = String(args.trackId);
+        activeTrack().name = String(args.name);
+        return snapshot();
+      }
+      if (commandName === "search_genes") {
+        return String(args.query).toUpperCase() === "LDLR"
+          ? [{ geneId: "ENSG00000130164", symbol: "LDLR", contig: "19", start: 11_200_038, end: 11_244_506, strand: "+", biotype: "protein_coding", sourceVariantCount: 5 }]
+          : [{ geneId: "ENSG00000215568", symbol: "GAB4", contig: "chr22", start: 16_961_936, end: 17_008_222, strand: "-", biotype: "protein_coding", sourceVariantCount: 48 }];
+      }
+      if (commandName === "resolve_variant_selection") return { trackId: activeTrackId, total: 4, limit: 100, variants: sourceVariants.slice(0, 4).map((variant) => variant.key), truncated: false };
+      if (commandName === "run_optimizer") return { plan: { proposals: [{ sourceVariant: sourceVariants[0].key }] }, generatedEditIds: ["edit-restored"], snapshot: snapshot() };
+      if (commandName === "save_workspace") {
+        const workspace = args.workspace as { focus?: typeof focus };
+        if (workspace.focus) workspaceFocus = workspace.focus;
+        return snapshot();
+      }
       if (commandName === "open_project") return snapshot();
       if (commandName === "load_workstation_session") return null;
       if (commandName === "save_workstation_session") return now;

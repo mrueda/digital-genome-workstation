@@ -13,6 +13,7 @@ function closeMenu(event: React.MouseEvent<HTMLElement>) {
 }
 
 export type ProjectTemplateId = "standardEvidence" | "empty";
+export type ExampleProjectId = "alleleEditingB37" | "alleleEditingHg38" | "hg00103Wes";
 
 export function ApplicationMenu({
   projectOpen,
@@ -56,7 +57,7 @@ export function ApplicationMenu({
   onNewProject: () => void;
   onNewFromTemplate: () => void;
   onOpenProject: () => void;
-  onOpenExampleProject: (assembly: "b37" | "hg38") => void;
+  onOpenExampleProject: (exampleId: ExampleProjectId) => void;
   recentProjects: Array<{ path: string; name: string; openedAt: string }>;
   onOpenRecent: (path: string) => void;
   onSaveProject: () => void;
@@ -192,11 +193,14 @@ export function ApplicationMenu({
           <details className="file-menu-submenu">
             <summary><span>Open Example Project</span><small>›</small></summary>
             <div className="file-menu-submenu-options">
-              <button type="button" onClick={(event) => { closeMenu(event); onOpenExampleProject("b37"); }}>
+              <button type="button" onClick={(event) => { closeMenu(event); onOpenExampleProject("alleleEditingB37"); }}>
                 <span>Allele Editing — GRCh37</span><small>Synthetic · 3 tracks</small>
               </button>
-              <button type="button" onClick={(event) => { closeMenu(event); onOpenExampleProject("hg38"); }}>
+              <button type="button" onClick={(event) => { closeMenu(event); onOpenExampleProject("alleleEditingHg38"); }}>
                 <span>Allele Editing — GRCh38</span><small>Synthetic · 3 tracks</small>
+              </button>
+              <button type="button" onClick={(event) => { closeMenu(event); onOpenExampleProject("hg00103Wes"); }}>
+                <span>HG00103 exome — GRCh37</span><small>1000 Genomes WES · 19.6K alleles</small>
               </button>
             </div>
           </details>

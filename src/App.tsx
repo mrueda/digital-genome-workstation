@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
-import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ProjectTemplateId } from "./ApplicationChrome";
+import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId } from "./ApplicationChrome";
 import {
   TrackDeviceWorkspace,
   type AlleleRandomizerDevice,
@@ -410,13 +410,15 @@ function editMutationCount(operation: EditOperation): number {
 }
 
 async function createBundledExampleProject(
-  assembly: "b37" | "hg38",
+  exampleId: ExampleProjectId,
   onStatus?: (message: string, progress?: ProcessProgress) => void
 ): Promise<{ projectPath: string; snapshot: ProjectSnapshot }> {
+  const assembly = exampleId === "alleleEditingB37" || exampleId === "hg00103Wes" ? "b37" : "hg38";
+  const fixtureId = exampleId === "hg00103Wes" ? exampleId : "alleleEditing";
   const assemblyLabel = assembly === "hg38" ? "GRCh38" : "GRCh37";
   onStatus?.(`Preparing the ${assemblyLabel} example project…`);
   const [example, bundles] = await Promise.all([
-    api.exampleFixture(assembly),
+    api.exampleFixture(assembly, fixtureId),
     api.suggestedBundles()
   ]);
   const resourceBundle = bundles.find((candidate) => candidate.assembly === assembly);
@@ -431,6 +433,22 @@ async function createBundledExampleProject(
   }, (progress) => onStatus?.(progress.message, progress));
   const sourceTrack = created.tracks.find((track) => track.readOnly);
   if (!sourceTrack) throw new Error("The example project has no source genome track.");
+
+  if (exampleId === "hg00103Wes") {
+    const workingTrack = created.tracks.find((track) => !track.readOnly);
+    if (!workingTrack) throw new Error("The public exome example has no editable genome track.");
+    onStatus?.("Preparing the multi-chromosome exome workspace…");
+    const renamed = await api.renameTrack(example.projectPath, workingTrack.id, "HG00103 WES · working track");
+    const gene = (await api.searchGenes(example.projectPath, "LDLR", 5))
+      .find((candidate) => candidate.symbol.toUpperCase() === "LDLR");
+    if (!gene) throw new Error("The GRCh37 gene resource does not contain LDLR.");
+    const snapshot = await api.saveWorkspace(example.projectPath, {
+      ...renamed.workspace,
+      focus: { contig: gene.contig, start: gene.start, end: gene.end }
+    });
+    onStatus?.("Opening the public exome example…");
+    return { projectPath: example.projectPath, snapshot };
+  }
 
   const contig = assembly === "hg38" ? "chr7" : "7";
   const position = assembly === "hg38" ? 140_753_336 : 140_453_136;
@@ -603,10 +621,13 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     const assemblyLabel = assembly === "hg38" ? "GRCh38" : "GRCh37";
     setStatus(`Opening the prepared ${assemblyLabel} example project…`);
     try {
-      const example = await createBundledExampleProject(assembly, (message, progress) => {
+      const example = await createBundledExampleProject(
+        assembly === "hg38" ? "alleleEditingHg38" : "alleleEditingB37",
+        (message, progress) => {
         setStatus(message);
         if (progress) receiveProgress(progress);
-      });
+        }
+      );
       onOpened(example.projectPath, example.snapshot, true);
     } catch (error) {
       setStatus(messageOf(error));
@@ -4947,12 +4968,12 @@ export default function App() {
     if (typeof selected === "string") await openProjectAt(selected);
   }
 
-  async function openExampleProject(assembly: "b37" | "hg38") {
-    const assemblyLabel = assembly === "hg38" ? "GRCh38" : "GRCh37";
+  async function openExampleProject(exampleId: ExampleProjectId) {
+    const assemblyLabel = exampleId === "alleleEditingB37" || exampleId === "hg00103Wes" ? "GRCh37" : "GRCh38";
     try {
       await saveCurrentProject();
       setProjectSaveState({ status: "saving", message: `Creating ${assemblyLabel} example…` });
-      const example = await createBundledExampleProject(assembly, (message) => {
+      const example = await createBundledExampleProject(exampleId, (message) => {
         setProjectSaveState({ status: "saving", message });
       });
       enterProject(example.projectPath, example.snapshot, true, "standardEvidence");

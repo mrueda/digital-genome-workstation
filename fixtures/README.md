@@ -25,17 +25,19 @@ A fictional one-sample fixture for the multiallelic importer. `DGW_MULTI` has on
 
 A fictional one-sample deletion written as the valid but non-minimal `1:970549 TGG>TG`. During import, DGW normalizes its private projection to `1:970549 TG>T` against hs37d5 while leaving this source fixture unchanged. It is the regression fixture for automatic import normalization and contains no participant data.
 
-## `1000G-HG00096.public.vcf.gz`
+## `1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz`
 
-A selected-sample subset extracted from the 2,504-sample public 1000 Genomes test cohort used by the CINECA/Beacon development stack. It contains the 35 non-reference, phased records for sample `HG00096`, including annotations already present in the source cohort; DGW accepts but ignores those INFO annotations. The adjacent `.csi` file is its index.
+A public 1000 Genomes whole-exome example for sample `HG00103`, downloaded as read accession `SRR1596639` and called with GATK HaplotypeCaller/GenotypeGVCFs 4.6.2.0 against b37 Broad exome intervals. It spans every autosome and chromosome X. The selected sample has 19,578 `FILTER=PASS` non-reference source records: 19,003 SNV ALTs, 604 indel ALTs, and 29 multiallelic records. DGW decomposes the multiallelic rows and imports 19,598 exact alleles. The genotypes deliberately exercise both phased and unphased input.
 
-The extraction command was:
+The fixture keeps only `GT`; source INFO and other FORMAT fields were removed because DGW evaluates exact alleles from its configured resources. Local command paths in the GATK and bcftools header records were also removed. The adjacent `.csi` is its index. Extraction was equivalent to:
 
 ```bash
-bcftools view -s HG00096 -c 1 -Oz \
-  -o fixtures/1000G-HG00096.public.vcf.gz \
-  test_1000G.norm.ann.dbnsfp.clinvar.cosmic.vcf.gz
-tabix -f -C -p vcf fixtures/1000G-HG00096.public.vcf.gz
+bcftools view -i 'FILTER="PASS" && GT="alt"' -Ou SRR1596639.hc.QC.vcf.gz \
+  | bcftools annotate -x 'INFO,^FORMAT/GT' -Oz \
+      -o fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz
+tabix -f -C -p vcf fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz
 ```
 
-This fixture is public human variation data, not synthetic data. Do not replace it with private or identifiable project samples.
+The local source had SHA-256 `3d2ac528d4d18d762647e46c80437650b399460aac4c067170ff2aef3ad53d47`. The sanitized fixture VCF has SHA-256 `4a70aec74eca0b21265e2be1b330356bc17337d8d73be78b3095fa4f2d0ad97a`; its CSI has SHA-256 `b888da12cbbd358b9db9a707a11008077c20525c90610db448bf37e9343b7f75`.
+
+**File → Open Example Project → HG00103 exome — GRCh37** creates a protected source track and a clean editable working track focused on `LDLR`, which has five called SNVs. No optimizer result is applied in advance: this example is the realistic multi-chromosome workload rather than a scripted biological conclusion.

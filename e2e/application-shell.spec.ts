@@ -65,6 +65,16 @@ test("opens the synthetic example into the complete genome workspace", async ({ 
   await expect(page.getByLabel("Mutation Generator")).toBeVisible();
 });
 
+test("opens the public GRCh37 exome example from the File menu", async ({ page }) => {
+  await page.getByText("File", { exact: true }).click();
+  await page.getByText("Open Example Project", { exact: true }).click();
+  await page.getByRole("button", { name: /HG00103 exome — GRCh37/ }).click();
+
+  await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
+  await expect(page.locator(".app-header strong")).toHaveText("HG00103 exome — GRCh37");
+  await expect(page.getByLabel("Track Monitor").getByText("HG00103 WES · working track", { exact: true })).toBeVisible();
+});
+
 test("selects the visible alleles and clears the selection", async ({ page }) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
 
