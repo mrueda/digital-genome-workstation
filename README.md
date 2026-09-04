@@ -77,7 +77,7 @@ Choose any project under **Open an example** on the landing page, or use **File 
 
 ## Agent access (MCP)
 
-DGW includes a local MCP server. It opens existing `.dgw` projects and exposes bounded project, track, variant, gene, and background-job inspection through the same `dgw-core` methods used by the desktop application. Agents can select, duplicate, and rename tracks. A manual allele edit requires an exact effective source allele, an editable target track, its current head state, and a separate non-mutating preview before apply. The server does not automate the interface or write SQLite directly.
+DGW includes a local MCP server. It opens existing `.dgw` projects and exposes bounded project, track, variant, gene, and background-job inspection through the same `dgw-core` methods used by the desktop application. Agents can select, duplicate, and rename tracks. A manual allele edit requires an exact effective source allele, an editable target track, its current head state, and a separate non-mutating preview before apply. Mutation Generator Randomizer mode also supports persistent background previews over explicit alleles, intervals, exact genes, or a whole track; Apply attaches the completed result as one compact reversible layer. The server does not automate the interface or write SQLite directly.
 
 ```bash
 cargo build --release -p dgw-mcp

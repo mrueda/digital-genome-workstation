@@ -1,7 +1,8 @@
 use dgw_core::{
     AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind, EffectiveVariant,
-    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, Project, VariantContigSummary, VariantKey,
-    VariantPage,
+    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, Project, RandomizerPreviewResult,
+    RandomizerRequest, SubstitutionPattern, VariantContigSummary, VariantKey, VariantPage,
+    VariantSelection, MAX_RANDOMIZER_POSITIONS,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -12,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     path::PathBuf,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct OpenProjectRequest {
@@ -138,6 +140,71 @@ pub struct ApplyAlleleEditRequest {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MutationSubstitutionPattern {
+    Uniform,
+    TransitionOnly,
+    TransversionOnly,
+    TiTvMix,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MutationSelection {
+    Explicit {
+        variants: Vec<VariantKeyInput>,
+    },
+    Interval {
+        contig: String,
+        start: u64,
+        end: u64,
+        #[serde(default)]
+        exclusions: Vec<VariantKeyInput>,
+    },
+    Gene {
+        #[schemars(description = "Exact gene symbol or stable gene identifier")]
+        query: String,
+        #[serde(default)]
+        exclusions: Vec<VariantKeyInput>,
+    },
+    WholeTrack {
+        #[serde(default)]
+        exclusions: Vec<VariantKeyInput>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct StartMutationGeneratorPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable target track identifier")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    pub selection: MutationSelection,
+    #[schemars(description = "Percentage of eligible selected positions to change, from 0 to 100")]
+    pub amount: u8,
+    pub seed: u64,
+    pub substitution_pattern: MutationSubstitutionPattern,
+    #[schemars(description = "Transition percentage for ti_tv_mix; ignored by other patterns")]
+    pub transition_probability: Option<u8>,
+    #[schemars(description = "Maximum selected positions to resolve; defaults to 100000")]
+    pub max_positions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ApplyMutationGeneratorPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Target track identifier used by the preview job")]
+    pub track_id: String,
+    #[schemars(description = "Track head captured when the preview job was started")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Completed Mutation Generator preview job identifier")]
+    pub job_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
@@ -240,10 +307,30 @@ struct AppliedAlleleEditResult {
     effective_variants: Vec<EffectiveVariant>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MutationGeneratorJobResult {
+    project_path: String,
+    job: BackgroundJob,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppliedMutationGeneratorResult {
+    project_path: String,
+    job_id: String,
+    applied: bool,
+    preview: RandomizerPreviewResult,
+    state: Option<GenomeState>,
+    track: GenomeTrack,
+    active_mutation_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct DgwMcpServer {
     tool_router: ToolRouter<Self>,
     active_project: Arc<RwLock<Option<PathBuf>>>,
+    job_lock: Arc<Mutex<()>>,
 }
 
 impl Default for DgwMcpServer {
@@ -257,6 +344,7 @@ impl DgwMcpServer {
         Self {
             tool_router: Self::tool_router(),
             active_project: Arc::new(RwLock::new(None)),
+            job_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -516,6 +604,168 @@ impl DgwMcpServer {
     }
 
     #[tool(
+        description = "Start a persistent background preview for Mutation Generator Randomizer mode. Selection may be explicit alleles, a one-based interval, an exact gene, or the whole track. Poll the returned job with get_job; no track allele changes until apply_mutation_generator_preview."
+    )]
+    async fn start_mutation_generator_preview(
+        &self,
+        Parameters(request): Parameters<StartMutationGeneratorPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(error) = validate_mutation_generator_request(&request) {
+            return Ok(tool_error(error));
+        }
+        let path = match self.resolve_project_path(request.project_path.clone()) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let display_path = path.display().to_string();
+        let worker_path = path.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let project = Project::open(&path).map_err(|error| error.to_string())?;
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            if track.read_only {
+                return Err(String::from(
+                    "the source genome track is read-only; duplicate it before making changes",
+                ));
+            }
+            if track.head_state_id != request.expected_head_state_id {
+                return Err("the selected track head changed; inspect the track and retry".into());
+            }
+            let selection =
+                mutation_selection_from_request(&project, &request.track_id, request.selection)?;
+            let randomizer = RandomizerRequest {
+                selected_variants: Vec::new(),
+                amount: request.amount,
+                seed: request.seed,
+                substitution_pattern: substitution_pattern(request.substitution_pattern),
+                transition_probability: request.transition_probability.unwrap_or(67),
+            };
+            let max_positions = request
+                .max_positions
+                .unwrap_or(MAX_RANDOMIZER_POSITIONS as u32);
+            let now = chrono::Utc::now();
+            let job = BackgroundJob {
+                id: Uuid::new_v4().to_string(),
+                operation: "mutationGeneratorPreview".into(),
+                device_id: "org.dgw.builtin.mutation-generator".into(),
+                track_id: request.track_id,
+                status: BackgroundJobStatus::Queued,
+                progress: 0,
+                stage: "queued".into(),
+                message: "Waiting for the MCP background compute slot".into(),
+                worker_threads: 1,
+                request: json!({
+                    "request": randomizer,
+                    "selection": selection,
+                    "selectionLimit": max_positions,
+                    "sourceStateId": request.expected_head_state_id,
+                    "host": "mcp"
+                }),
+                result: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            };
+            project
+                .save_background_job(&job)
+                .map_err(|error| error.to_string())?;
+            Ok(job)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let job = match outcome {
+            Ok(job) => job,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let job_id = job.id.clone();
+        let job_lock = Arc::clone(&self.job_lock);
+        tokio::task::spawn_blocking(move || {
+            let _guard = job_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = execute_mutation_generator_job(&worker_path, &job_id);
+        });
+        structured(MutationGeneratorJobResult {
+            project_path: display_path,
+            job,
+        })
+    }
+
+    #[tool(
+        description = "Apply a completed Mutation Generator preview job as one compact reversible mutation layer. A no-op preview returns applied=false. Stale or cross-track previews are rejected."
+    )]
+    async fn apply_mutation_generator_preview(
+        &self,
+        Parameters(request): Parameters<ApplyMutationGeneratorPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty()
+            || request.expected_head_state_id.trim().is_empty()
+            || request.job_id.trim().is_empty()
+        {
+            return Ok(tool_error(
+                "track_id, expected_head_state_id, and job_id must not be empty",
+            ));
+        }
+        self.run_project(request.project_path, move |project, project_path| {
+            let job = project
+                .background_job(&request.job_id)
+                .map_err(|error| error.to_string())?;
+            if job.operation != "mutationGeneratorPreview" {
+                return Err("job is not a Mutation Generator preview".into());
+            }
+            if job.track_id != request.track_id {
+                return Err("preview job belongs to a different track".into());
+            }
+            let source_state_id = job
+                .request
+                .get("sourceStateId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "preview job has no source state".to_owned())?;
+            if source_state_id != request.expected_head_state_id {
+                return Err("expected_head_state_id does not match the preview job".into());
+            }
+            if job.status != BackgroundJobStatus::Completed {
+                return Err(format!(
+                    "preview job is {:?}; wait for completion before applying it",
+                    job.status
+                ));
+            }
+            let preview: RandomizerPreviewResult = serde_json::from_value(
+                job.result
+                    .clone()
+                    .ok_or_else(|| "completed preview job has no result".to_owned())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let state = match preview.compound_layer_id.as_deref() {
+                Some(layer_id) => Some(
+                    project
+                        .apply_compound_mutation_layer(&request.track_id, layer_id)
+                        .map_err(|error| error.to_string())?,
+                ),
+                None => None,
+            };
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            let active_mutation_count = project
+                .active_track_mutations(&request.track_id)
+                .map_err(|error| error.to_string())?
+                .len();
+            Ok(AppliedMutationGeneratorResult {
+                project_path,
+                job_id: request.job_id,
+                applied: state.is_some(),
+                preview,
+                state,
+                track,
+                active_mutation_count,
+            })
+        })
+        .await
+    }
+
+    #[tool(
         description = "List contigs represented in the imported VCF, with variant counts and one-based coordinate bounds. Use this before requesting bounded variant pages."
     )]
     async fn list_variant_contigs(
@@ -646,7 +896,7 @@ impl ServerHandler for DgwMcpServer {
                 ),
             },
             instructions: Some(
-                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Manual allele changes require an editable track, an exact source allele, an explicit track-head precondition, and a fresh preview identifier."
+                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator uses start_mutation_generator_preview, get_job until completed, then apply_mutation_generator_preview."
                     .into(),
             ),
             ..Default::default()
@@ -804,6 +1054,250 @@ fn edit_keys(edit: &EditKind) -> Vec<VariantKey> {
     }
 }
 
+fn validate_mutation_generator_request(
+    request: &StartMutationGeneratorPreviewRequest,
+) -> Result<(), String> {
+    if request.track_id.trim().is_empty() || request.expected_head_state_id.trim().is_empty() {
+        return Err("track_id and expected_head_state_id must not be empty".into());
+    }
+    if request.amount > 100 {
+        return Err("amount must be between 0 and 100".into());
+    }
+    if request
+        .transition_probability
+        .is_some_and(|value| value > 100)
+    {
+        return Err("transition_probability must be between 0 and 100".into());
+    }
+    if request
+        .max_positions
+        .is_some_and(|value| value == 0 || value as usize > MAX_RANDOMIZER_POSITIONS)
+    {
+        return Err(format!(
+            "max_positions must be between 1 and {MAX_RANDOMIZER_POSITIONS}"
+        ));
+    }
+    Ok(())
+}
+
+fn substitution_pattern(pattern: MutationSubstitutionPattern) -> SubstitutionPattern {
+    match pattern {
+        MutationSubstitutionPattern::Uniform => SubstitutionPattern::Uniform,
+        MutationSubstitutionPattern::TransitionOnly => SubstitutionPattern::TransitionOnly,
+        MutationSubstitutionPattern::TransversionOnly => SubstitutionPattern::TransversionOnly,
+        MutationSubstitutionPattern::TiTvMix => SubstitutionPattern::TiTvMix,
+    }
+}
+
+fn variant_key_from_input(project: &Project, input: VariantKeyInput) -> Result<VariantKey, String> {
+    let assembly = project.manifest().assembly.clone();
+    if input
+        .assembly
+        .as_deref()
+        .is_some_and(|provided| provided != assembly)
+    {
+        return Err(format!(
+            "variant assembly does not match project assembly {assembly}"
+        ));
+    }
+    if input.position == 0
+        || input.contig.trim().is_empty()
+        || input.reference.trim().is_empty()
+        || input.alternate.trim().is_empty()
+    {
+        return Err("selection variants require contig, one-based position, REF, and ALT".into());
+    }
+    Ok(VariantKey {
+        assembly,
+        contig: input.contig,
+        position: input.position,
+        reference: input.reference.to_ascii_uppercase(),
+        alternate: input.alternate.to_ascii_uppercase(),
+    })
+}
+
+fn mutation_selection_from_request(
+    project: &Project,
+    track_id: &str,
+    selection: MutationSelection,
+) -> Result<VariantSelection, String> {
+    let map_keys = |values: Vec<VariantKeyInput>| {
+        values
+            .into_iter()
+            .map(|value| variant_key_from_input(project, value))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    match selection {
+        MutationSelection::Explicit { variants } => {
+            if variants.is_empty() {
+                return Err("explicit selection must contain at least one variant".into());
+            }
+            Ok(VariantSelection::Explicit {
+                track_id: track_id.into(),
+                variants: map_keys(variants)?,
+            })
+        }
+        MutationSelection::Interval {
+            contig,
+            start,
+            end,
+            exclusions,
+        } => {
+            if contig.trim().is_empty() || start == 0 || end < start {
+                return Err("interval selection requires a valid one-based inclusive range".into());
+            }
+            Ok(VariantSelection::Interval {
+                track_id: track_id.into(),
+                contig,
+                start,
+                end,
+                exclusions: map_keys(exclusions)?,
+            })
+        }
+        MutationSelection::Gene { query, exclusions } => {
+            if query.trim().is_empty() {
+                return Err("gene query must not be empty".into());
+            }
+            let exact: Vec<_> = project
+                .search_genes(&query, 100)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|hit| {
+                    hit.locus.symbol.eq_ignore_ascii_case(query.trim())
+                        || hit.locus.gene_id.eq_ignore_ascii_case(query.trim())
+                })
+                .collect();
+            if exact.is_empty() {
+                return Err(format!(
+                    "no exact gene symbol or stable identifier matched {query}"
+                ));
+            }
+            if exact.len() > 1 {
+                return Err(format!(
+                    "gene query {query} is ambiguous; use a stable gene identifier"
+                ));
+            }
+            let gene = &exact[0].locus;
+            Ok(VariantSelection::Interval {
+                track_id: track_id.into(),
+                contig: gene.contig.clone(),
+                start: gene.start,
+                end: gene.end,
+                exclusions: map_keys(exclusions)?,
+            })
+        }
+        MutationSelection::WholeTrack { exclusions } => Ok(VariantSelection::AllTrack {
+            track_id: track_id.into(),
+            exclusions: map_keys(exclusions)?,
+        }),
+    }
+}
+
+fn update_persistent_job(
+    project: &Project,
+    job: &mut BackgroundJob,
+    status: BackgroundJobStatus,
+    progress: u8,
+    stage: &str,
+    message: impl Into<String>,
+) -> Result<(), String> {
+    job.status = status;
+    job.progress = progress.min(100);
+    job.stage = stage.into();
+    job.message = message.into();
+    job.updated_at = chrono::Utc::now();
+    project
+        .save_background_job(job)
+        .map_err(|error| error.to_string())?;
+    project
+        .persist_terminal_device_run(job)
+        .map_err(|error| error.to_string())
+}
+
+fn execute_mutation_generator_job(project_path: &PathBuf, job_id: &str) -> Result<(), String> {
+    let project = Project::open(project_path).map_err(|error| error.to_string())?;
+    let mut job = project
+        .background_job(job_id)
+        .map_err(|error| error.to_string())?;
+    update_persistent_job(
+        &project,
+        &mut job,
+        BackgroundJobStatus::Running,
+        10,
+        "selection",
+        "Resolving the selected variants",
+    )?;
+    let outcome = (|| -> Result<RandomizerPreviewResult, String> {
+        let request: RandomizerRequest = serde_json::from_value(
+            job.request
+                .get("request")
+                .cloned()
+                .ok_or_else(|| "preview job has no Randomizer request".to_owned())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let selection: VariantSelection = serde_json::from_value(
+            job.request
+                .get("selection")
+                .cloned()
+                .ok_or_else(|| "preview job has no variant selection".to_owned())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let source_state_id = job
+            .request
+            .get("sourceStateId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "preview job has no source state".to_owned())?;
+        let selection_limit = job
+            .request
+            .get("selectionLimit")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok());
+        update_persistent_job(
+            &project,
+            &mut job,
+            BackgroundJobStatus::Running,
+            70,
+            "planning",
+            "Planning and staging the mutation layer",
+        )?;
+        project
+            .prepare_randomizer_preview(
+                &job.track_id,
+                &source_state_id,
+                request,
+                Some(&selection),
+                selection_limit,
+                true,
+            )
+            .map_err(|error| error.to_string())
+    })();
+    match outcome {
+        Ok(preview) => {
+            job.result = Some(serde_json::to_value(preview).map_err(|error| error.to_string())?);
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Completed,
+                100,
+                "completed",
+                "Mutation Generator preview completed",
+            )
+        }
+        Err(error) => {
+            job.error = Some(error.clone());
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+    }
+}
+
 impl From<BackgroundJob> for JobSummary {
     fn from(job: BackgroundJob) -> Self {
         Self {
@@ -838,6 +1332,7 @@ mod tests {
             names,
             vec![
                 "apply_allele_edit",
+                "apply_mutation_generator_preview",
                 "duplicate_track",
                 "get_job",
                 "list_jobs",
@@ -850,6 +1345,7 @@ mod tests {
                 "rename_track",
                 "search_genes",
                 "select_track",
+                "start_mutation_generator_preview",
             ]
         );
     }

@@ -1,6 +1,10 @@
 use crate::error::{DgwError, Result};
 use crate::gene::GeneSearchHit;
 use crate::model::*;
+use crate::randomizer::{
+    compact_randomizer_preview, plan_randomizer, RandomizerPreviewResult, RandomizerRequest,
+    MAX_RANDOMIZER_POSITIONS,
+};
 use crate::state::{
     effective_variants, materialize_haplotype, materialize_haplotype_masking_unphased,
     validate_edit_shape, validate_no_overlap,
@@ -1139,6 +1143,118 @@ impl Project {
         Ok(jobs)
     }
 
+    /// Preserve the immutable scientific record for a terminal background
+    /// job. Hosts may manage execution differently, but provenance is shared.
+    pub fn persist_terminal_device_run(&self, job: &BackgroundJob) -> Result<()> {
+        let status = match job.status {
+            BackgroundJobStatus::Completed => DeviceRunStatus::Completed,
+            BackgroundJobStatus::Failed => DeviceRunStatus::Failed,
+            BackgroundJobStatus::Cancelled => DeviceRunStatus::Cancelled,
+            BackgroundJobStatus::Queued | BackgroundJobStatus::Running => return Ok(()),
+        };
+        if self.device_run(&job.id).is_ok() {
+            return Ok(());
+        }
+        let input_state_id = job
+            .request
+            .get("sourceStateId")
+            .or_else(|| job.request.get("stateId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                self.track(&job.track_id)
+                    .map(|track| track.head_state_id)
+                    .unwrap_or_else(|_| self.manifest.root_state_id.clone())
+            });
+        let selection = job
+            .request
+            .get("selection")
+            .cloned()
+            .filter(|value| !value.is_null())
+            .or_else(|| {
+                job.request
+                    .pointer("/optimizer/selectedVariants")
+                    .cloned()
+                    .map(|variants| serde_json::json!({"selectedVariants": variants}))
+            })
+            .unwrap_or_else(|| serde_json::json!({"scope": "captured track state"}));
+        let manifest = crate::device::built_in_device_manifest(&job.device_id);
+        let device_version = manifest
+            .as_ref()
+            .map(|manifest| manifest.version.clone())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+        let input_fingerprint = job
+            .request
+            .get("profileInputFingerprint")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or(self.device_run_input_fingerprint(
+                &job.device_id,
+                &device_version,
+                &job.track_id,
+                &input_state_id,
+                &selection,
+                &job.request,
+            )?);
+        let result_summary = job.result.clone().unwrap_or_else(|| {
+            serde_json::json!({
+                "stage": job.stage,
+                "message": job.message,
+                "progress": job.progress,
+            })
+        });
+        let compound_layer_id = result_summary
+            .get("compoundLayerId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let output_edit_ids = result_summary
+            .get("generatedEditIds")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let limitation = result_summary
+            .get("limitation")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                manifest
+                    .as_ref()
+                    .map(|manifest| manifest.scientific_limitations.join(" "))
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                "This record preserves the declared device inputs and terminal result; interpretation remains device-specific."
+                    .into()
+            });
+        self.save_device_run(&DeviceRunRecord {
+            id: job.id.clone(),
+            device_id: job.device_id.clone(),
+            device_version,
+            operation: job.operation.clone(),
+            track_id: job.track_id.clone(),
+            input_state_id,
+            input_fingerprint,
+            selection,
+            parameters: job.request.clone(),
+            resource_bundle_fingerprint: self.manifest.resource_bundle_fingerprint.clone(),
+            resource_context: self.device_run_resource_context(),
+            result_summary,
+            output_edit_ids,
+            compound_layer_id,
+            status,
+            error: job.error.clone(),
+            limitation,
+            started_at: job.created_at,
+            completed_at: job.updated_at,
+        })
+    }
+
     /// Insert one terminal device-run record. Device runs are deliberately
     /// immutable: reusing an id is an error rather than an upsert.
     pub fn save_device_run(&self, run: &DeviceRunRecord) -> Result<()> {
@@ -1503,6 +1619,7 @@ impl Project {
     ) -> Result<GenomeState> {
         let mut layer = self.compound_mutation_layer(layer_id)?;
         let mut stored = self.stored_track(track_id)?;
+        let original_track_payload = serde_json::to_string(&stored)?;
         if stored.track.read_only {
             return Err(DgwError::Project(
                 "the source genome track is read-only; duplicate it before making changes".into(),
@@ -1582,11 +1699,22 @@ impl Project {
             "INSERT INTO edits(id, state_id, payload) VALUES (?1, ?2, ?3)",
             params![operation.id, state.id, serde_json::to_string(&operation)?],
         )?;
-        transaction.execute(
-            "UPDATE compound_mutation_layers SET applied_edit_id = ?1, payload = ?2 WHERE id = ?3",
+        let updated_layer = transaction.execute(
+            "UPDATE compound_mutation_layers SET applied_edit_id = ?1, payload = ?2
+             WHERE id = ?3 AND applied_edit_id IS NULL",
             params![operation_id, serde_json::to_string(&layer)?, layer.id],
         )?;
-        update_stored_track(&transaction, &stored)?;
+        if updated_layer == 0 {
+            return Err(DgwError::Project(
+                "this compound mutation layer was applied by another operation".into(),
+            ));
+        }
+        update_stored_track_if_unchanged(
+            &transaction,
+            &stored,
+            &original_track_payload,
+            "preview the bulk operation again",
+        )?;
         if is_active {
             transaction.execute(
                 "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
@@ -2429,6 +2557,81 @@ impl Project {
             variants,
             truncated,
         })
+    }
+
+    /// Resolve, plan, and optionally stage a Mutation Generator preview using
+    /// one shared contract for desktop and agent hosts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_randomizer_preview(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        mut request: RandomizerRequest,
+        selection: Option<&VariantSelection>,
+        selection_limit: Option<u32>,
+        stage_compound_layer: bool,
+    ) -> Result<RandomizerPreviewResult> {
+        let track = self.track(track_id)?;
+        if track.read_only {
+            return Err(DgwError::Project(
+                "the source genome track is read-only; duplicate it before making changes".into(),
+            ));
+        }
+        if track.head_state_id != expected_head_state_id {
+            return Err(DgwError::Project(
+                "the selected track changed while the Mutation Generator preview was being prepared"
+                    .into(),
+            ));
+        }
+        if let Some(selection) = selection {
+            let limit = selection_limit
+                .unwrap_or(MAX_RANDOMIZER_POSITIONS as u32)
+                .clamp(1, MAX_RANDOMIZER_POSITIONS as u32);
+            let resolution = self.resolve_selection(selection, limit)?;
+            if resolution.track_id != track_id {
+                return Err(DgwError::Project(
+                    "Mutation Generator selection belongs to a different track".into(),
+                ));
+            }
+            if resolution.truncated {
+                return Err(DgwError::InvalidEdit(format!(
+                    "{} alleles are selected; Mutation Generator accepts at most {} positions per run",
+                    resolution.total, limit
+                )));
+            }
+            request.selected_variants = resolution.variants;
+        }
+        let current =
+            self.effective_variants_for_track_at_loci(track_id, &request.selected_variants)?;
+        let plan = plan_randomizer(&current, &request)?;
+        let mut preview = compact_randomizer_preview(&plan);
+        if stage_compound_layer && !plan.proposals.is_empty() {
+            let note = format!(
+                "Mutation Generator · Randomizer · {} · seed {} · amount {}% · {} positions",
+                request.substitution_pattern.label(),
+                request.seed,
+                request.amount,
+                plan.randomized_positions
+            );
+            let changes: Vec<_> = plan
+                .proposals
+                .iter()
+                .map(|proposal| CompoundMutationChange {
+                    haplotype: proposal.haplotype,
+                    edit: proposal.edit.clone(),
+                })
+                .collect();
+            let layer = self.stage_compound_mutation_layer(
+                track_id,
+                expected_head_state_id,
+                "org.dgw.builtin.mutation-generator",
+                plan.randomized_positions,
+                &changes,
+                Some(note),
+            )?;
+            preview.compound_layer_id = Some(layer.id);
+        }
+        Ok(preview)
     }
 
     /// Resolve one transport target while keeping the desktop payload bounded.
@@ -4893,6 +5096,59 @@ mod tests {
             .effective_variants_for_track_at_loci(&working.id, &[roots[0].key.clone()])
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn shared_randomizer_preview_stages_without_moving_the_track_head() {
+        let (_temporary, project) = test_project();
+        let working = project.active_track().unwrap();
+        insert_root_variants(
+            &project,
+            &[observed_variant("1", 100), observed_variant("2", 200)],
+        );
+        let preview = project
+            .prepare_randomizer_preview(
+                &working.id,
+                &working.head_state_id,
+                RandomizerRequest {
+                    selected_variants: Vec::new(),
+                    amount: 100,
+                    seed: 42,
+                    substitution_pattern: crate::randomizer::SubstitutionPattern::Uniform,
+                    transition_probability: 67,
+                },
+                Some(&VariantSelection::AllTrack {
+                    track_id: working.id.clone(),
+                    exclusions: Vec::new(),
+                }),
+                Some(10),
+                true,
+            )
+            .unwrap();
+
+        assert_eq!(preview.selected_positions, 2);
+        assert_eq!(preview.randomized_positions, 2);
+        assert!(preview.compound_layer_id.is_some());
+        assert_eq!(
+            project.track(&working.id).unwrap().head_state_id,
+            working.head_state_id
+        );
+        assert!(project.edits_for_track(&working.id).unwrap().is_empty());
+
+        let state = project
+            .apply_compound_mutation_layer(
+                &working.id,
+                preview.compound_layer_id.as_deref().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            state.parent_id.as_deref(),
+            Some(working.head_state_id.as_str())
+        );
+        assert_eq!(
+            project.active_track_mutations(&working.id).unwrap().len(),
+            2
+        );
     }
 
     fn create_allele(position: u64, alternate: &str) -> EditKind {

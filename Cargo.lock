@@ -612,11 +612,13 @@ dependencies = [
 name = "dgw-mcp"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dgw-core",
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

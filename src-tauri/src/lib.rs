@@ -9,10 +9,11 @@ use dgw_core::{
     EvaluationService, EvidenceResult, EvidenceStatus, FocusContext, FocusFastaExport, FocusView,
     GeneSearchHit, GenomeState, GenomeTrack, Haplotype, OptimizerAlleleEvidenceInput,
     OptimizerDirection, OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest,
-    ProcessProgress, Project, ProjectSnapshot, RandomizerPlan, RandomizerRequest, ResourceBundle,
-    SaturationAlleleInput, SelectionResolution, TrackMorphRequest, TransportTargetRequest,
-    TransportTargetResult, VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage,
-    VariantSelection, VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
+    ProcessProgress, Project, ProjectSnapshot, RandomizerPlan, RandomizerPreviewResult,
+    RandomizerRequest, ResourceBundle, SaturationAlleleInput, SelectionResolution,
+    TrackMorphRequest, TransportTargetRequest, TransportTargetResult, VariantContigSummary,
+    VariantDensity, VariantNavigationBin, VariantPage, VariantSelection, VcfInspection,
+    WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -263,36 +264,7 @@ struct CompoundLayerApplyResult {
     snapshot: ProjectSnapshot,
 }
 
-const RANDOMIZER_PREVIEW_CHANGE_LIMIT: usize = 200;
-const RANDOMIZER_BULK_PREVIEW_THRESHOLD: usize = 1_000;
 const RANDOMIZER_INTERACTIVE_MATERIALIZATION_LIMIT: u32 = 1_000;
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RandomizerPreviewChange {
-    contig: String,
-    position: u64,
-    from: String,
-    to: String,
-    substitution_class: &'static str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RandomizerPreviewResult {
-    selected_positions: u32,
-    randomized_positions: u32,
-    transition_positions: u32,
-    transversion_positions: u32,
-    generated_edits: u32,
-    excluded_positions: usize,
-    change_count: usize,
-    changes: Vec<RandomizerPreviewChange>,
-    no_op_reason: Option<String>,
-    limitation: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    compound_layer_id: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -310,63 +282,6 @@ struct TrackMorphPreviewResult {
     limitation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     compound_layer_id: Option<String>,
-}
-
-fn substitution_class(reference: &str, alternate: &str) -> &'static str {
-    match (reference.as_bytes(), alternate.as_bytes()) {
-        ([b'A'], [b'G']) | ([b'G'], [b'A']) | ([b'C'], [b'T']) | ([b'T'], [b'C']) => "transition",
-        _ => "transversion",
-    }
-}
-
-fn compact_randomizer_preview(plan: &RandomizerPlan) -> RandomizerPreviewResult {
-    let change_count = plan.randomized_positions as usize;
-    let changes = if change_count > RANDOMIZER_BULK_PREVIEW_THRESHOLD {
-        Vec::new()
-    } else {
-        let mut unique_changes = BTreeMap::new();
-        for proposal in &plan.proposals {
-            let source = &proposal.source_variant;
-            let replacement = &proposal.replacement_variant;
-            let key = format!(
-                "{}:{}:{}:{}>{}",
-                source.contig,
-                source.position,
-                source.reference,
-                source.alternate,
-                replacement.alternate
-            );
-            unique_changes
-                .entry(key)
-                .or_insert_with(|| RandomizerPreviewChange {
-                    contig: source.contig.clone(),
-                    position: source.position,
-                    from: source.alternate.clone(),
-                    to: replacement.alternate.clone(),
-                    substitution_class: substitution_class(
-                        &source.reference,
-                        &replacement.alternate,
-                    ),
-                });
-        }
-        unique_changes
-            .into_values()
-            .take(RANDOMIZER_PREVIEW_CHANGE_LIMIT)
-            .collect()
-    };
-    RandomizerPreviewResult {
-        selected_positions: plan.selected_positions,
-        randomized_positions: plan.randomized_positions,
-        transition_positions: plan.transition_positions,
-        transversion_positions: plan.transversion_positions,
-        generated_edits: plan.generated_edits,
-        excluded_positions: plan.exclusions.len(),
-        change_count,
-        changes,
-        no_op_reason: plan.no_op_reason.clone(),
-        limitation: plan.limitation.clone(),
-        compound_layer_id: None,
-    }
 }
 
 fn resolve_randomizer_request(
@@ -533,123 +448,7 @@ fn update_job(
 }
 
 fn persist_terminal_device_run(project: &Project, job: &BackgroundJob) -> Result<(), String> {
-    let status = match job.status {
-        BackgroundJobStatus::Completed => DeviceRunStatus::Completed,
-        BackgroundJobStatus::Failed => DeviceRunStatus::Failed,
-        BackgroundJobStatus::Cancelled => DeviceRunStatus::Cancelled,
-        BackgroundJobStatus::Queued | BackgroundJobStatus::Running => return Ok(()),
-    };
-    if project.device_run(&job.id).is_ok() {
-        return Ok(());
-    }
-
-    let input_state_id = job
-        .request
-        .get("sourceStateId")
-        .or_else(|| job.request.get("stateId"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            project
-                .track(&job.track_id)
-                .map(|track| track.head_state_id)
-                .unwrap_or_else(|_| project.manifest().root_state_id.clone())
-        });
-    let selection = job
-        .request
-        .get("selection")
-        .cloned()
-        .filter(|value| !value.is_null())
-        .or_else(|| {
-            job.request
-                .pointer("/optimizer/selectedVariants")
-                .cloned()
-                .map(|variants| serde_json::json!({"selectedVariants": variants}))
-        })
-        .unwrap_or_else(|| serde_json::json!({"scope": "captured track state"}));
-    let manifest = built_in_device_manifest(&job.device_id);
-    let device_version = manifest
-        .as_ref()
-        .map(|manifest| manifest.version.clone())
-        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
-    let input_fingerprint = job
-        .request
-        .get("profileInputFingerprint")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or(
-            project
-                .device_run_input_fingerprint(
-                    &job.device_id,
-                    &device_version,
-                    &job.track_id,
-                    &input_state_id,
-                    &selection,
-                    &job.request,
-                )
-                .map_err(error_text)?,
-        );
-    let result_summary = job.result.clone().unwrap_or_else(|| {
-        serde_json::json!({
-            "stage": job.stage,
-            "message": job.message,
-            "progress": job.progress,
-        })
-    });
-    let compound_layer_id = result_summary
-        .get("compoundLayerId")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let output_edit_ids = result_summary
-        .get("generatedEditIds")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let limitation = result_summary
-        .get("limitation")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| {
-            manifest.as_ref().map(|manifest| {
-                manifest
-                    .scientific_limitations
-                    .join(" ")
-            })
-        })
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            "This record preserves the declared device inputs and terminal result; interpretation remains device-specific."
-                .into()
-        });
-    project
-        .save_device_run(&DeviceRunRecord {
-            id: job.id.clone(),
-            device_id: job.device_id.clone(),
-            device_version,
-            operation: job.operation.clone(),
-            track_id: job.track_id.clone(),
-            input_state_id,
-            input_fingerprint,
-            selection,
-            parameters: job.request.clone(),
-            resource_bundle_fingerprint: project.manifest().resource_bundle_fingerprint.clone(),
-            resource_context: project.device_run_resource_context(),
-            result_summary,
-            output_edit_ids,
-            compound_layer_id,
-            status,
-            error: job.error.clone(),
-            limitation,
-            started_at: job.created_at,
-            completed_at: job.updated_at,
-        })
-        .map_err(error_text)
+    project.persist_terminal_device_run(job).map_err(error_text)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1445,10 +1244,16 @@ async fn preview_randomizer(
 ) -> Result<RandomizerPreviewResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let project = Project::open(project_path).map_err(error_text)?;
-        let (request, current) =
-            resolve_randomizer_request(&project, &track_id, request, selection, selection_limit)?;
-        plan_randomizer(&current, &request)
-            .map(|plan| compact_randomizer_preview(&plan))
+        let source_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
+        project
+            .prepare_randomizer_preview(
+                &track_id,
+                &source_state_id,
+                request,
+                selection.as_ref(),
+                selection_limit,
+                false,
+            )
             .map_err(error_text)
     })
     .await
@@ -1538,14 +1343,6 @@ fn start_randomizer_preview_job(
         }
 
         let outcome = (|| -> Result<RandomizerPreviewResult, String> {
-            let source_state_id = project.track(&track_id).map_err(error_text)?.head_state_id;
-            let (request, current) = resolve_randomizer_request(
-                &project,
-                &track_id,
-                request,
-                selection,
-                selection_limit,
-            )?;
             if job_was_cancelled(&cancelled_jobs, &job.id) {
                 return Err("__cancelled__".into());
             }
@@ -1555,50 +1352,18 @@ fn start_randomizer_preview_job(
                 BackgroundJobStatus::Running,
                 70,
                 "planning",
-                format!("Planning changes across {} active variants", current.len()),
+                "Planning changes across the selected variants",
             )?;
-            let plan = plan_randomizer(&current, &request).map_err(error_text)?;
-            let mut preview = compact_randomizer_preview(&plan);
-            if !plan.proposals.is_empty() {
-                update_job(
-                    &project,
-                    &mut job,
-                    BackgroundJobStatus::Running,
-                    85,
-                    "staging",
-                    format!(
-                        "Storing {} changes as one reversible mutation layer",
-                        plan.generated_edits
-                    ),
-                )?;
-                let note = format!(
-                    "Mutation Generator · Randomizer · {} · seed {} · amount {}% · {} positions",
-                    request.substitution_pattern.label(),
-                    request.seed,
-                    request.amount,
-                    plan.randomized_positions
-                );
-                let changes: Vec<_> = plan
-                    .proposals
-                    .iter()
-                    .map(|proposal| CompoundMutationChange {
-                        haplotype: proposal.haplotype,
-                        edit: proposal.edit.clone(),
-                    })
-                    .collect();
-                let layer = project
-                    .stage_compound_mutation_layer(
-                        &track_id,
-                        &source_state_id,
-                        "org.dgw.builtin.mutation-generator",
-                        plan.randomized_positions,
-                        &changes,
-                        Some(note),
-                    )
-                    .map_err(error_text)?;
-                preview.compound_layer_id = Some(layer.id);
-            }
-            Ok(preview)
+            project
+                .prepare_randomizer_preview(
+                    &track_id,
+                    &source_state_id,
+                    request,
+                    selection.as_ref(),
+                    selection_limit,
+                    true,
+                )
+                .map_err(error_text)
         })();
 
         match outcome {
@@ -3073,7 +2838,7 @@ mod tests {
                 }
             })
             .collect();
-        let preview = compact_randomizer_preview(&RandomizerPlan {
+        let preview = dgw_core::compact_randomizer_preview(&RandomizerPlan {
             request: RandomizerRequest {
                 selected_variants: Vec::new(),
                 amount: 100,
@@ -3093,7 +2858,10 @@ mod tests {
         });
 
         assert_eq!(preview.change_count, 250);
-        assert_eq!(preview.changes.len(), RANDOMIZER_PREVIEW_CHANGE_LIMIT);
+        assert_eq!(
+            preview.changes.len(),
+            dgw_core::RANDOMIZER_PREVIEW_CHANGE_LIMIT
+        );
         assert_eq!(preview.randomized_positions, 250);
     }
 }

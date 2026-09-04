@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const RANDOMIZER_LIMITATION: &str = "Randomization changes selected SNV alleles without predicting whether the result is biologically plausible, viable, or beneficial. Each generated allele must be evaluated independently.";
 pub const MAX_RANDOMIZER_POSITIONS: usize = 100_000;
+pub const RANDOMIZER_PREVIEW_CHANGE_LIMIT: usize = 200;
+pub const RANDOMIZER_BULK_PREVIEW_THRESHOLD: usize = 1_000;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +75,91 @@ pub struct RandomizerPlan {
     pub generated_edits: u32,
     pub no_op_reason: Option<String>,
     pub limitation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RandomizerPreviewChange {
+    pub contig: String,
+    pub position: u64,
+    pub from: String,
+    pub to: String,
+    pub substitution_class: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RandomizerPreviewResult {
+    pub selected_positions: u32,
+    pub randomized_positions: u32,
+    pub transition_positions: u32,
+    pub transversion_positions: u32,
+    pub generated_edits: u32,
+    pub excluded_positions: usize,
+    pub change_count: usize,
+    pub changes: Vec<RandomizerPreviewChange>,
+    pub no_op_reason: Option<String>,
+    pub limitation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compound_layer_id: Option<String>,
+}
+
+pub fn compact_randomizer_preview(plan: &RandomizerPlan) -> RandomizerPreviewResult {
+    let change_count = plan.randomized_positions as usize;
+    let changes = if change_count > RANDOMIZER_BULK_PREVIEW_THRESHOLD {
+        Vec::new()
+    } else {
+        let mut unique_changes = BTreeMap::new();
+        for proposal in &plan.proposals {
+            let source = &proposal.source_variant;
+            let replacement = &proposal.replacement_variant;
+            let key = format!(
+                "{}:{}:{}:{}>{}",
+                source.contig,
+                source.position,
+                source.reference,
+                source.alternate,
+                replacement.alternate
+            );
+            unique_changes
+                .entry(key)
+                .or_insert_with(|| RandomizerPreviewChange {
+                    contig: source.contig.clone(),
+                    position: source.position,
+                    from: source.alternate.clone(),
+                    to: replacement.alternate.clone(),
+                    substitution_class: substitution_class(
+                        &source.reference,
+                        &replacement.alternate,
+                    )
+                    .into(),
+                });
+        }
+        unique_changes
+            .into_values()
+            .take(RANDOMIZER_PREVIEW_CHANGE_LIMIT)
+            .collect()
+    };
+    RandomizerPreviewResult {
+        selected_positions: plan.selected_positions,
+        randomized_positions: plan.randomized_positions,
+        transition_positions: plan.transition_positions,
+        transversion_positions: plan.transversion_positions,
+        generated_edits: plan.generated_edits,
+        excluded_positions: plan.exclusions.len(),
+        change_count,
+        changes,
+        no_op_reason: plan.no_op_reason.clone(),
+        limitation: plan.limitation.clone(),
+        compound_layer_id: None,
+    }
+}
+
+fn substitution_class(reference: &str, alternate: &str) -> &'static str {
+    match (reference.as_bytes(), alternate.as_bytes()) {
+        ([b'A'], [b'G']) | ([b'G'], [b'A']) | ([b'C'], [b'T']) | ([b'T'], [b'C']) => "transition",
+        _ => "transversion",
+    }
 }
 
 /// Build a deterministic, non-mutating plan for selected effective SNV alleles.
