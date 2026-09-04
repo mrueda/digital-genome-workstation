@@ -34,7 +34,7 @@ DGW v0.1 supports b37/hs37d5 and GRCh38/hg38 SNVs and sequence-resolved indels w
 - Assembly-matched Ensembl gene search by symbol or stable ID, with complete-gene focus, an interval/strand overlay, imported-allele counts, and symbolic gene-wide selection for editing and analysis devices.
 - Clean BGZF/CSI VCF export plus checksummed provenance and compressed live-evidence sidecars.
 - Tauri 2 + React/TypeScript desktop interface for the complete workflow.
-- An initial read-only local MCP server for agents, backed directly by `dgw-core` rather than interface automation.
+- A local MCP server for agents, backed directly by `dgw-core`, with bounded inspection, track management, and previewed manual allele edits.
 
 ## Prerequisites
 
@@ -77,7 +77,7 @@ Choose any project under **Open an example** on the landing page, or use **File 
 
 ## Agent access (MCP)
 
-DGW includes an initial local, read-only MCP server. It opens existing `.dgw` projects and exposes bounded project, track, variant, gene, and background-job inspection through the same `dgw-core` methods used by the desktop application. It does not automate the interface and cannot currently create edits.
+DGW includes a local MCP server. It opens existing `.dgw` projects and exposes bounded project, track, variant, gene, and background-job inspection through the same `dgw-core` methods used by the desktop application. Agents can select, duplicate, and rename tracks. A manual allele edit requires an exact effective source allele, an editable target track, its current head state, and a separate non-mutating preview before apply. The server does not automate the interface or write SQLite directly.
 
 ```bash
 cargo build --release -p dgw-mcp

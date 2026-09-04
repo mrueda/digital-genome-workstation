@@ -1746,12 +1746,18 @@ impl Project {
     }
 
     pub fn rename_track(&self, track_id: &str, name: impl Into<String>) -> Result<GenomeTrack> {
-        let mut track = self.track(track_id)?;
-        track.name = validated_track_name(name.into())?;
-        track.updated_at = Utc::now();
+        let mut stored = self.stored_track(track_id)?;
+        let original_payload = serde_json::to_string(&stored)?;
+        stored.track.name = validated_track_name(name.into())?;
+        stored.track.updated_at = Utc::now();
         let connection = self.connection()?;
-        update_track(&connection, &track)?;
-        Ok(track)
+        update_stored_track_if_unchanged(
+            &connection,
+            &stored,
+            &original_payload,
+            "reload the tracks and try again",
+        )?;
+        Ok(stored.track)
     }
 
     pub fn delete_track(&self, track_id: &str) -> Result<()> {
@@ -2599,6 +2605,140 @@ impl Project {
         self.apply_edit_to_track_from(stored, haplotype, edit, note, None)
     }
 
+    /// Validate an interactive allele edit without changing the project.
+    /// Set-allele edits are normalized with the project's pinned bcftools and
+    /// reference before their state transition is projected.
+    pub fn preview_allele_edit(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        haplotype: Haplotype,
+        edit: EditKind,
+    ) -> Result<AlleleEditPreview> {
+        let stored = self.stored_track(track_id)?;
+        if stored.track.read_only {
+            return Err(DgwError::Project(
+                "the source genome track is read-only; duplicate it before making changes".into(),
+            ));
+        }
+        if stored.track.head_state_id != expected_head_state_id {
+            return Err(DgwError::Project(format!(
+                "track {} changed after the edit was prepared; preview it again",
+                stored.track.id
+            )));
+        }
+        let edit = match edit {
+            EditKind::SetAllele {
+                key,
+                source_key,
+                unphased_slot,
+            } => EditKind::SetAllele {
+                key: crate::evaluation::normalize_variant(&self.manifest.resource_bundle, &key)?,
+                source_key,
+                unphased_slot,
+            },
+            EditKind::RestoreReference { source_key } => EditKind::RestoreReference { source_key },
+            EditKind::CompoundMutationLayer { .. } => {
+                return Err(DgwError::InvalidEdit(
+                    "manual allele preview does not accept compound mutation layers".into(),
+                ));
+            }
+        };
+        validate_edit_shape(&edit)?;
+        let context = context_for_edit(&edit)?;
+        let effective_bypasses = effective_bypassed_edit_ids(&stored);
+        let effective_before = self.effective_variants_in_context(
+            &stored.track.head_state_id,
+            &effective_bypasses,
+            &context,
+        )?;
+        validate_no_overlap(&effective_before, haplotype, &edit)?;
+        let preview_id = hash_text(&serde_json::to_string(&(
+            &self.manifest.project_id,
+            &stored.track.id,
+            expected_head_state_id,
+            &stored.track.bypassed_edit_ids,
+            haplotype,
+            &edit,
+        ))?);
+        let mut operations =
+            self.expanded_edits_to_state_in_context(expected_head_state_id, &context)?;
+        operations.push(EditOperation {
+            id: preview_id.clone(),
+            parent_state_id: expected_head_state_id.into(),
+            haplotype,
+            edit: edit.clone(),
+            note: None,
+            created_at: Utc::now(),
+        });
+        let effective_after = effective_variants(
+            &self.root_variants_in_context(&context, None, 0)?,
+            &operations,
+            &effective_bypasses,
+        )?;
+        Ok(AlleleEditPreview {
+            id: preview_id,
+            project_id: self.manifest.project_id.clone(),
+            track_id: stored.track.id,
+            track_name: stored.track.name,
+            expected_head_state_id: expected_head_state_id.into(),
+            haplotype,
+            edit,
+            context,
+            effective_before,
+            effective_after,
+        })
+    }
+
+    /// Apply exactly the edit represented by a fresh preview.
+    pub fn apply_previewed_allele_edit(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        preview_id: &str,
+        haplotype: Haplotype,
+        edit: EditKind,
+        note: Option<String>,
+    ) -> Result<(AlleleEditPreview, GenomeState)> {
+        let preview =
+            self.preview_allele_edit(track_id, expected_head_state_id, haplotype, edit)?;
+        if preview.id != preview_id {
+            return Err(DgwError::Project(
+                "the allele edit does not match its preview; preview it again".into(),
+            ));
+        }
+        let stored = self.stored_track(track_id)?;
+        if stored.track.head_state_id != expected_head_state_id {
+            return Err(DgwError::Project(format!(
+                "track {track_id} changed after the edit was previewed; preview it again"
+            )));
+        }
+        let state =
+            self.apply_edit_to_track_from(stored, haplotype, preview.edit.clone(), note, None)?;
+        Ok((preview, state))
+    }
+
+    /// Desktop convenience path: validate, normalize, and apply against an
+    /// explicit track head in one call.
+    pub fn apply_allele_edit_at_head(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        haplotype: Haplotype,
+        edit: EditKind,
+        note: Option<String>,
+    ) -> Result<GenomeState> {
+        let preview =
+            self.preview_allele_edit(track_id, expected_head_state_id, haplotype, edit)?;
+        let stored = self.stored_track(track_id)?;
+        if stored.track.head_state_id != expected_head_state_id {
+            return Err(DgwError::Project(format!(
+                "track {track_id} changed after the edit was prepared; try again"
+            )));
+        }
+        self.apply_edit_to_track_from(stored, haplotype, preview.edit, note, None)
+    }
+
     /// Validate and persist a generated edit batch as one SQLite transaction.
     /// Either every state/edit row is committed, or the track is unchanged.
     pub fn apply_edits_to_track(
@@ -2727,6 +2867,7 @@ impl Project {
         note: Option<String>,
         bypassed_edit_ids: Option<&[String]>,
     ) -> Result<GenomeState> {
+        let original_payload = serde_json::to_string(&stored)?;
         if stored.track.read_only {
             return Err(DgwError::Project(
                 "the source genome track is read-only; duplicate it before making changes".into(),
@@ -2799,7 +2940,12 @@ impl Project {
             "INSERT INTO edits(id, state_id, payload) VALUES (?1, ?2, ?3)",
             params![operation.id, state.id, serde_json::to_string(&operation)?],
         )?;
-        update_stored_track(&transaction, &stored)?;
+        update_stored_track_if_unchanged(
+            &transaction,
+            &stored,
+            &original_payload,
+            "preview it again",
+        )?;
         if is_active {
             transaction.execute(
                 "UPDATE workspace SET payload = ?1 WHERE singleton = 1",
@@ -4043,6 +4189,29 @@ fn update_stored_track(connection: &Connection, stored: &StoredGenomeTrack) -> R
     Ok(())
 }
 
+fn update_stored_track_if_unchanged(
+    connection: &Connection,
+    stored: &StoredGenomeTrack,
+    original_payload: &str,
+    recovery: &str,
+) -> Result<()> {
+    let updated = connection.execute(
+        "UPDATE tracks SET payload = ?2 WHERE id = ?1 AND payload = ?3",
+        params![
+            stored.track.id,
+            serde_json::to_string(stored)?,
+            original_payload
+        ],
+    )?;
+    if updated == 0 {
+        return Err(DgwError::Project(format!(
+            "genome track {} changed during the operation; {recovery}",
+            stored.track.id,
+        )));
+    }
+    Ok(())
+}
+
 fn track_from_connection(connection: &Connection, track_id: &str) -> Result<GenomeTrack> {
     Ok(stored_track_from_connection(connection, track_id)?.track)
 }
@@ -4633,6 +4802,97 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn previewed_allele_edits_are_non_destructive_and_reject_stale_heads() {
+        let (_temporary, project) = test_project();
+        let tracks = project.list_tracks().unwrap();
+        let source = tracks.iter().find(|track| track.read_only).unwrap();
+        let working = tracks.iter().find(|track| !track.read_only).unwrap();
+        let roots = [observed_variant("1", 100), observed_variant("1", 200)];
+        insert_root_variants(&project, &roots);
+        let restore_first = EditKind::RestoreReference {
+            source_key: roots[0].key.clone(),
+        };
+
+        let source_error = project
+            .preview_allele_edit(
+                &source.id,
+                &source.head_state_id,
+                Haplotype::One,
+                restore_first.clone(),
+            )
+            .unwrap_err();
+        assert!(source_error.to_string().contains("read-only"));
+
+        let preview = project
+            .preview_allele_edit(
+                &working.id,
+                &working.head_state_id,
+                Haplotype::One,
+                restore_first.clone(),
+            )
+            .unwrap();
+        assert_eq!(preview.effective_before.len(), 1);
+        assert!(preview.effective_after.is_empty());
+        assert_eq!(project.edits_for_track(&working.id).unwrap().len(), 0);
+        assert_eq!(
+            project.track(&working.id).unwrap().head_state_id,
+            working.head_state_id
+        );
+
+        project
+            .apply_edit_to_track(
+                &working.id,
+                Haplotype::One,
+                EditKind::RestoreReference {
+                    source_key: roots[1].key.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        let stale_error = project
+            .apply_previewed_allele_edit(
+                &working.id,
+                &working.head_state_id,
+                &preview.id,
+                Haplotype::One,
+                restore_first.clone(),
+                None,
+            )
+            .unwrap_err();
+        assert!(stale_error.to_string().contains("preview it again"));
+        assert_eq!(project.edits_for_track(&working.id).unwrap().len(), 1);
+
+        let current = project.track(&working.id).unwrap();
+        let fresh = project
+            .preview_allele_edit(
+                &working.id,
+                &current.head_state_id,
+                Haplotype::One,
+                restore_first.clone(),
+            )
+            .unwrap();
+        let (_, state) = project
+            .apply_previewed_allele_edit(
+                &working.id,
+                &current.head_state_id,
+                &fresh.id,
+                Haplotype::One,
+                restore_first,
+                Some("Restore selected allele".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            state.parent_id.as_deref(),
+            Some(current.head_state_id.as_str())
+        );
+        assert_eq!(project.edits_for_track(&working.id).unwrap().len(), 2);
+        assert!(project
+            .effective_variants_for_track_at_loci(&working.id, &[roots[0].key.clone()])
+            .unwrap()
+            .is_empty());
     }
 
     fn create_allele(position: u64, alternate: &str) -> EditKind {

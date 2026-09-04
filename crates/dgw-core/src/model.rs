@@ -279,6 +279,25 @@ pub struct EffectiveVariant {
     pub source_info: BTreeMap<String, String>,
 }
 
+/// A validated allele edit that has not been persisted yet.
+///
+/// The preview identifier binds the edit to the target track head and its
+/// current bypass state. Callers must present it again when applying the edit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlleleEditPreview {
+    pub id: String,
+    pub project_id: String,
+    pub track_id: String,
+    pub track_name: String,
+    pub expected_head_state_id: String,
+    pub haplotype: Haplotype,
+    pub edit: EditKind,
+    pub context: FocusContext,
+    pub effective_before: Vec<EffectiveVariant>,
+    pub effective_after: Vec<EffectiveVariant>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum VariantOrigin {

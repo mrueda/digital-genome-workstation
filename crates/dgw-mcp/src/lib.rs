@@ -1,5 +1,6 @@
 use dgw_core::{
-    BackgroundJob, BackgroundJobStatus, GeneSearchHit, GenomeTrack, Project, VariantContigSummary,
+    AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind, EffectiveVariant,
+    GeneSearchHit, GenomeState, GenomeTrack, Haplotype, Project, VariantContigSummary, VariantKey,
     VariantPage,
 };
 use rmcp::{
@@ -62,6 +63,79 @@ pub struct JobRequest {
     pub project_path: Option<String>,
     #[schemars(description = "Persistent DGW background-job identifier")]
     pub job_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct TrackRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Exact genome-track identifier returned by list_tracks")]
+    pub track_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct NamedTrackRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Exact genome-track identifier returned by list_tracks")]
+    pub track_id: String,
+    #[schemars(description = "Human-readable track name")]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChromosomeCopy {
+    A,
+    B,
+    Unphased,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AlleleEditAction {
+    SetAlternate,
+    RestoreReference,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct VariantKeyInput {
+    #[schemars(description = "Assembly identifier; omit it to use the project's assembly")]
+    pub assembly: Option<String>,
+    pub contig: String,
+    #[schemars(description = "One-based VCF position")]
+    pub position: u64,
+    pub reference: String,
+    pub alternate: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct AlleleEditRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable target track identifier returned by list_tracks")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Chromosome copy carrying the selected source allele")]
+    pub chromosome_copy: ChromosomeCopy,
+    #[schemars(description = "Exact effective source allele returned by list_variants")]
+    pub source_variant: VariantKeyInput,
+    #[schemars(description = "Original one-based unphased GT slot, when present")]
+    pub unphased_slot: Option<u8>,
+    pub action: AlleleEditAction,
+    #[schemars(description = "Replacement ALT for set_alternate; omit for restore_reference")]
+    pub alternate: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ApplyAlleleEditRequest {
+    #[serde(flatten)]
+    pub edit: AlleleEditRequest,
+    #[schemars(description = "Preview identifier returned by preview_allele_edit")]
+    pub preview_id: String,
+    #[schemars(description = "Optional history note")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +213,31 @@ struct JobSummary {
 struct JobResult {
     project_path: String,
     job: BackgroundJob,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackMutationResult {
+    project_path: String,
+    active_track_id: String,
+    track: GenomeTrack,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AlleleEditPreviewResult {
+    project_path: String,
+    preview: AlleleEditPreview,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppliedAlleleEditResult {
+    project_path: String,
+    preview: AlleleEditPreview,
+    state: GenomeState,
+    track: GenomeTrack,
+    effective_variants: Vec<EffectiveVariant>,
 }
 
 #[derive(Debug, Clone)]
@@ -268,6 +367,151 @@ impl DgwMcpServer {
                 tracks: project.list_tracks().map_err(|error| error.to_string())?,
             })
         })
+        .await
+    }
+
+    #[tool(
+        description = "Select the active genome track. This changes only workspace focus; it does not alter alleles or track history."
+    )]
+    async fn select_track(
+        &self,
+        Parameters(request): Parameters<TrackRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_required("track_id", &request.track_id)?;
+        self.run_project(request.project_path, move |project, project_path| {
+            let track = project
+                .select_track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            Ok(TrackMutationResult {
+                project_path,
+                active_track_id: track.id.clone(),
+                track,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Duplicate a genome track as a new editable track and make the duplicate active. The source track and its history remain unchanged."
+    )]
+    async fn duplicate_track(
+        &self,
+        Parameters(request): Parameters<NamedTrackRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_required("track_id", &request.track_id)?;
+        validate_required("name", &request.name)?;
+        self.run_project(request.project_path, move |project, project_path| {
+            let track = project
+                .duplicate_track(&request.track_id, request.name)
+                .map_err(|error| error.to_string())?;
+            Ok(TrackMutationResult {
+                project_path,
+                active_track_id: track.id.clone(),
+                track,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Rename one genome track. This changes track metadata only and leaves its allele state and history intact."
+    )]
+    async fn rename_track(
+        &self,
+        Parameters(request): Parameters<NamedTrackRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_required("track_id", &request.track_id)?;
+        validate_required("name", &request.name)?;
+        self.run_project(request.project_path, move |project, project_path| {
+            let track = project
+                .rename_track(&request.track_id, request.name)
+                .map_err(|error| error.to_string())?;
+            let active_track_id = project
+                .workspace()
+                .map_err(|error| error.to_string())?
+                .active_track_id;
+            Ok(TrackMutationResult {
+                project_path,
+                active_track_id,
+                track,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Validate and normalize one manual allele change without modifying the project. Use an exact source allele from list_variants, then pass the returned previewId unchanged to apply_allele_edit."
+    )]
+    async fn preview_allele_edit(
+        &self,
+        Parameters(request): Parameters<AlleleEditRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(error) = validate_allele_request(&request) {
+            return Ok(tool_error(error));
+        }
+        self.run_project(
+            request.project_path.clone(),
+            move |project, project_path| {
+                let (haplotype, edit) = allele_edit_from_request(&project, &request)?;
+                let preview = project
+                    .preview_allele_edit(
+                        &request.track_id,
+                        &request.expected_head_state_id,
+                        haplotype,
+                        edit,
+                    )
+                    .map_err(|error| error.to_string())?;
+                Ok(AlleleEditPreviewResult {
+                    project_path,
+                    preview,
+                })
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Apply one previously previewed allele change to its explicit editable track. DGW rejects stale previews, changed payloads, source-track edits, and invalid allele transitions."
+    )]
+    async fn apply_allele_edit(
+        &self,
+        Parameters(request): Parameters<ApplyAlleleEditRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(error) = validate_allele_request(&request.edit) {
+            return Ok(tool_error(error));
+        }
+        if request.preview_id.trim().is_empty() {
+            return Ok(tool_error("preview_id must not be empty"));
+        }
+        self.run_project(
+            request.edit.project_path.clone(),
+            move |project, project_path| {
+                let (haplotype, edit) = allele_edit_from_request(&project, &request.edit)?;
+                let (preview, state) = project
+                    .apply_previewed_allele_edit(
+                        &request.edit.track_id,
+                        &request.edit.expected_head_state_id,
+                        &request.preview_id,
+                        haplotype,
+                        edit,
+                        request.note,
+                    )
+                    .map_err(|error| error.to_string())?;
+                let keys = edit_keys(&preview.edit);
+                let effective_variants = project
+                    .effective_variants_for_track_at_loci(&request.edit.track_id, &keys)
+                    .map_err(|error| error.to_string())?;
+                Ok(AppliedAlleleEditResult {
+                    project_path,
+                    preview,
+                    state,
+                    track: project
+                        .track(&request.edit.track_id)
+                        .map_err(|error| error.to_string())?,
+                    effective_variants,
+                })
+            },
+        )
         .await
     }
 
@@ -402,7 +646,7 @@ impl ServerHandler for DgwMcpServer {
                 ),
             },
             instructions: Some(
-                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. This initial server does not expose genome-changing operations."
+                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Manual allele changes require an editable track, an exact source allele, an explicit track-head precondition, and a fresh preview identifier."
                     .into(),
             ),
             ..Default::default()
@@ -441,6 +685,125 @@ fn tool_error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::structured_error(json!({ "error": message.into() }))
 }
 
+fn validate_required(field: &str, value: &str) -> Result<(), McpError> {
+    if value.trim().is_empty() {
+        return Err(McpError::invalid_params(
+            format!("{field} must not be empty"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_allele_request(request: &AlleleEditRequest) -> Result<(), String> {
+    for (field, value) in [
+        ("track_id", request.track_id.as_str()),
+        (
+            "expected_head_state_id",
+            request.expected_head_state_id.as_str(),
+        ),
+        (
+            "source_variant.contig",
+            request.source_variant.contig.as_str(),
+        ),
+        (
+            "source_variant.reference",
+            request.source_variant.reference.as_str(),
+        ),
+        (
+            "source_variant.alternate",
+            request.source_variant.alternate.as_str(),
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!("{field} must not be empty"));
+        }
+    }
+    if request.source_variant.position == 0 {
+        return Err("source_variant.position must be one-based".into());
+    }
+    match request.action {
+        AlleleEditAction::SetAlternate => {
+            if request
+                .alternate
+                .as_deref()
+                .is_none_or(|alternate| alternate.trim().is_empty())
+            {
+                return Err("alternate is required for set_alternate".into());
+            }
+        }
+        AlleleEditAction::RestoreReference if request.alternate.is_some() => {
+            return Err("alternate must be omitted for restore_reference".into());
+        }
+        AlleleEditAction::RestoreReference => {}
+    }
+    Ok(())
+}
+
+fn allele_edit_from_request(
+    project: &Project,
+    request: &AlleleEditRequest,
+) -> Result<(Haplotype, EditKind), String> {
+    let assembly = project.manifest().assembly.clone();
+    if request
+        .source_variant
+        .assembly
+        .as_deref()
+        .is_some_and(|provided| provided != assembly)
+    {
+        return Err(format!(
+            "source_variant assembly does not match project assembly {assembly}"
+        ));
+    }
+    let source_key = VariantKey {
+        assembly: assembly.clone(),
+        contig: request.source_variant.contig.clone(),
+        position: request.source_variant.position,
+        reference: request.source_variant.reference.to_ascii_uppercase(),
+        alternate: request.source_variant.alternate.to_ascii_uppercase(),
+    };
+    let haplotype = match request.chromosome_copy {
+        ChromosomeCopy::A => Haplotype::One,
+        ChromosomeCopy::B => Haplotype::Two,
+        ChromosomeCopy::Unphased => Haplotype::Unphased,
+    };
+    let edit = match request.action {
+        AlleleEditAction::RestoreReference => EditKind::RestoreReference { source_key },
+        AlleleEditAction::SetAlternate => EditKind::SetAllele {
+            key: VariantKey {
+                assembly,
+                contig: source_key.contig.clone(),
+                position: source_key.position,
+                reference: source_key.reference.clone(),
+                alternate: request
+                    .alternate
+                    .as_deref()
+                    .expect("validated set_alternate")
+                    .to_ascii_uppercase(),
+            },
+            source_key: Some(source_key),
+            unphased_slot: request.unphased_slot,
+        },
+    };
+    Ok((haplotype, edit))
+}
+
+fn edit_keys(edit: &EditKind) -> Vec<VariantKey> {
+    match edit {
+        EditKind::SetAllele {
+            key, source_key, ..
+        } => {
+            let mut keys = vec![key.clone()];
+            if let Some(source_key) = source_key {
+                keys.push(source_key.clone());
+            }
+            keys
+        }
+        EditKind::RestoreReference { source_key } => vec![source_key.clone()],
+        EditKind::CompoundMutationLayer { .. } => Vec::new(),
+    }
+}
+
 impl From<BackgroundJob> for JobSummary {
     fn from(job: BackgroundJob) -> Self {
         Self {
@@ -466,7 +829,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_stable_read_tool_set() {
+    fn exposes_stable_tool_set() {
         let server = DgwMcpServer::new();
         let tools = server.tool_router.list_all();
         let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_ref()).collect();
@@ -474,14 +837,19 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "apply_allele_edit",
+                "duplicate_track",
                 "get_job",
                 "list_jobs",
                 "list_tracks",
                 "list_variant_contigs",
                 "list_variants",
                 "open_project",
+                "preview_allele_edit",
                 "project_summary",
+                "rename_track",
                 "search_genes",
+                "select_track",
             ]
         );
     }

@@ -2836,27 +2836,29 @@ fn apply_edit(
     bypassed_edit_ids: Vec<String>,
 ) -> Result<GenomeState, String> {
     let project = Project::open(project_path).map_err(error_text)?;
-    if let EditKind::SetAllele {
-        key,
-        source_key,
-        unphased_slot,
-    } = &edit
-    {
-        let normalized =
-            normalize_variant(&project.manifest().resource_bundle, key).map_err(error_text)?;
-        edit = EditKind::SetAllele {
-            key: normalized,
-            source_key: source_key.clone(),
-            unphased_slot: *unphased_slot,
-        };
-    }
     match track_id {
         Some(track_id) => project
-            .apply_edit_to_track(&track_id, haplotype, edit, note)
+            .apply_allele_edit_at_head(&track_id, &parent_state_id, haplotype, edit, note)
             .map_err(error_text),
-        None => project
-            .apply_edit(&parent_state_id, haplotype, edit, note, &bypassed_edit_ids)
-            .map_err(error_text),
+        None => {
+            if let EditKind::SetAllele {
+                key,
+                source_key,
+                unphased_slot,
+            } = &edit
+            {
+                let normalized = normalize_variant(&project.manifest().resource_bundle, key)
+                    .map_err(error_text)?;
+                edit = EditKind::SetAllele {
+                    key: normalized,
+                    source_key: source_key.clone(),
+                    unphased_slot: *unphased_slot,
+                };
+            }
+            project
+                .apply_edit(&parent_state_id, haplotype, edit, note, &bypassed_edit_ids)
+                .map_err(error_text)
+        }
     }
 }
 
