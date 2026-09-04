@@ -24,7 +24,7 @@ VCF + selected sample
               edit blocks       aggregate job       evidence
 ```
 
-The app has no server, account, telemetry, or remote patient-data path. Biological resources remain outside the project and are registered by local path. Imported VCF INFO annotations are accepted but ignored by the operational model; every displayed consequence or database result comes through the live exact-allele evidence boundary.
+The desktop app has no network server, account, telemetry, or remote patient-data path. An optional local MCP process gives agents a command interface over standard input/output; it calls `dgw-core` directly and does not create a network endpoint or automate the React interface. Biological resources remain outside the project and are registered by local path. Imported VCF INFO annotations are accepted but ignored by the operational model; every displayed consequence or database result comes through the live exact-allele evidence boundary.
 
 One track is one complete diploid scenario for the selected sample within the input data. Homologous chromosome copies A and B are reconstructed inside that track; A/B identifies phased VCF slots, not parental origin. A track must never be used as a synonym for one haplotype.
 
@@ -92,7 +92,7 @@ The workstation session is not a substitute for formal scientific provenance. In
 
 ## Engine boundary
 
-The Rust `dgw-core` crate has no Tauri dependency. This allows state, VCF, sequence, and evaluation behavior to be tested in headless environments. The desktop crate converts Tauri commands into core calls and retains the persistent evaluation service for the application lifetime.
+The Rust `dgw-core` crate has no Tauri or MCP dependency. This allows state, VCF, sequence, and evaluation behavior to be tested in headless environments. The desktop crate converts Tauri commands into core calls and retains the persistent evaluation service for the application lifetime. The separate `dgw-mcp` crate converts MCP tools into the same core calls; scientific and project semantics do not live in either transport adapter.
 
 SQLite uses WAL mode and foreign keys. Root variants have indexed allele/region columns plus compatibility payloads, allowing page, region, density, and exact-locus queries without loading the complete VCF. The public project schema remains version 1; additive indexes and backfills are an idempotent schema-1 migration.
 

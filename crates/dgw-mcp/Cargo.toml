@@ -1,0 +1,16 @@
+[package]
+name = "dgw-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.86"
+authors = ["Manuel Rueda"]
+repository = "https://github.com/mrueda/digital-genome-workstation"
+description = "Local MCP server for Digital Genome Workstation projects"
+
+[dependencies]
+dgw-core = { path = "../dgw-core" }
+rmcp = { version = "=0.11.0", default-features = false, features = ["base64", "macros", "server", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread"] }

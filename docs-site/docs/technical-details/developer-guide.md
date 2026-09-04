@@ -4,6 +4,7 @@
 
 ```text
 crates/dgw-core/   biological and persistence engine
+crates/dgw-mcp/    local agent command interface
 src-tauri/         Tauri desktop bridge
 src/               React/TypeScript interface
 docs-site/         Docusaurus documentation
@@ -16,6 +17,7 @@ config/            local resource-bundle profiles
 ```bash
 cargo fmt --all -- --check
 cargo test -p dgw-core
+cargo test -p dgw-mcp
 npm test
 npm run build
 ```
@@ -37,4 +39,3 @@ npm run build
 ```
 
 Do not commit patient data, licensed resource extracts, `.dgw` packages, or large compressed VCFs. Scientific behavior belongs in `dgw-core`; the frontend should not recreate normalization, genotype, evidence, or state rules.
-

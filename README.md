@@ -34,6 +34,7 @@ DGW v0.1 supports b37/hs37d5 and GRCh38/hg38 SNVs and sequence-resolved indels w
 - Assembly-matched Ensembl gene search by symbol or stable ID, with complete-gene focus, an interval/strand overlay, imported-allele counts, and symbolic gene-wide selection for editing and analysis devices.
 - Clean BGZF/CSI VCF export plus checksummed provenance and compressed live-evidence sidecars.
 - Tauri 2 + React/TypeScript desktop interface for the complete workflow.
+- An initial read-only local MCP server for agents, backed directly by `dgw-core` rather than interface automation.
 
 ## Prerequisites
 
@@ -62,6 +63,7 @@ npx playwright install chromium
 npm run test:e2e
 npm run docs:screenshots
 cargo test -p dgw-core
+cargo test -p dgw-mcp
 npm run tauri dev
 ```
 
@@ -71,7 +73,18 @@ If compilation stops at `gdk-sys` with `gdk-3.0.pc` missing, the Ubuntu/Debian p
 
 The development resource profile at `config/local-hs37d5.development.json` points to the existing `/media/mrueda/2TBS` stack, including the optional Ensembl GRCh37 gene resource. Edit the resource JSON in the onboarding screen for another machine. Assembly-specific Ensembl GRCh37 and GRCh38 gene-resource descriptors are also available under `config/`.
 
-Choose **File → Open Example Project** to open the prepared GRCh37 or GRCh38 allele-editing example. The same choices are available from the onboarding screen after selecting a reference profile. DGW creates a fresh project with the protected source track, `BRAF · restore to REF`, and `BRAF · alternative ALT`. The experimental tracks contain visible, reversible edits at the BRAF locus. Their underlying fixtures contain a fictional `DGW_DEMO` sample with ten variants across chromosomes 7 and 17. The initial chromosome 7 region contains seven nearby variants, making the clickable allele lollipops and horizontal timeline immediately visible; the Source Variants navigator can then jump to the chromosome 17 group. DGW creates each project package in `Documents/DGW Projects`. The files are independent assembly-specific fixtures—DGW does not perform liftover. The separate `braf-v600e.synthetic.vcf` remains the GRCh37 exact-resource smoke-test fixture.
+Choose any project under **Open an example** on the landing page, or use **File → Open Example Project** at any time. DGW creates a fresh temporary working project with the protected source track, `BRAF · restore to REF`, and `BRAF · alternative ALT`. The experimental tracks contain visible, reversible edits at the BRAF locus. Their underlying fixtures contain a fictional `DGW_DEMO` sample with ten variants across chromosomes 7 and 17. The initial chromosome 7 region contains seven nearby variants, making the clickable allele lollipops and horizontal timeline immediately visible; the Source Variants navigator can then jump to the chromosome 17 group. Save the example explicitly to keep it as a normal `.dgw` project. The files are independent assembly-specific fixtures—DGW does not perform liftover. The separate `braf-v600e.synthetic.vcf` remains the GRCh37 exact-resource smoke-test fixture.
+
+## Agent access (MCP)
+
+DGW includes an initial local, read-only MCP server. It opens existing `.dgw` projects and exposes bounded project, track, variant, gene, and background-job inspection through the same `dgw-core` methods used by the desktop application. It does not automate the interface and cannot currently create edits.
+
+```bash
+cargo build --release -p dgw-mcp
+target/release/dgw-mcp --version
+```
+
+Configure an MCP client to launch the absolute path to `target/release/dgw-mcp` over standard input/output. See the [MCP documentation](docs-site/docs/technical-details/mcp-server.md) for the configuration shape, tool list, and safety boundary.
 
 Run the real local-stack acceptance workflow with:
 

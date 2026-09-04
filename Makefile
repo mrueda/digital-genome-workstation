@@ -2,6 +2,7 @@
 
 test:
 	cargo test -p dgw-core
+	cargo test -p dgw-mcp
 	npm test
 
 build:

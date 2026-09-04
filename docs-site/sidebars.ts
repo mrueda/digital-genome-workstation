@@ -39,6 +39,7 @@ const sidebars: SidebarsConfig = {
             {type: 'doc', id: 'technical-details/vcf-contract', label: 'VCF Contract'},
             {type: 'doc', id: 'technical-details/resource-bundle', label: 'Resource Bundle'},
             {type: 'doc', id: 'technical-details/project-format', label: 'Project Format'},
+            {type: 'doc', id: 'technical-details/mcp-server', label: 'Agent Access (MCP)'},
           ],
         },
         {

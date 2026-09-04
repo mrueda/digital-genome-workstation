@@ -1,4 +1,5 @@
 use crate::error::{DgwError, Result};
+use crate::gene::GeneSearchHit;
 use crate::model::*;
 use crate::state::{
     effective_variants, materialize_haplotype, materialize_haplotype_masking_unphased,
@@ -946,6 +947,42 @@ impl Project {
             |row| row.get(0),
         )?;
         Ok(count.max(0) as u64)
+    }
+
+    /// Search the assembly-matched gene index pinned by this project and add
+    /// the number of imported source alleles overlapping each returned gene.
+    /// Keeping this operation in the core gives desktop and command-based
+    /// clients the same coordinate translation and counting semantics.
+    pub fn search_genes(&self, query: &str, limit: u32) -> Result<Vec<GeneSearchHit>> {
+        let resource = self
+            .manifest
+            .resource_bundle
+            .gene_annotation
+            .as_ref()
+            .ok_or_else(|| {
+                DgwError::InvalidResource(
+                    "this project has no gene annotation resource configured".into(),
+                )
+            })?;
+        let loci =
+            crate::gene::search_gene_index(&resource.index_path, query, limit.clamp(1, 100))?;
+        loci.into_iter()
+            .map(|mut locus| {
+                locus.contig = crate::vcf::translate_contig_style(
+                    &locus.contig,
+                    &self.manifest.resource_bundle.contig_style,
+                );
+                let source_variant_count = self.source_variant_count_in_context(&FocusContext {
+                    contig: locus.contig.clone(),
+                    start: locus.start,
+                    end: locus.end,
+                })?;
+                Ok(GeneSearchHit {
+                    locus,
+                    source_variant_count,
+                })
+            })
+            .collect()
     }
 
     fn root_variants_in_context(

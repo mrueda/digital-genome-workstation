@@ -1039,34 +1039,9 @@ fn search_genes(
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<GeneSearchHit>, String> {
-    let project = Project::open(project_path).map_err(error_text)?;
-    let resource = project
-        .manifest()
-        .resource_bundle
-        .gene_annotation
-        .as_ref()
-        .ok_or_else(|| "This project has no gene annotation resource configured".to_owned())?;
-    let loci = dgw_core::search_gene_index(&resource.index_path, &query, limit.unwrap_or(12))
-        .map_err(error_text)?;
-    loci.into_iter()
-        .map(|mut locus| {
-            locus.contig = dgw_core::vcf::translate_contig_style(
-                &locus.contig,
-                &project.manifest().resource_bundle.contig_style,
-            );
-            let source_variant_count = project
-                .source_variant_count_in_context(&FocusContext {
-                    contig: locus.contig.clone(),
-                    start: locus.start,
-                    end: locus.end,
-                })
-                .map_err(error_text)?;
-            Ok(GeneSearchHit {
-                locus,
-                source_variant_count,
-            })
-        })
-        .collect()
+    Project::open(project_path)
+        .and_then(|project| project.search_genes(&query, limit.unwrap_or(12)))
+        .map_err(error_text)
 }
 
 #[tauri::command]
