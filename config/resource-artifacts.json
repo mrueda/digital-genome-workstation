@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "id": "dgw-data-b37-r1",
+      "kind": "data",
+      "file": "data/r1/dgw-data-b37-r1.tar.gz",
+      "bytes": 1125563187,
+      "sha256": "c3de87a4a9cfc3df099dccaa8242f6a01cb0a99f04ed7435b8f024613484606a",
+      "manifestSha256": "0fa53a79e7ac11ca454577f1737574fa8d0d63585f9c5271c6d562cb4d31fd7b",
+      "unpackedBytes": 1134196499,
+      "assembly": "b37",
+      "contigStyle": "no_chr_prefix"
+    },
+    {
+      "id": "dgw-data-hg38-r1",
+      "kind": "data",
+      "file": "data/r1/dgw-data-hg38-r1.tar.gz",
+      "bytes": 1413457726,
+      "sha256": "1b98ba729c2af7938023d2b93f587ee1030c67ea6bc08d89441c03dd294f7b89",
+      "manifestSha256": "9ce8160b242965a558fdce905c7431685e0210ac42a2b9f44ddc706eafab2e34",
+      "unpackedBytes": 1437393066,
+      "assembly": "hg38",
+      "contigStyle": "chr_prefix"
+    },
+    {
+      "id": "dgw-tools-1.24-2-darwin-aarch64",
+      "kind": "tools",
+      "file": "tools/1.24-2/dgw-tools-1.24-2-darwin-aarch64.tar.gz",
+      "bytes": 2031346,
+      "sha256": "146af84b81557723b728f4a8bde5cac6a28255ae889926868a7c7eb07ee9898d",
+      "manifestSha256": "18569db8c0d046038db87fe67b12d400c4c61717cf599949bf6aab87b349d002",
+      "unpackedBytes": 4319453,
+      "platform": "darwin-aarch64"
+    },
+    {
+      "id": "dgw-tools-1.24-2-darwin-x86_64",
+      "kind": "tools",
+      "file": "tools/1.24-2/dgw-tools-1.24-2-darwin-x86_64.tar.gz",
+      "bytes": 2316509,
+      "sha256": "25861515ef13e0ef6618b1c4f2c37a1dd1232a561dcf661d13f5cf43118f4c5c",
+      "manifestSha256": "e889060923eef284fe00b71e2d1e3763470571ef7fc2716e6a6f7bd535121032",
+      "unpackedBytes": 4884950,
+      "platform": "darwin-x86_64"
+    },
+    {
+      "id": "dgw-tools-1.24-2-linux-aarch64",
+      "kind": "tools",
+      "file": "tools/1.24-2/dgw-tools-1.24-2-linux-aarch64.tar.gz",
+      "bytes": 7754857,
+      "sha256": "a81cf74f04fa3e90c2459e78289830f56452e8242f52534e9c13b44e988b09b4",
+      "manifestSha256": "8becba0373774709fd2db8a72b6479c5cd94b8199613bca020dfd38d5d575a95",
+      "unpackedBytes": 16988934,
+      "platform": "linux-aarch64"
+    },
+    {
+      "id": "dgw-tools-1.24-2-linux-x86_64",
+      "kind": "tools",
+      "file": "tools/1.24-2/dgw-tools-1.24-2-linux-x86_64.tar.gz",
+      "bytes": 8461525,
+      "sha256": "6bd7dea8bc0bb55d51f4d905a452573ebbcd90d8da65e897ac631b52abeb7b2d",
+      "manifestSha256": "42c857fb726bf92b5ad14c1c68069733240cb411ee5f225ad7b58cf2c964730d",
+      "unpackedBytes": 18370905,
+      "platform": "linux-x86_64"
+    },
+    {
+      "id": "dgw-tools-1.24-2-windows-x86_64",
+      "kind": "tools",
+      "file": "tools/1.24-2/dgw-tools-1.24-2-windows-x86_64.tar.gz",
+      "bytes": 11702429,
+      "sha256": "0f7485fc1fa266dc951b708269eadb56281b0e62d3f4958330024c03f28ce517",
+      "manifestSha256": "6a93facc126cfe8a87e1c5d017972395fc69a673dcd0f8a862b453f7d3a50b86",
+      "unpackedBytes": 27378943,
+      "platform": "windows-x86_64"
+    }
+  ]
+}

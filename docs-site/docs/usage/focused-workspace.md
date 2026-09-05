@@ -28,7 +28,7 @@ For mouse-only DAW-style selection, drag across empty space in the active track 
 
 Reference alleles and variant alleles use distinct highlights in all three rows; the selected change also receives an outline. Insertions and deletions change the displayed genome-copy length while all edit operations remain anchored to reference coordinates.
 
-One genome track always contains both homologous chromosome copies. A and B are working labels for the first and second phased VCF haplotypes; neither label means maternal or paternal unless explicit parental-origin information is imported. Chromosome-copy placement controls sequence reconstruction, not joint interpretation. Several nearby phased variants can appear together on chromosome copy A or B, but v0.1 still reports consequences for each allele independently and performs exact-allele lookups in dbNSFP, ClinVar, and COSMIC. It does not predict their combined transcript or protein effect.
+One genome track always contains both homologous chromosome copies. A and B are working labels for the first and second phased VCF haplotypes; neither label means maternal or paternal unless explicit parental-origin information is imported. Chromosome-copy placement controls sequence reconstruction, not joint interpretation. Several nearby phased variants can appear together on chromosome copy A or B, but v0.1 still reports consequences for each allele independently and performs exact-allele lookups in ClinVar, and COSMIC. It does not predict their combined transcript or protein effect.
 
 When two genome tracks are compared, they share the same reference coordinates. This lets you see what a device changed without implying that the two copies inside a track are separate experimental alternatives.
 

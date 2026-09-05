@@ -23,3 +23,9 @@ tauri-plugin-dialog = "2.4"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
 rayon = "1"
+reqwest = { version = "0.13", features = ["blocking"] }
+sha2 = "0.10"
+hex = "0.4"
+tempfile = "3"
+tar = "0.4"
+flate2 = "1"

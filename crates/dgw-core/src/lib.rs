@@ -9,6 +9,7 @@ pub mod optimizer_execution;
 pub mod profiling;
 pub mod project;
 pub mod randomizer;
+pub mod resources;
 pub mod state;
 pub mod vcf;
 

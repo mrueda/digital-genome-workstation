@@ -10,9 +10,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const DEVICES: [&str; 4] = [
+const DEVICES: [&str; 3] = [
     CONSEQUENCE_DEVICE_ID,
-    "org.dgw.builtin.dbnsfp",
     "org.dgw.builtin.clinvar",
     "org.dgw.builtin.cosmic",
 ];
@@ -66,7 +65,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("usage: profile_parallel_benchmark VCF SAMPLE PROJECT_DIR BUNDLE_JSON")?;
     if first == "--serial-existing"
         || first == "--devices-existing"
-        || first == "--dbnsfp-threads-existing"
         || first == "--full-threads-existing"
         || first == "--parallel-existing"
     {
@@ -118,45 +116,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "full_threads={threads} elapsed_seconds={:.3}",
                 parallel_started.elapsed().as_secs_f64()
             );
-            return Ok(());
-        }
-        if first == "--dbnsfp-threads-existing" {
-            let device = "org.dgw.builtin.dbnsfp";
-            let expected = profile_track(
-                &evaluation,
-                &project,
-                &track.id,
-                &[device.to_owned()],
-                |_, _, _| Ok(()),
-            )?;
-            let pool = LocalComputePool::new();
-            for threads in [2_u16, 4, 8] {
-                let started = Instant::now();
-                let mut result = pool.parallel_map_with_progress(
-                    threads,
-                    vec![device.to_owned()],
-                    |device_id, _progress| {
-                        dgw_core::profile_track_with_threads(
-                            &evaluation,
-                            &project,
-                            &track.id,
-                            &[device_id],
-                            usize::from(threads),
-                            |_, _, _| Ok(()),
-                        )
-                        .map_err(|error| error.to_string())
-                    },
-                    |_: ()| Ok(()),
-                )?;
-                let observed = result.pop().ok_or("dbNSFP profile result is missing")?;
-                if observed != expected {
-                    return Err(format!("dbNSFP output changed at {threads} threads").into());
-                }
-                println!(
-                    "dbnsfp_threads={threads} elapsed_seconds={:.3}",
-                    started.elapsed().as_secs_f64()
-                );
-            }
             return Ok(());
         }
         if first == "--devices-existing" {

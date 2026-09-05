@@ -10,7 +10,7 @@ DGW v0.1 is designed to test genome editing and comparison with real annotations
 - SNV edits and insertions/deletions of 1–49 bases.
 - Focused haplotype DNA reconstruction.
 - Per-allele SnpEff transcript/HGVS consequences.
-- Exact normalized-allele evidence from dbNSFP, ClinVar, and COSMIC.
+- Exact normalized-allele evidence from ClinVar, and COSMIC.
 
 ## Deliberately deferred
 

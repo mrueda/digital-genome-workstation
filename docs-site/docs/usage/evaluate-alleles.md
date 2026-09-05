@@ -2,7 +2,7 @@
 
 Evaluation always targets one exact normalized allele selected from an edit block or observed call. It does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
 
-In the Device Browser, Variant Consequences, dbNSFP, ClinVar, and COSMIC are all **Evidence** devices: they report annotations, predictions, classifications, or observations for one allele. DGW Starter applies them to a new track's Rack by default, between Mutation Generator and Genome Optimizer. Their code is separate from the configured models and database snapshots in the resource pack.
+In the Device Browser, Variant Consequences, ClinVar, and COSMIC are all **Evidence** devices: they report annotations, predictions, classifications, or observations for one allele. DGW Starter applies them to a new track's Rack by default, between Mutation Generator and Genome Optimizer. Their code is separate from the configured models and database snapshots in the resource pack.
 
 With DGW Starter, the selected track's Rack initially shows the complete seven-device workflow, including the read-only Variant Map after Genome Optimizer. A missing optional resource leaves its Evidence card unavailable and inert; the other cards, visualization, and genome editing continue to work. Selecting an allele automatically runs the applied, non-bypassed Evidence cards after a short debounce. Stable cached results appear first and DGW requests only missing device results. **Refresh active Evidence devices** and each card's manual action remain available. Bypassing an Evidence card hides and excludes its result for that track without changing any allele or edit block. Applied-chain and card-bypass choices persist in the `.dgw` workstation session.
 
@@ -12,7 +12,6 @@ DGW sends each request as a VCF batch to the registered `bcftools csq --local-cs
 
 ## Evidence layers
 
-- **dbNSFP** returns its exact allele row and exposes named score columns such as CADD and REVEL when present.
 - **ClinVar** returns exact VCF records with significance, review status, conditions, identifiers, and oncogenicity fields when supplied by the configured release.
 - **COSMIC** returns exact records from the user’s licensed local snapshot.
 
@@ -30,7 +29,7 @@ For the exact fields, transcript rule, numerical mapping, and formulas, see [Sco
 
 ## Optimizer scores are not live evidence
 
-The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Variant Consequences for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC and dbNSFP provide context and never reduce the score through absence.
+The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Variant Consequences for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provide context and never reduce the score through absence.
 
 REF is the registered reference allele, not a benign or healthy classification. Likewise, Minimize and Maximize mean lower or higher values of the displayed proxy score only.
 

@@ -92,7 +92,7 @@
 
   <rect x="620" y="660" width="190" height="112" rx="13" fill="#eaf7fa" stroke="#3ba6b7" stroke-width="2"/>
   <text x="642" y="695" class="label heading">Evidence</text>
-  <text x="642" y="728" class="label device">Consequences · dbNSFP</text>
+  <text x="642" y="728" class="label device">Variant Consequences</text>
   <text x="642" y="757" class="label device">ClinVar · COSMIC</text>
 
   <rect x="825" y="660" width="175" height="112" rx="13" fill="#fff8df" stroke="#d5a52d" stroke-width="2"/>

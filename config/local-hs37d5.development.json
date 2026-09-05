@@ -10,18 +10,12 @@
   "bcftoolsVersion": "1.24",
   "bgzipPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bgzip",
   "tabixPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/tabix",
-  "dbnsfp": {
-    "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz",
-    "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/dbNSFP4.1a_hg19.txt.gz.tbi",
-    "release": "dbNSFP 4.1a",
-    "licenseLabel": "user-supplied",
-    "contigStyle": "no_chr_prefix"
-  },
   "clinvar": {
     "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz",
     "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi",
     "release": "ClinVar 20250312",
-    "licenseLabel": "user-supplied",
+    "sourceUrl": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh37/archive_2.0/2025/clinvar_20250312.vcf.gz",
+    "licenseLabel": "NCBI ClinVar terms and disclaimer",
     "contigStyle": "no_chr_prefix"
   },
   "cosmic": {

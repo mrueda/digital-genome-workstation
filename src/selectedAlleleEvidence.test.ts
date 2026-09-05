@@ -22,10 +22,10 @@ describe("selected-allele live evidence", () => {
     cacheStableEvidence(cache, "allele", "consequence", found);
     cacheStableEvidence(cache, "allele", "clinvar", exactMiss);
 
-    expect(cachedEvidenceForDevices(cache, "allele", ["consequence", "dbnsfp", "clinvar"]))
+    expect(cachedEvidenceForDevices(cache, "allele", ["consequence", "cosmic", "clinvar"]))
       .toEqual({ consequence: found, clinvar: exactMiss });
-    expect(missingEvidenceDeviceIds(cache, "allele", ["consequence", "dbnsfp", "clinvar"]))
-      .toEqual(["dbnsfp"]);
+    expect(missingEvidenceDeviceIds(cache, "allele", ["consequence", "cosmic", "clinvar"]))
+      .toEqual(["cosmic"]);
   });
 
   it("does not retain transient unavailable or error responses", () => {

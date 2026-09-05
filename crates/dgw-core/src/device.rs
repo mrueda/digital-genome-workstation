@@ -493,17 +493,6 @@ pub fn consequence_device_manifest() -> DeviceManifest {
     )
 }
 
-pub fn dbnsfp_device_manifest() -> DeviceManifest {
-    evidence_manifest(
-        "org.dgw.builtin.dbnsfp",
-        "dbNSFP",
-        "Look up computational prediction records for one exact normalized allele.",
-        "org.dgw.resource.dbnsfp",
-        DeviceResourceKind::ScoringDataset,
-        "Scores are database observations and predictions, not clinical classifications; absence of an exact match is not benign evidence.",
-    )
-}
-
 pub fn clinvar_device_manifest() -> DeviceManifest {
     evidence_manifest(
         "org.dgw.builtin.clinvar",
@@ -581,7 +570,6 @@ pub fn variant_map_device_manifest() -> DeviceManifest {
 pub fn built_in_device_manifests() -> Vec<DeviceManifest> {
     vec![
         consequence_device_manifest(),
-        dbnsfp_device_manifest(),
         clinvar_device_manifest(),
         cosmic_device_manifest(),
         mutation_generator_device_manifest(),
@@ -926,7 +914,7 @@ mod tests {
     #[test]
     fn built_in_catalog_is_valid_and_resource_releases_are_runtime_bindings() {
         let manifests = built_in_device_manifests();
-        assert_eq!(manifests.len(), 8);
+        assert_eq!(manifests.len(), 7);
         let mut ids = BTreeSet::new();
         for manifest in &manifests {
             validate_device_manifest(manifest).unwrap();
@@ -940,16 +928,16 @@ mod tests {
         }
 
         assert_eq!(manifests[0].kind, DeviceKind::Analysis);
-        assert!(manifests[1..4]
+        assert!(manifests[1..3]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Evidence));
-        assert!(manifests[4..7]
+        assert!(manifests[3..6]
             .iter()
             .all(|manifest| manifest.kind == DeviceKind::Editing));
         assert_eq!(manifests[4].kind, DeviceKind::Editing);
-        assert_eq!(manifests[7].kind, DeviceKind::Visualization);
+        assert_eq!(manifests[6].kind, DeviceKind::Visualization);
         assert!(manifests[4].resource_requirements.is_empty());
-        assert!(manifests[..4].iter().all(|manifest| manifest
+        assert!(manifests[..3].iter().all(|manifest| manifest
             .resource_requirements
             .iter()
             .all(|resource| !resource.required)));

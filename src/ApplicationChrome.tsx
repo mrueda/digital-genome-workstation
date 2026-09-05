@@ -6,6 +6,7 @@ import {
   type UserSettings
 } from "./userSettings";
 import { api } from "./api";
+import { ResourcesPanel } from "./ResourcesPanel";
 import type { BackgroundJob, ProjectResourceHealth, ResourceBundle, ResourceHealthStatus } from "./types";
 
 function closeMenu(event: React.MouseEvent<HTMLElement>) {
@@ -106,14 +107,6 @@ export function ApplicationMenu({
       detail: "Ensembl GTF and DGW gene index",
       path: resourceBundle.geneAnnotation?.path,
       configured: Boolean(resourceBundle.geneAnnotation)
-    },
-    {
-      id: "dbnsfp",
-      name: "dbNSFP",
-      release: resourceBundle.dbnsfp.release || "Release not specified",
-      detail: resourceBundle.dbnsfp.licenseLabel,
-      path: resourceBundle.dbnsfp.path,
-      configured: Boolean(resourceBundle.dbnsfp.path)
     },
     {
       id: "clinvar",
@@ -401,7 +394,7 @@ export function ProjectTemplateDialog({
       <div className="project-template-options">
         <button type="button" disabled={busy} onClick={() => onSelect("standardEvidence")}>
           <b>DGW Starter</b>
-          <span>{busy ? "Creating project…" : "Start with Mutation Generator, Genome Morph, the four Evidence devices, Genome Optimizer, and Variant Map applied."}</span>
+          <span>{busy ? "Creating project…" : "Start with Mutation Generator, Genome Morph, the three Evidence devices, Genome Optimizer, and Variant Map applied."}</span>
         </button>
         <button type="button" disabled={busy} onClick={() => onSelect("empty")}>
           <b>Empty</b>
@@ -423,6 +416,7 @@ export function SettingsDialog({
   onChange: (settings: UserSettings) => void;
   onClose: () => void;
 }) {
+  const [section, setSection] = useState<"general" | "resources">("general");
   useEffect(() => {
     if (!open) return;
     function closeOnEscape(event: KeyboardEvent) {
@@ -440,6 +434,11 @@ export function SettingsDialog({
         <button type="button" className="dialog-close" onClick={onClose} aria-label="Close settings">×</button>
       </header>
 
+      <div className="settings-theme-options" role="group" aria-label="Settings section">
+        <button type="button" aria-pressed={section === "general"} onClick={() => setSection("general")}>General</button>
+        <button type="button" aria-pressed={section === "resources"} onClick={() => setSection("resources")}>Resources</button>
+      </div>
+      {section === "resources" ? <ResourcesPanel /> : <>
       <div className="settings-section">
         <div><h3>Interface scale</h3><p>Scale text and controls together. At 140–150%, hide a side panel from View when you need more room for the genome workspace.</p></div>
         <div className="settings-scale-options" role="group" aria-label="Interface scale">
@@ -506,6 +505,7 @@ export function SettingsDialog({
       <label className="settings-check"><input type="checkbox" checked={settings.showDeviceRack} onChange={(event) => onChange({ ...settings, showDeviceRack: event.target.checked })} /><span><b>Show Device Rack</b><small>Keep editing and analysis devices below the genome tracks.</small></span></label>
       <label className="settings-check"><input type="checkbox" checked={settings.showTrackMonitor} onChange={(event) => onChange({ ...settings, showTrackMonitor: event.target.checked })} /><span><b>Show Track Monitor</b><small>Keep the selected track's additive profile and device coverage at the far right.</small></span></label>
       <label className="settings-check"><input type="checkbox" checked={settings.reduceMotion} onChange={(event) => onChange({ ...settings, reduceMotion: event.target.checked })} /><span><b>Reduce motion</b><small>Disable interface transitions and status animations.</small></span></label>
+      </>}
 
       <footer>
         <button type="button" className="button ghost" onClick={() => onChange({ ...DEFAULT_USER_SETTINGS })}>Restore defaults</button>

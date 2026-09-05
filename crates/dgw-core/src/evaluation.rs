@@ -7,7 +7,6 @@ use crate::optimizer::{OptimizerRequest, SaturationAlleleInput};
 use crate::project::Project;
 use crate::vcf::{parse_info, translate_contig_style};
 use chrono::Utc;
-use flate2::read::MultiGzDecoder;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,7 +47,7 @@ pub fn device_evaluation_cache_key(
 
 /// Builds the identity of the resource that is scientifically relevant to one
 /// built-in evidence device. Database devices are deliberately independent of
-/// one another, so replacing COSMIC does not invalidate ClinVar or dbNSFP.
+/// one another, so replacing COSMIC does not invalidate ClinVar.
 pub fn device_resource_fingerprint(
     bundle: &ResourceBundle,
     bundle_fingerprint: &str,
@@ -72,9 +71,6 @@ pub fn device_resource_fingerprint(
             } else {
                 hasher.update(b"consequence-annotation\0none\0");
             }
-        }
-        "org.dgw.builtin.dbnsfp" => {
-            hash_indexed_resource(&mut hasher, &bundle.tabix_path, &bundle.dbnsfp)?;
         }
         "org.dgw.builtin.clinvar" => {
             hash_indexed_resource(&mut hasher, &bundle.tabix_path, &bundle.clinvar)?;
@@ -160,28 +156,21 @@ impl EvaluationService {
         // its exact allele/resource entry is already cached, and one missing or
         // replaced optional database does not invalidate the other devices.
         let consequence = self.evaluate_device(project, variant, CONSEQUENCE_DEVICE_ID)?;
-        let dbnsfp = self.evaluate_device(project, variant, "org.dgw.builtin.dbnsfp")?;
         let clinvar = self.evaluate_device(project, variant, "org.dgw.builtin.clinvar")?;
         let cosmic = self.evaluate_device(project, variant, "org.dgw.builtin.cosmic")?;
         let result = EvaluationResult {
             variant: variant.clone(),
             cache_key,
             consequence,
-            dbnsfp,
             clinvar,
             cosmic,
             evaluated_at: Utc::now(),
             resource_bundle_fingerprint: project.manifest().resource_bundle_fingerprint.clone(),
             limitation: "Consequences are evaluated independently per variant; compound haplotype-aware transcript consequences are not computed in DGW v1.".into(),
         };
-        let durable = [
-            &result.consequence,
-            &result.dbnsfp,
-            &result.clinvar,
-            &result.cosmic,
-        ]
-        .iter()
-        .all(|evidence| is_durable_evidence(evidence));
+        let durable = [&result.consequence, &result.clinvar, &result.cosmic]
+            .iter()
+            .all(|evidence| is_durable_evidence(evidence));
         if durable {
             // Keep the v1 combined entry for existing export/provenance callers.
             // Device-specific entries remain the authoritative reusable cache.
@@ -206,10 +195,7 @@ impl EvaluationService {
         })?;
         if !matches!(
             device_id,
-            CONSEQUENCE_DEVICE_ID
-                | "org.dgw.builtin.dbnsfp"
-                | "org.dgw.builtin.clinvar"
-                | "org.dgw.builtin.cosmic"
+            CONSEQUENCE_DEVICE_ID | "org.dgw.builtin.clinvar" | "org.dgw.builtin.cosmic"
         ) {
             return Err(DgwError::InvalidDevice(format!(
                 "device {device_id} cannot evaluate a selected allele"
@@ -254,13 +240,6 @@ impl EvaluationService {
                     },
                 },
             },
-            "org.dgw.builtin.dbnsfp" => query_resource(
-                &bundle.tabix_path,
-                &bundle.dbnsfp,
-                &bundle.contig_style,
-                variant,
-                ResourceKind::Dbnsfp,
-            ),
             "org.dgw.builtin.clinvar" => query_resource(
                 &bundle.tabix_path,
                 &bundle.clinvar,
@@ -373,7 +352,6 @@ impl EvaluationService {
 
         let bundle = &project.manifest().resource_bundle;
         let (resource, kind) = match device_id {
-            "org.dgw.builtin.dbnsfp" => (&bundle.dbnsfp, ResourceKind::Dbnsfp),
             "org.dgw.builtin.clinvar" => (&bundle.clinvar, ResourceKind::Vcf),
             "org.dgw.builtin.cosmic" => (&bundle.cosmic, ResourceKind::Vcf),
             _ => {
@@ -637,7 +615,6 @@ fn evidence_for_device<'a>(
 ) -> Option<&'a EvidenceResult> {
     match canonical_device_id(device_id) {
         CONSEQUENCE_DEVICE_ID => Some(&evaluation.consequence),
-        "org.dgw.builtin.dbnsfp" => Some(&evaluation.dbnsfp),
         "org.dgw.builtin.clinvar" => Some(&evaluation.clinvar),
         "org.dgw.builtin.cosmic" => Some(&evaluation.cosmic),
         _ => None,
@@ -655,7 +632,6 @@ fn device_cache_envelope(
         variant: variant.clone(),
         cache_key,
         consequence: not_computed_evidence("Variant Consequences"),
-        dbnsfp: not_computed_evidence("dbNSFP"),
         clinvar: not_computed_evidence("ClinVar"),
         cosmic: not_computed_evidence("COSMIC"),
         evaluated_at: Utc::now(),
@@ -664,7 +640,6 @@ fn device_cache_envelope(
     };
     match canonical_device_id(device_id) {
         CONSEQUENCE_DEVICE_ID => result.consequence = evidence,
-        "org.dgw.builtin.dbnsfp" => result.dbnsfp = evidence,
         "org.dgw.builtin.clinvar" => result.clinvar = evidence,
         "org.dgw.builtin.cosmic" => result.cosmic = evidence,
         _ => unreachable!("cache envelopes are built only for supported evidence devices"),
@@ -931,7 +906,6 @@ fn consequence_impact_rank(impact: &str) -> u8 {
 #[derive(Clone, Copy)]
 enum ResourceKind {
     Vcf,
-    Dbnsfp,
 }
 
 fn query_resource(
@@ -1006,30 +980,12 @@ fn query_resource(
                         .split(',')
                         .any(|alternate| alternate.eq_ignore_ascii_case(&variant.alternate))
             }
-            ResourceKind::Dbnsfp => {
-                fields.len() >= 4
-                    && fields[0].trim_start_matches("chr")
-                        == variant.contig.trim_start_matches("chr")
-                    && fields[1].parse::<u64>().ok() == Some(variant.position)
-                    && fields[2].eq_ignore_ascii_case(&variant.reference)
-                    && fields[3].eq_ignore_ascii_case(&variant.alternate)
-            }
         };
         if matches {
             let mut record = BTreeMap::new();
             record.insert("raw".into(), line.into());
-            if matches!(kind, ResourceKind::Vcf) {
-                record.insert("id".into(), fields[2].into());
-                record.extend(parse_info(fields[7]));
-            } else if let Ok(columns) = dbnsfp_columns(&resource.path) {
-                for (column, value) in columns.iter().zip(fields.iter()) {
-                    record.insert(column.clone(), (*value).into());
-                }
-            } else {
-                record.insert("position".into(), fields[1].into());
-                record.insert("ref".into(), fields[2].into());
-                record.insert("alt".into(), fields[3].into());
-            }
+            record.insert("id".into(), fields[2].into());
+            record.extend(parse_info(fields[7]));
             records.push(record);
         }
     }
@@ -1171,17 +1127,12 @@ fn query_resource_signals_batch(
                             .split(',')
                             .any(|alternate| alternate.eq_ignore_ascii_case(&variant.alternate))
                 }
-                ResourceKind::Dbnsfp => {
-                    fields[0].trim_start_matches("chr") == variant.contig.trim_start_matches("chr")
-                        && fields[2].eq_ignore_ascii_case(&variant.reference)
-                        && fields[3].eq_ignore_ascii_case(&variant.alternate)
-                }
             };
             if exact {
                 if let Some(signal) = signals.get_mut(variant) {
                     signal.status = EvidenceStatus::Found;
                     signal.exact_match_count = signal.exact_match_count.saturating_add(1);
-                    if matches!(kind, ResourceKind::Vcf) && fields.len() >= 8 {
+                    if fields.len() >= 8 {
                         if let Some(classification) =
                             parse_info(fields[7]).into_iter().find_map(|(key, value)| {
                                 key.eq_ignore_ascii_case("CLNSIG").then_some(value)
@@ -1214,23 +1165,6 @@ fn query_resource_signals_batch(
         }));
     }
     Ok(signals)
-}
-
-fn dbnsfp_columns(path: &std::path::Path) -> Result<Vec<String>> {
-    let reader = BufReader::new(MultiGzDecoder::new(File::open(path)?));
-    for line in reader.lines().take(20) {
-        let line = line?;
-        if line.starts_with("#chr\t") || line.starts_with("chr\t") {
-            return Ok(line
-                .trim_start_matches('#')
-                .split('\t')
-                .map(str::to_owned)
-                .collect());
-        }
-    }
-    Err(DgwError::InvalidResource(
-        "dbNSFP column header was not found".into(),
-    ))
 }
 
 pub fn normalize_variant(bundle: &ResourceBundle, variant: &VariantKey) -> Result<VariantKey> {
@@ -1306,7 +1240,6 @@ mod tests {
             bcftools_version: "1.24".into(),
             bgzip_path: "/configured/bgzip".into(),
             tabix_path: "/configured/tabix".into(),
-            dbnsfp: indexed_resource("dbnsfp"),
             clinvar: indexed_resource("clinvar"),
             cosmic: indexed_resource("cosmic"),
             gene_annotation: None,
@@ -1433,7 +1366,6 @@ mod tests {
         );
         assert_eq!(envelope.clinvar, evidence);
         assert_eq!(envelope.consequence.status, EvidenceStatus::NotComputed);
-        assert_eq!(envelope.dbnsfp.status, EvidenceStatus::NotComputed);
         assert_eq!(envelope.cosmic.status, EvidenceStatus::NotComputed);
         assert_eq!(
             evidence_for_device(&envelope, "org.dgw.builtin.clinvar"),

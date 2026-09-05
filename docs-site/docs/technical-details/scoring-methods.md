@@ -136,16 +136,15 @@ The optimizer score and Track Monitor use the same consequence category mapping 
 The following fields do not currently change the Saturation score:
 
 - Variant Consequences effect, gene, transcript, biotype, and change descriptions;
-- dbNSFP prediction scores;
 - COSMIC records;
 - ClinVar classifications, except for the fixed exclusion described above;
 - INFO annotations from the imported VCF.
 
-dbNSFP, ClinVar, and COSMIC remain available as evidence. Absence from these databases never reduces the score.
+ClinVar, and COSMIC remain available as evidence. Absence from these databases never reduces the score.
 
 ## Consequences of the current model
 
-The model has only four consequence levels. Two different alleles often receive the same value. For example, two `MODERATE` missense variants both score 0.67 even if their amino-acid changes and dbNSFP predictions differ. This explains why a scan of thousands of positions may propose only a small number of changes.
+The model has only four consequence levels. Two different alleles often receive the same value. For example, two `MODERATE` missense variants both score 0.67 even if their amino-acid changes differ. This explains why a scan of thousands of positions may propose only a small number of changes.
 
 The model also assumes that allele contributions can be added. It does not model:
 
@@ -158,7 +157,7 @@ The model also assumes that allele contributions can be added. It does not model
 
 ## Planned refinement
 
-A later scoring version may keep consequence impact as the main tier and use specific consequence terms and dbNSFP predictions to separate candidates within a tier. This is not part of the current calculation. Any such change must use a new scoring-method version and preserve the old definition for reproducibility.
+A later scoring version may keep consequence impact as the main tier and use specific consequence terms to separate candidates within a tier. This is not part of the current calculation. Any such change must use a new scoring-method version and preserve the old definition for reproducibility.
 
 ## Minimum information to report
 

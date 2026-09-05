@@ -590,7 +590,7 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
         ));
     }
     validate_contig_style(&bundle.contig_style)?;
-    for resource in [&bundle.dbnsfp, &bundle.clinvar, &bundle.cosmic] {
+    for resource in [&bundle.clinvar, &bundle.cosmic] {
         if let Some(style) = &resource.contig_style {
             validate_contig_style(style)?;
         }
@@ -659,7 +659,7 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
             ));
         }
     }
-    for resource in [&bundle.dbnsfp, &bundle.clinvar, &bundle.cosmic] {
+    for resource in [&bundle.clinvar, &bundle.cosmic] {
         if !resource.path.is_file() || !resource.index_path.is_file() {
             warnings.push(format!(
                 "{} resources are incomplete; that evidence device will remain unavailable",

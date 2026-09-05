@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{self, Sender};
 
-pub const TRACK_PROFILE_EVIDENCE_DEVICES: [&str; 4] = [
+pub const TRACK_PROFILE_EVIDENCE_DEVICES: [&str; 3] = [
     CONSEQUENCE_DEVICE_ID,
-    "org.dgw.builtin.dbnsfp",
     "org.dgw.builtin.clinvar",
     "org.dgw.builtin.cosmic",
 ];

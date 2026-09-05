@@ -69,7 +69,6 @@ pub struct ResourceBundle {
     pub bcftools_version: String,
     pub bgzip_path: PathBuf,
     pub tabix_path: PathBuf,
-    pub dbnsfp: IndexedResource,
     pub clinvar: IndexedResource,
     pub cosmic: IndexedResource,
     #[serde(default)]
@@ -332,7 +331,6 @@ pub struct EvaluationResult {
     pub cache_key: String,
     #[serde(alias = "snpeff")]
     pub consequence: EvidenceResult,
-    pub dbnsfp: EvidenceResult,
     pub clinvar: EvidenceResult,
     pub cosmic: EvidenceResult,
     pub evaluated_at: DateTime<Utc>,

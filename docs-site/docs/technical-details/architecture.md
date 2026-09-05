@@ -63,7 +63,7 @@ Consolidation sets `baseStateId = headStateId`, so `edits_for_track` returns no 
 
 ## Device boundary
 
-The Device Browser has four user-facing functional groups. Mutation Generator belongs to Edit; Variant Consequences, dbNSFP, ClinVar, and COSMIC belong to Evidence; objective-driven track models such as Genome Optimizer belong to Analyze; and Variant Map belongs to Visualize. A track's Rack contains only applied instances in order, while Genome Optimizer still returns reviewable edit proposals through the host protocol. Device code is distinct from the reference/model/database resource packs it consumes.
+The Device Browser has four user-facing functional groups. Mutation Generator belongs to Edit; Variant Consequences, ClinVar, and COSMIC belong to Evidence; objective-driven track models such as Genome Optimizer belong to Analyze; and Variant Map belongs to Visualize. A track's Rack contains only applied instances in order, while Genome Optimizer still returns reviewable edit proposals through the host protocol. Device code is distinct from the reference/model/database resource packs it consumes.
 
 The compatibility boundary is a versioned, structured DGW Device API. “VST-like” describes the rack interaction only; it is not an audio plug-in ABI. A device receives host-prepared genomic input and returns structured proposals or results. It never receives authority to mutate project SQLite or files directly. The host validates proposed edits, owns caching and persistence, and records accepted results.
 
@@ -78,7 +78,7 @@ The implemented **Genome Optimizer** remains experimental. It accepts a mode, fo
 - maximize emits `SetAllele` only to reintroduce an exact original-source allele absent from the current track and only when its additive score delta is positive.
 - saturation enumerates the three non-REF bases at each selected canonical SNV, obtains host-evaluated evidence, requires a comparable predicted impact for every candidate, and emits `SetAllele` for the winning ALT.
 
-Conservative does not read predicted consequences, ClinVar, imported INFO, or another Evidence-device output. Saturation uses live `bcftools csq` impact to rank complete three-ALT comparisons. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a score fader. dbNSFP, COSMIC, and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
+Conservative does not read predicted consequences, ClinVar, imported INFO, or another Evidence-device output. Saturation uses live `bcftools csq` impact to rank complete three-ALT comparisons. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a score fader. COSMIC, and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
 
 Candidates are sorted by score improvement and stable allele/copy tie breakers. Conservative mode truncates copy-level proposals to `maxEdits`; Saturation interprets the same protocol bound as a position-group limit and emits every active copy operation for each accepted position. Unsafe overlaps, ambiguous source replacements, and zero-benefit choices become explicit exclusions. Accepted proposals pass through the normal track edit validator and become ordinary visible edit blocks.
 
@@ -104,6 +104,6 @@ hs37d5 is BGZF-compressed. DGW calculates uncompressed byte offsets from the FAI
 
 ## Failure behavior
 
-Projects can reopen from their frozen root artifact when the original VCF moves. The reference and VCF tool core is required, while the Ensembl consequence annotation, dbNSFP, ClinVar, and COSMIC resources are optional device inputs. A missing optional resource makes only that device—or an optimizer mode that explicitly requires it—unavailable. Worker errors, resource unavailability, predicted no-feature results, and database no-match results remain separate states.
+Projects can reopen from their frozen root artifact when the original VCF moves. The reference and VCF tool core is required, while the Ensembl consequence annotation, ClinVar, and COSMIC resources are optional device inputs. A missing optional resource makes only that device—or an optimizer mode that explicitly requires it—unavailable. Worker errors, resource unavailability, predicted no-feature results, and database no-match results remain separate states.
 
 VCF export contains effective alleles, genotypes, and DGW provenance rather than imported or live consequence annotations. Cached live evidence is written to a compressed JSON sidecar and linked by the provenance sidecar.

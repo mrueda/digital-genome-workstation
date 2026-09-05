@@ -16,7 +16,6 @@ export async function installTauriShellMock(page: Page) {
       bcftoolsVersion: "1.24",
       bgzipPath: "/synthetic/bgzip",
       tabixPath: "/synthetic/tabix",
-      dbnsfp: { path: "/synthetic/dbnsfp.vcf.gz", indexPath: "/synthetic/dbnsfp.vcf.gz.tbi", release: "4.1a", licenseLabel: "dbNSFP terms" },
       clinvar: { path: "/synthetic/clinvar.vcf.gz", indexPath: "/synthetic/clinvar.vcf.gz.tbi", release: "2025-03", licenseLabel: "Public domain" },
       cosmic: { path: "/synthetic/cosmic.vcf.gz", indexPath: "/synthetic/cosmic.vcf.gz.tbi", release: "v101", licenseLabel: "COSMIC terms" },
       geneAnnotation: {
@@ -176,7 +175,6 @@ export async function installTauriShellMock(page: Page) {
       ["org.dgw.builtin.mutation-generator", "Mutation Generator", "editing", "Generate controlled variant changes."],
       ["org.dgw.builtin.genome-morph", "Genome Morph", "editing", "Move one track toward another track."],
       ["org.dgw.builtin.variant-consequences", "Variant Consequences", "evidence", "Predict transcript consequences with bcftools csq."],
-      ["org.dgw.builtin.dbnsfp", "dbNSFP", "evidence", "Look up exact functional evidence."],
       ["org.dgw.builtin.clinvar", "ClinVar", "evidence", "Look up exact ClinVar records."],
       ["org.dgw.builtin.cosmic", "COSMIC", "evidence", "Look up exact COSMIC records."],
       ["org.dgw.builtin.genome-optimizer", "Genome Optimizer", "analysis", "Generate bounded score-directed edits."],
@@ -210,7 +208,6 @@ export async function installTauriShellMock(page: Page) {
         unchangedImpactMutations: 0,
         deviceCoverage: [
           "org.dgw.builtin.variant-consequences",
-          "org.dgw.builtin.dbnsfp",
           "org.dgw.builtin.clinvar",
           "org.dgw.builtin.cosmic"
         ].map((id) => ({ id, evaluated: mutationCount, total: mutationCount, exactMatches: id === "org.dgw.builtin.variant-consequences" ? mutationCount : 0, unavailable: 0, errors: 0, noTranscriptFeature: 0 })),
@@ -221,6 +218,10 @@ export async function installTauriShellMock(page: Page) {
     async function command(commandName: string, args: JsonObject = {}) {
       if (commandName === "plugin:webview|set_webview_zoom") return null;
       if (commandName === "suggested_development_bundles") return [bundle, hg38Bundle];
+      if (commandName === "resource_inventory") return {
+        directory: "/synthetic/resources", platform: "linux-aarch64", issues: [],
+        releases: [], installed: []
+      };
       if (commandName === "example_fixture") {
         exampleKind = args.exampleId === "hg00103Wes" ? "wes" : "synthetic";
         exampleAssembly = args.assembly === "hg38" ? "hg38" : "b37";

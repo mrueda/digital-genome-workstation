@@ -85,7 +85,6 @@ struct EvidenceResourceIdentity<'a> {
     consequence_engine: &'static str,
     bcftools_version: &'a str,
     consequence_annotation_release: Option<&'a str>,
-    dbnsfp_release: &'a str,
     clinvar_release: &'a str,
     cosmic_release: &'a str,
 }
@@ -1387,7 +1386,6 @@ impl Project {
             "bcftoolsVersion": self.manifest.resource_bundle.bcftools_version,
             "consequenceEngine": "bcftools csq",
             "consequenceAnnotationRelease": self.manifest.resource_bundle.consequence_annotation.as_ref().map(|resource| &resource.release),
-            "dbnsfpRelease": self.manifest.resource_bundle.dbnsfp.release,
             "clinvarRelease": self.manifest.resource_bundle.clinvar.release,
             "cosmicRelease": self.manifest.resource_bundle.cosmic.release,
         })
@@ -3828,7 +3826,6 @@ impl Project {
                     .consequence_annotation
                     .as_ref()
                     .map(|resource| resource.release.as_str()),
-                dbnsfp_release: &self.manifest.resource_bundle.dbnsfp.release,
                 clinvar_release: &self.manifest.resource_bundle.clinvar.release,
                 cosmic_release: &self.manifest.resource_bundle.cosmic.release,
             },
@@ -5406,7 +5403,6 @@ mod tests {
             bcftools_version: "test".into(),
             bgzip_path: "gzip".into(),
             tabix_path: "true".into(),
-            dbnsfp: test_resource(temporary.path()),
             clinvar: test_resource(temporary.path()),
             cosmic: test_resource(temporary.path()),
             gene_annotation: None,
@@ -6548,12 +6544,6 @@ mod tests {
             cache_key: "fixture-evaluation".into(),
             consequence: EvidenceResult {
                 source: "Variant Consequences".into(),
-                status: EvidenceStatus::NoExactMatch,
-                records: Vec::new(),
-                message: None,
-            },
-            dbnsfp: EvidenceResult {
-                source: "dbNSFP".into(),
                 status: EvidenceStatus::NoExactMatch,
                 records: Vec::new(),
                 message: None,

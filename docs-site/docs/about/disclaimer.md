@@ -2,7 +2,7 @@
 
 Digital Genome Workstation is research software. It is not a medical device and is not intended for diagnosis, treatment selection, clinical reporting, or other patient-care decisions.
 
-Predicted consequences depend on the selected transcript models, tool versions, configurations, reference assembly, and database releases. ClinVar, COSMIC, and dbNSFP records require domain interpretation; a database match is not itself a clinical classification, and no exact match is not evidence of benignity.
+Predicted consequences depend on the selected transcript models, tool versions, configurations, reference assembly, and database releases. ClinVar and COSMIC records require domain interpretation; a database match is not itself a clinical classification, and no exact match is not evidence of benignity.
 
 Several changes may appear together on one genome track, but DGW currently evaluates them one allele at a time. Their combined transcript, protein, health, or disease consequence is not known from those independent annotations.
 

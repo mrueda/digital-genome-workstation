@@ -5,7 +5,7 @@
 - Strict-PASS b37 VCF import with automatic normalization of a private selected-sample copy, internal exact-ALT decomposition of multiallelic rows, optional INFO annotations, and phased or unphased diploid GT support.
 - Focused two-copy DNA reconstruction with explicit copy-unknown alleles.
 - Immutable SNV/short-indel edits, branches, bypass, and internal A/B pointers.
-- Per-allele Variant Consequences plus exact dbNSFP, ClinVar, and COSMIC evidence.
+- Per-allele Variant Consequences plus exact ClinVar, and COSMIC evidence.
 - Normalized VCF render with full provenance.
 - Linux and macOS desktop development path.
 
@@ -40,7 +40,7 @@
 - Benchmark and harden bulk Saturation near its experimental ceiling, add resumable resource-fingerprinted candidate caches, and retain a bounded downloadable audit artifact without transferring every comparison row into the live interface.
 - Verify export provenance against saved track, consolidation, and device-run records on each supported platform.
 - Publish versioned DGW Device API schemas for editing, analysis, and evidence devices.
-- Move built-in Genome Optimizer, Variant Consequences, dbNSFP, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
+- Move built-in Genome Optimizer, Variant Consequences, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
 - Present built-in editing, analysis, and evidence devices through one generic rack lifecycle and UI.
 - Formalize resource-pack manifests separately from executable device manifests.
 - Define external-device isolation, permissions, cancellation, failure handling, and reproducibility before enabling third-party execution.

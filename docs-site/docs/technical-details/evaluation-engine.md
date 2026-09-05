@@ -1,6 +1,6 @@
 # Evaluation Engine
 
-Within the user-facing DGW rack model, Variant Consequences, dbNSFP, ClinVar, and COSMIC are **Evidence** devices. They report different kinds of allele-level evidence, including predicted transcript consequences and computational scores. Their current implementations are built-in adapters, but they return structured results through a host-owned boundary rather than writing project state themselves.
+Within the user-facing DGW rack model, Variant Consequences, ClinVar, and COSMIC are **Evidence** devices. They report different kinds of allele-level evidence, including predicted transcript consequences and computational scores. Their current implementations are built-in adapters, but they return structured results through a host-owned boundary rather than writing project state themselves.
 
 Device behavior and biological resources are separate. The adapters are code; the registered Ensembl GFF3 and database snapshots belong to the resource pack. See [Device API and Resource Packs](device-api.md).
 
@@ -14,7 +14,7 @@ The complete request is sent as one batch because loading the Ensembl model domi
 
 ## Exact indexed lookup
 
-tabix queries the edited position in each database, after which DGW verifies contig, position, REF, and ALT itself. ClinVar and COSMIC INFO fields are parsed into structured records. The dbNSFP header supplies names for its tab-delimited score columns.
+tabix queries the edited position in each database, after which DGW verifies contig, position, REF, and ALT itself. ClinVar and COSMIC INFO fields are parsed into structured records.
 
 ## Cache contract
 

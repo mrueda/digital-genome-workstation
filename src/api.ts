@@ -41,7 +41,29 @@ import type {
   WorkspaceSnapshot
 } from "./types";
 
+export interface ResourceInstallProgress { stage: string; message: string; completedBytes: number; totalBytes: number }
+export interface ResourceInventory {
+  directory: string;
+  platform: string;
+  issues: string[];
+  releases: Array<{ id: string; name: string; version: string; assembly: string; platform: string; files: Array<{ bytes: number }> }>;
+  installed: Array<{ bundle: ResourceBundle; descriptor: string; ready: boolean; message: string }>;
+}
+
 export const api = {
+  resourceInventory: () => invoke<ResourceInventory>("resource_inventory"),
+  setResourceDirectory: (path: string) => invoke<void>("set_resource_directory", { path }),
+  registerResourceBundle: (path: string) => invoke<void>("register_resource_bundle", { path }),
+  installResourceRelease: (releaseId: string, onProgress: (progress: ResourceInstallProgress) => void) => {
+    const channel = new Channel<ResourceInstallProgress>();
+    channel.onmessage = onProgress;
+    return invoke<void>("install_resource_release", { releaseId, onProgress: channel });
+  },
+  installDownloadedPackages: (paths: string[], onProgress: (progress: ResourceInstallProgress) => void) => {
+    const channel = new Channel<ResourceInstallProgress>();
+    channel.onmessage = onProgress;
+    return invoke<void>("install_downloaded_packages", { paths, onProgress: channel });
+  },
   deviceCatalog: () => invoke<DeviceManifest[]>("device_catalog"),
   suggestedBundles: () => invoke<ResourceBundle[]>("suggested_development_bundles"),
   exampleFixture: (assembly: "b37" | "hg38", exampleId = "alleleEditing") =>

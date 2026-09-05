@@ -610,3 +610,9 @@ label > input, label > select { margin-top: 6px; }
   .workspace-map { display: none; }
   .setup-panel { padding-top: 22px; padding-bottom: 18px; gap: 12px; }
 }
+:root .resources-panel { display: grid; gap: 0.8rem; }
+.resource-assembly-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.resource-assembly-cards article { border: 1px solid currentColor; border-radius: 8px; padding: 1rem; }
+.resource-assembly-cards h4 { margin-top: 0; }
+.resource-location { overflow-wrap: anywhere; }
+.resources-panel progress { width: 100%; }

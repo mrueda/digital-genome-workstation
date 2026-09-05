@@ -2,7 +2,7 @@
 
 A resource bundle lists one compatible reference/tool core and any locally available Evidence resources. It is the first implementation of a DGW **resource pack**. v0.1 accepts `assembly: b37` and `assembly: hg38`. The project uses the reference FASTA naming convention internally and translates safe `1`/`chr1` and mitochondrial aliases for resources that declare another `contigStyle`. This changes names only, never coordinates or assemblies.
 
-Resource packs provide data and configured tool resources; they are not device code. Variant Consequences, dbNSFP, ClinVar, and COSMIC appear as Evidence devices in the rack, while the Ensembl GFF3 and indexed database releases are resources.
+Resource packs provide data and configured tool resources; they are not device code. Variant Consequences, ClinVar, and COSMIC appear as Evidence devices in the rack, while the Ensembl GFF3 and indexed database releases are resources.
 
 ## Required core
 
@@ -19,7 +19,6 @@ The Variant Consequences device and the Genome Optimizer's Saturation mode requi
 
 ## Optional database Evidence resources
 
-- Indexed dbNSFP resource with release and license labels.
 - Indexed ClinVar resource with release and license labels.
 - Indexed COSMIC resource with release and license labels.
 
@@ -42,12 +41,22 @@ cargo run -p dgw-core --example build_gene_index -- \
   https://example.org/genes.gtf.gz
 ```
 
-The DGW Starter template shows the four Evidence device slots. A consequence or database slot with no configured resource is unavailable and inert. It does not stop project creation, editing, or another configured device from running. An optimizer mode that requires a missing device reports that requirement and does not apply a partial edit batch.
+The DGW Starter template shows the three Evidence device slots. A consequence or database slot with no configured resource is unavailable and inert. It does not stop project creation, editing, or another configured device from running. An optimizer mode that requires a missing device reports that requirement and does not apply a partial edit batch.
 
 The onboarding editor accepts the bundle as JSON and validates the required core plus every optional resource that is present. Evidence indexes older than their data files produce warnings; the gene index is also checked against its GTF fingerprint, assembly, and contig style.
 
 The repository includes `config/local-hs37d5.development.json` and `config/local-hg38.development.json` for the existing `/media/mrueda/2TBS` stack. They are development profiles, not redistributable data bundles. The selected profile and fingerprint are pinned in each project; changing an existing project's assembly is not supported.
 
-DGW never downloads or includes these databases. COSMIC and every other third-party dataset remain subject to their own terms.
+DGW keeps application code, platform tools, and assembly data as separate artifacts. The current `dgw-data` release set contains:
 
-The public JSON contract remains schema version 1. The current contract is local and application-specific. A community-compatible resource-pack manifest still needs stable resource type IDs, versions, checksums, assembly/contig compatibility, license metadata, and matching rules for Device API requirements. External pack installation is not enabled yet.
+- one small bcftools/bgzip/tabix package for each supported platform;
+- one shared GRCh37 data package and one shared GRCh38 data package;
+- a release index that pins the archive checksum, internal-manifest checksum and unpacked size.
+
+Each data package contains the BGZF reference plus indexes, an archived ClinVar VCF plus index, the Ensembl GTF plus DGW gene index, and the Ensembl GFF3 used by `bcftools csq`. COSMIC is excluded and remains user-supplied. Data and tools retain their upstream terms; they are not relicensed under DGW's Apache license.
+
+In **Settings → Resources**, **Install downloaded packages** accepts exactly one assembly-data archive and the tool archive for the current computer. DGW recognizes only artifacts pinned in its release index. It verifies the complete archive, extracts into private staging, rejects links, path escapes, duplicates and undeclared files, then verifies every extracted file against the package manifest. Only a complete bundle is registered. Retrying reuses a verified extraction and never replaces a changed file.
+
+The installed project descriptor uses relative paths within that bundle. Existing projects keep their pinned resource descriptor; installing a newer resource package does not silently change them. The automatic download catalog remains empty until stable public URLs and redistribution review are complete.
+
+The public JSON contract remains schema version 1. Package manifests already record stable IDs, versions, checksums, assembly/contig compatibility, source URLs and license labels. A broader community resource-pack contract still needs matching rules for third-party Device API requirements; external device installation is not enabled yet.

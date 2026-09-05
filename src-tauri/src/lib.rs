@@ -1,3 +1,5 @@
+mod resource_archive;
+mod resources;
 use dgw_core::evaluation::normalize_variant;
 use dgw_core::{
     built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
@@ -606,7 +608,6 @@ fn project_resource_health(project_path: PathBuf) -> Result<ProjectResourceHealt
         None => file_health("genes", "Gene navigation", "", Vec::new(), false, false),
     });
     for (id, label, resource) in [
-        ("dbnsfp", "dbNSFP", &bundle.dbnsfp),
         ("clinvar", "ClinVar", &bundle.clinvar),
         ("cosmic", "COSMIC", &bundle.cosmic),
     ] {
@@ -1849,7 +1850,6 @@ fn start_track_evidence_profile_job(
 fn evidence_device_label(device_id: &str) -> &'static str {
     match device_id {
         CONSEQUENCE_DEVICE_ID => "Variant Consequences",
-        "org.dgw.builtin.dbnsfp" => "dbNSFP",
         "org.dgw.builtin.clinvar" => "ClinVar",
         "org.dgw.builtin.cosmic" => "COSMIC",
         _ => "Evidence",
@@ -2079,20 +2079,34 @@ fn render_track(
 }
 
 #[tauri::command]
-fn suggested_development_bundles() -> Result<Vec<ResourceBundle>, String> {
-    [
+fn suggested_development_bundles(app: tauri::AppHandle) -> Result<Vec<ResourceBundle>, String> {
+    let mut bundles = resources::registered_bundles(&app)?;
+    let mut assemblies = BTreeSet::new();
+    bundles.retain(|bundle| assemblies.insert(bundle.assembly.clone()));
+    let development: Vec<ResourceBundle> = [
         include_str!("../../config/local-hs37d5.development.json"),
         include_str!("../../config/local-hg38.development.json"),
     ]
     .into_iter()
     .map(|contents| serde_json::from_str(contents).map_err(error_text))
-    .collect()
+    .collect::<Result<_, _>>()?;
+    for bundle in development {
+        if bundle.reference_path.is_file()
+            && !bundles
+                .iter()
+                .any(|registered| registered.assembly == bundle.assembly)
+        {
+            bundles.push(bundle);
+        }
+    }
+    Ok(bundles)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(resources::ResourceInstaller(Mutex::new(())))
         .manage(AppState {
             evaluation: Arc::new(EvaluationService::new()),
             compute_pool: Arc::new(LocalComputePool::new()),
@@ -2100,6 +2114,11 @@ pub fn run() {
             cancelled_jobs: Arc::new(Mutex::new(BTreeSet::new())),
         })
         .invoke_handler(tauri::generate_handler![
+            resources::resource_inventory,
+            resources::set_resource_directory,
+            resources::register_resource_bundle,
+            resources::install_resource_release,
+            resources::install_downloaded_packages,
             inspect_vcf_file,
             validate_bundle,
             device_catalog,

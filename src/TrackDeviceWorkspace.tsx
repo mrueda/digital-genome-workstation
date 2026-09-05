@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
+import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Trash2, Plus, RotateCcw, Power, ZoomIn, ZoomOut, LocateFixed } from "lucide-react";
 import { focusViewport, panViewport, viewportSpan, zoomViewport } from "./genomeViewport";
 import { scoringInputState } from "./scoringInputs";
 import type { FocusContext, MorphOrdering, TrackMorphPreviewResult, VariantDensity } from "./types";
@@ -19,9 +20,9 @@ export type RackDeviceStatus =
   | "notComputed"
   | "resourceUnavailable";
 
-const DEFAULT_RACK_HEIGHT = 260;
+const DEFAULT_RACK_HEIGHT = 220;
 const MIN_RACK_HEIGHT = 160;
-const MIN_TRACK_DECK_HEIGHT = 230;
+const MIN_TRACK_DECK_HEIGHT = 300;
 const RACK_SEPARATOR_HEIGHT = 7;
 const CONTEXT_MENU_WIDTH = 250;
 const CONTEXT_MENU_ROW_HEIGHT = 34;
@@ -719,16 +720,18 @@ function TrackRail({
             aria-label={`${minimized ? "Expand" : "Minimize"} ${track.name}`}
             aria-pressed={minimized}
             title={minimized ? "Expand track" : "Minimize track"}
-          >{minimized ? "+" : "−"}</button>
-          <button type="button" onClick={onDuplicate} disabled={busy} title="Duplicate track">Duplicate</button>
+          >{minimized ? <ChevronDown aria-hidden="true" /> : <ChevronUp aria-hidden="true" />}</button>
+          <button type="button" onClick={onDuplicate} disabled={busy} title="Duplicate track" aria-label="Duplicate track"><Copy aria-hidden="true" /></button>
           <button
             type="button"
             className={track.visible ? "is-on" : ""}
             aria-pressed={track.visible}
+            aria-label={track.visible ? "Hide track" : "Show track"}
+            title={track.visible ? "Hide track" : "Show track"}
             onClick={() => onToggleVisibility(!track.visible)}
             disabled={busy}
           >
-            {track.visible ? "Shown" : "Hidden"}
+            {track.visible ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
           </button>
           {!isSource && <button
             type="button"
@@ -736,7 +739,8 @@ function TrackRail({
             onClick={onDelete}
             disabled={busy || !canDelete}
             title="Archive track"
-          >Delete</button>}
+            aria-label="Archive track"
+          ><Trash2 aria-hidden="true" /></button>}
         </div>
       </div>
 
@@ -1019,7 +1023,7 @@ function CompactDeviceCard({
         <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
           <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
           <span>
-            <small>{device.kind === "visualization" ? "visualize · track" : `evidence · ${device.kind}`}</small>
+            <small>{device.kind === "visualization" ? "visualize" : "evidence"}</small>
             <b>{device.name}</b>
           </span>
         </button>
@@ -1029,26 +1033,25 @@ function CompactDeviceCard({
           aria-pressed={!device.bypassed}
           aria-label={`${device.name} is ${device.bypassed ? "bypassed" : "active"}. Toggle device.`}
           onClick={() => onToggle?.(!device.bypassed)}
+          title={device.bypassed ? "Enable device" : "Bypass device"}
           disabled={!onToggle || disabled}
         >
-          {device.bypassed ? "Bypassed" : "Active"}
+          <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
         </button>
       </header>
 
-      <dl className="dgw-device-metadata is-compact">
-        <div><dt>Target</dt><dd>{rackTargetLabel(device.target)}</dd></div>
-        <div><dt>Status</dt><dd><span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span></dd></div>
-        {device.scoreInclusion && <div><dt>Objective</dt><dd><span className={`dgw-score-membership ${device.scoreInclusion}${device.bypassed ? " is-bypassed" : ""}`}>
+      <div className="dgw-device-status-line" aria-label="Device status">
+        <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
+        {device.scoreInclusion && <span className={`dgw-score-membership ${device.scoreInclusion}${device.bypassed ? " is-bypassed" : ""}`}>
           {device.scoreInclusion === "excluded"
             ? "Not in objective"
             : device.bypassed
               ? "Included · effective 0"
               : "Included"}
-        </span></dd></div>}
-      </dl>
+        </span>}
+      </div>
 
       <div className="dgw-compact-result" aria-live="polite">
-        <small>Result</small>
         <b>{running ? "Running…" : device.result ?? "No result yet"}</b>
       </div>
 
@@ -1065,6 +1068,7 @@ function CompactDeviceCard({
       <details className="dgw-device-details">
         <summary>Details</summary>
         <dl className="dgw-device-metadata">
+          <div><dt>Target</dt><dd>{rackTargetLabel(device.target)}</dd></div>
           <div><dt>Resource</dt><dd title={resource}>{resource}</dd></div>
         </dl>
         <p className="dgw-device-limitation"><b>Limit</b>{device.limitation ?? "Interpret this result only within the stated target."}</p>
@@ -1144,18 +1148,19 @@ function OptimizerDeviceCard({
           aria-pressed={!device.bypassed}
           aria-label={`${device.name ?? "Genome Optimizer"} is ${device.bypassed ? "bypassed" : "active"}. Toggle device.`}
           onClick={() => onBypass(!device.bypassed)}
+          title={device.bypassed ? "Enable device" : "Bypass device"}
           disabled={disabled}
         >
-          {device.bypassed ? "Bypassed" : "Active"}
+          <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
         </button>
       </header>
 
-      <dl className="dgw-device-metadata optimizer-metadata is-compact">
-        <div><dt>Target</dt><dd>{saturation
+      <div className="dgw-device-status-line" aria-label="Optimizer scope and status">
+        <span>{saturation
           ? `${selectedCount} selected ${selectedCount === 1 ? "position" : "positions"}`
-          : rackTargetLabel(device.target ?? "focusedRegion")}</dd></div>
-        <div><dt>Status</dt><dd><span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span></dd></div>
-      </dl>
+          : rackTargetLabel(device.target ?? "focusedRegion")}</span>
+        <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
+      </div>
 
       <div className="dgw-device-objective">
         <label>
@@ -1354,7 +1359,7 @@ function OptimizerDeviceCard({
             : settings.direction === "minimize"
               ? "Minimize removes eligible ALT copies by restoring REF. This minimizes distance from the reference; it does not claim that REF is benign."
               : "Maximize can reintroduce missing source-sample ALT copies; it measures reference distance and does not invent new alleles."}</p>
-          {saturation && <p>ClinVar is a fixed Pathogenic/Likely pathogenic exclusion guard. COSMIC and dbNSFP remain evidence only. A missing database match never means benign and never lowers the score.</p>}
+          {saturation && <p>ClinVar is a fixed Pathogenic/Likely pathogenic exclusion guard. COSMIC remain evidence only. A missing database match never means benign and never lowers the score.</p>}
           <p>{usesAnnotationWeights
             ? hasNoEffectiveWeight
               ? "No scoring input has a positive effective weight. Add or enable an included device, or raise an included weight."
@@ -1407,14 +1412,14 @@ function RandomizerDeviceCard({
         <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
       </button>
-      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
-        {device.bypassed ? "Bypassed" : "Active"}
+      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} title={device.bypassed ? "Enable device" : "Bypass device"} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
+        <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
       </button>
     </header>
-    <dl className="dgw-device-metadata optimizer-metadata is-compact">
-      <div><dt>Target</dt><dd>{selectedCount} selected {selectedCount === 1 ? "position" : "positions"}</dd></div>
-      <div><dt>Status</dt><dd><span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span></dd></div>
-    </dl>
+    <div className="dgw-device-status-line" aria-label="Selected positions and status">
+      <span>{selectedCount.toLocaleString()} selected {selectedCount === 1 ? "position" : "positions"}</span>
+      <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
+    </div>
     <div className="dgw-randomizer-controls">
       <label>
         <span>Mode</span>
@@ -1531,14 +1536,14 @@ function GenomeMorphDeviceCard({
         <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
       </button>
-      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
-        {device.bypassed ? "Bypassed" : "Active"}
+      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} title={device.bypassed ? "Enable device" : "Bypass device"} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
+        <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
       </button>
     </header>
-    <dl className="dgw-device-metadata optimizer-metadata is-compact">
-      <div><dt>Source</dt><dd>{track.name}</dd></div>
-      <div><dt>Target</dt><dd>{target?.name ?? "Choose another track"}</dd></div>
-    </dl>
+    <div className="dgw-device-status-line" aria-label="Morph source and status">
+      <span title={track.name}>From {track.name}</span>
+      <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
+    </div>
     <div className="dgw-randomizer-controls dgw-morph-controls">
       <label className="dgw-morph-target">
         <span>Target track</span>
@@ -1631,9 +1636,12 @@ function TrackMeterCard({
     : undefined;
   return <section className={`dgw-track-meter ${state}`} aria-label="Track Meter">
     <header>
-      <div><small>Selected track</small><b>Track Meter</b></div>
-      <span>{meter.evaluatedMutations}/{meter.activeMutations} mutations</span>
+      <div><small>Compared with source</small><b>Consequence impact</b></div>
     </header>
+    <div className="dgw-monitor-coverage" aria-label="Mutation evaluation coverage">
+      <span><b>{meter.evaluatedMutations.toLocaleString()}</b> / {meter.activeMutations.toLocaleString()} mutations evaluated</span>
+      <span>{meter.activeMutations === 0 ? "No active edits" : complete ? "Complete" : "Incomplete"}</span>
+    </div>
     {run && <section className={`dgw-monitor-device-run${run.active ? " is-active" : " is-bypassed"}`} aria-label={`${run.device} ${run.mode} result`}>
       <header><span>{run.device}</span><b>{run.mode} · {run.direction}</b></header>
       <div className="dgw-monitor-run-score">
@@ -1659,11 +1667,11 @@ function TrackMeterCard({
         {meanDelta !== undefined && <div className={`dgw-meter-fill ${meanDelta > 0 ? "positive" : "negative"}`} style={{ height: `${fill}%` }} />}
       </div>
       <div className="dgw-meter-readout">
-        <small>Mean consequence impact Δ / mutation</small>
+        <small>Mean Δ per mutation</small>
         <strong>{meanDelta === undefined ? "—" : `${meanDelta >= 0 ? "+" : ""}${meanDelta.toFixed(4)}`}</strong>
-        <span>{meanDelta === undefined ? "Evaluate every active mutation" : meanDelta > 0 ? "Average above source · red" : meanDelta < 0 ? "Average below source" : "Same average as source"}</span>
+        <span>{meanDelta === undefined ? meter.activeMutations === 0 ? "Edit a track to compare" : profiler?.status === "running" ? "Updating…" : "Awaiting complete evaluation" : meanDelta > 0 ? "Higher than source" : meanDelta < 0 ? "Lower than source" : "Unchanged from source"}</span>
         <div className="dgw-meter-total">
-          <span>Total Δ</span>
+          <span>Total Δ <small>model units</small></span>
           <b>{delta === undefined ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}`}</b>
         </div>
       </div>
@@ -1686,12 +1694,15 @@ function TrackMeterCard({
         <span>{device.label}</span><b>{device.bypassed ? "Bypassed" : (device.errors ?? 0) > 0 ? "Error" : (device.unavailable ?? 0) > 0 ? "Unavailable" : `${device.evaluated}/${device.total}`}</b>
       </div>)}
     </div>
-    <div className="dgw-meter-edits">
+    <details className="dgw-monitor-details">
+      <summary>Individual edits</summary>
+      <div className="dgw-meter-edits">
       {meter.items.length === 0 ? <p>No active mutation blocks yet.</p> : meter.items.map((item) => <div className={`${item.enabled ? "" : "bypassed"}${item.evaluated ? " evaluated" : ""}`} key={item.editId}>
         <span>{item.label}</span>
         <b>{!item.enabled ? "bypassed" : item.impactDelta === undefined ? item.evaluated ? "profiled" : "not evaluated" : `${item.impactDelta >= 0 ? "+" : ""}${item.impactDelta.toFixed(2)}`}</b>
       </div>)}
-    </div>
+      </div>
+    </details>
     <div className="dgw-profiler-actions">
       <div>
         <div className="dgw-profiler-heading">
@@ -1721,6 +1732,11 @@ function TrackMeterCard({
       </button>
     </div>
     <p className="dgw-meter-limit">Additive allele-level signal. It is not disease probability and does not model combined effects.</p>
+    <details className="dgw-monitor-details">
+      <summary>How to read this</summary>
+      <p>Mean Δ is the total source-relative consequence-impact change divided by the number of active mutations. Total Δ also depends on how many mutations are active. These values appear only when all active mutations have been evaluated and an impact result is available.</p>
+      <p>Higher and lower refer to the consequence model, not health. Database coverage is shown separately and is not added to this meter.</p>
+    </details>
   </section>;
 }
 
@@ -2075,20 +2091,23 @@ function DeviceRack({
   return (
     <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}`} data-context-help="device-rack">
       <div className="dgw-device-rack-title">
-        <div><span>Device rack</span><small>{track.name} · {rackTemplateName} · full device panels in applied order</small></div>
+        <div><span>Device rack</span><small title={rackTemplateName}>{track.name}</small></div>
         <div className="dgw-device-rack-actions">
-          <button type="button" onClick={openDeviceBrowser} disabled={busy}>+ Add device</button>
+          <button type="button" onClick={openDeviceBrowser} disabled={busy}><Plus aria-hidden="true" /> Add device</button>
           <button
             type="button"
             onClick={() => selectedItem && onResetDevice?.(selectedItem.device.id)}
             disabled={busy || selectedDeviceRunning || !selectedDeviceCanReset || !onResetDevice}
             title={!selectedDeviceCanReset ? "The selected device has no adjustable state" : "Restore factory controls and discard the current uncommitted result"}
-          >Reset selected</button>
+            aria-label="Reset selected"
+          ><RotateCcw aria-hidden="true" /></button>
           <button
             type="button"
             onClick={() => selectedItem && onRemoveDevice?.(selectedItem.device.id)}
             disabled={busy || !selectedItem || !onRemoveDevice}
-          >Remove selected</button>
+            title="Remove selected device"
+            aria-label="Remove selected device"
+          ><Trash2 aria-hidden="true" /></button>
         </div>
       </div>
 
@@ -2382,11 +2401,12 @@ export function TrackDeviceWorkspace({
       >
       <div className="dgw-track-deck" onWheel={handleTrackWheel}>
         <header className="dgw-track-deck-header">
-          <div>
-            <span>Genome tracks</span>
-            <small><b>◇</b> lollipop = VCF allele · rectangle = mutation block</small>
-            <small>Drag across the active lane to select lollipops · Ctrl-click toggles one.</small>
-            <small>Ctrl/⌘ + wheel zooms · Shift + wheel pans laterally.</small>
+          <div className="dgw-track-heading">
+            <span>Tracks <b className="dgw-edit-target" title="Edits and devices act on this selected track">{selectedTrack?.name}</b></span>
+            <details className="dgw-track-help">
+              <summary>Track help</summary>
+              <div>Diamonds mark VCF alleles; rectangles mark mutation blocks. Drag across the active lane to select alleles; Ctrl/⌘-click toggles one. Ctrl/⌘ + wheel zooms; Shift + wheel pans.</div>
+            </details>
           </div>
           <div className="dgw-viewport-controls" aria-label="Horizontal genome zoom controls">
             {!showDeviceRack && !detailPanel && <button
@@ -2396,18 +2416,18 @@ export function TrackDeviceWorkspace({
               disabled={!onShowDeviceRack}
               title="Restore the Device Rack below the genome tracks"
             >Show devices</button>}
-            <button type="button" onClick={() => pan(-0.35)} disabled={busy || !onViewportChange} title="Pan left">‹</button>
-            <button type="button" onClick={() => zoom(1.6)} disabled={busy || !onViewportChange} title="Zoom out">−</button>
-            <code>{region.contig}:{region.start.toLocaleString()}–{region.end.toLocaleString()} <small>{span.toLocaleString()} bp</small></code>
-            <button type="button" onClick={() => zoom(0.625)} disabled={busy || !onViewportChange} title="Zoom in">+</button>
-            <button type="button" onClick={() => pan(0.35)} disabled={busy || !onViewportChange} title="Pan right">›</button>
+            <button type="button" onClick={() => pan(-0.35)} disabled={busy || !onViewportChange} title="Pan left" aria-label="Pan left"><ChevronLeft aria-hidden="true" /></button>
+            <button type="button" onClick={() => zoom(1.6)} disabled={busy || !onViewportChange} title="Zoom out" aria-label="Zoom out"><ZoomOut aria-hidden="true" /></button>
+            <code title={`${region.contig}:${region.start.toLocaleString()}–${region.end.toLocaleString()}`}>{span.toLocaleString()} bp</code>
+            <button type="button" onClick={() => zoom(0.625)} disabled={busy || !onViewportChange} title="Zoom in" aria-label="Zoom in"><ZoomIn aria-hidden="true" /></button>
+            <button type="button" onClick={() => pan(0.35)} disabled={busy || !onViewportChange} title="Pan right" aria-label="Pan right"><ChevronRight aria-hidden="true" /></button>
             <button
               type="button"
               className="fit"
               onClick={() => selectedPosition !== undefined && updateViewport(focusViewport(region, selectedPosition, contigLength))}
               disabled={busy || !onViewportChange || selectedPosition === undefined}
               title="Fit selected allele (0)"
-            >Fit allele</button>
+            ><LocateFixed aria-hidden="true" /> Fit allele</button>
             <span className="dgw-selection-controls" aria-label="Allele selection controls">
               <output
                 className={`dgw-selection-count${semanticSelectedAlleleCount === 0 ? " is-empty" : ""}${selectionExtendsBeyondView ? " has-offscreen" : ""}`}

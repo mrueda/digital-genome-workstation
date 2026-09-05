@@ -21,7 +21,7 @@ Overlapping active edits on one haplotype are rejected unless an operation expli
 
 ## Evaluation
 
-The normalized key `(assembly, contig, position, REF, ALT)` is the evaluation unit. A single serialized SnpEff process remains open across requests; VCF IDs correlate request and response records. dbNSFP, ClinVar, and COSMIC are queried independently by exact normalized allele through tabix. Cache identities include the variant key and resource-bundle fingerprint. Errors and unavailable resources are not cached.
+The normalized key `(assembly, contig, position, REF, ALT)` is the evaluation unit. A single serialized SnpEff process remains open across requests; VCF IDs correlate request and response records. ClinVar, and COSMIC are queried independently by exact normalized allele through tabix. Cache identities include the variant key and resource-bundle fingerprint. Errors and unavailable resources are not cached.
 
 Imported `ANN` and INFO values remain frozen source evidence. Live evaluation is labelled separately. New and edited alleles never inherit measurements such as DP or AD from their source allele.
 

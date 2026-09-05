@@ -28,7 +28,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(230px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 260px));
+  grid-template-rows: minmax(300px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 220px));
 }
 
 .dgw-workspace-main.hide-device-rack {
@@ -36,7 +36,7 @@
 }
 
 .dgw-workspace-main.allele-detail-open:not(.hide-device-rack) {
-  grid-template-rows: minmax(230px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 260px));
+  grid-template-rows: minmax(300px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 220px));
 }
 
 .dgw-track-device-workspace button,
@@ -85,13 +85,24 @@
 }
 
 .dgw-track-deck-header {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  padding: 7px 10px;
 }
 
 .dgw-track-deck-header > div:first-child {
-  min-width: 150px;
-  flex: 1 1 190px;
+  min-width: 0;
 }
+
+.dgw-track-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dgw-track-heading > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dgw-edit-target { margin-left: 8px; color: var(--tdw-accent); font-size: 11px; font-weight: 500; text-transform: none; letter-spacing: normal; }
+.dgw-track-help { position: relative; flex: 0 0 auto; color: var(--tdw-muted); font-size: 10px; }
+.dgw-track-help summary { cursor: pointer; }
+.dgw-track-help > div { position: absolute; right: 0; top: 22px; z-index: 20; width: min(300px, 65vw); padding: 12px; border: 1px solid var(--tdw-line); border-radius: 6px; background: var(--theme-surface); color: var(--theme-text); font-size: 12px; line-height: 1.5; box-shadow: 0 5px 16px #0003; }
 
 .dgw-track-deck-header > div > span,
 .dgw-device-rack-title > div > span {
@@ -146,6 +157,7 @@
   max-width: 100%;
   flex: 0 1 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
@@ -177,7 +189,7 @@
 }
 
 .dgw-viewport-controls code {
-  min-width: 132px;
+  min-width: 60px;
   overflow: hidden;
   text-align: center;
   text-overflow: ellipsis;
@@ -208,6 +220,9 @@
 
 .dgw-selection-controls {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  box-sizing: border-box;
   align-items: center;
   gap: 3px;
   margin-left: 4px;
@@ -426,7 +441,9 @@
 }
 
 .dgw-track-actions button {
-  padding: 4px 6px;
+  padding: 5px;
+  min-width: 28px;
+  min-height: 28px;
   font-size: 7px;
 }
 
@@ -2210,7 +2227,7 @@ button.allele-roll-cell:hover {
 .dgw-meter-readout small,
 .dgw-meter-readout span {
   color: var(--tdw-muted);
-  font-size: 7px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -2232,7 +2249,7 @@ button.allele-roll-cell:hover {
 
 .dgw-meter-total b {
   color: var(--theme-text);
-  font-size: 9px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2294,7 +2311,7 @@ button.allele-roll-cell:hover {
 
 .dgw-meter-devices {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
   background: var(--tdw-line-soft);
 }
@@ -2305,8 +2322,24 @@ button.allele-roll-cell:hover {
   gap: 5px;
   padding: 6px 7px;
   background: var(--theme-surface);
-  font-size: 7px;
+  font-size: 11px;
 }
+
+.dgw-monitor-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 7px 9px;
+  color: var(--theme-text-muted);
+  border-bottom: 1px solid var(--tdw-line-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.dgw-monitor-coverage b { color: var(--theme-text); }
+.dgw-monitor-details { border-top: 1px solid var(--tdw-line-soft); font-size: 11px; color: var(--theme-text-muted); }
+.dgw-monitor-details > summary { padding: 9px; cursor: pointer; }
+.dgw-monitor-details > p { margin: 0; padding: 0 9px 9px; line-height: 1.5; }
 
 .dgw-meter-devices span { color: var(--tdw-muted); }
 .dgw-meter-devices b { color: var(--theme-text); }
@@ -2509,6 +2542,27 @@ button.allele-roll-cell:hover {
   gap: 1px;
   padding: 0;
   background: var(--tdw-line-soft);
+}
+
+.dgw-device-status-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--tdw-line-soft);
+  color: var(--theme-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.dgw-device-status-line > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dgw-device-status-line .dgw-rack-status,
+.dgw-device-status-line .dgw-score-membership {
+  font-size: 10px;
 }
 
 .dgw-device-metadata.is-compact > div {
@@ -2764,6 +2818,27 @@ button.allele-roll-cell:hover {
   padding: 5px 7px;
   color: var(--tdw-accent);
   font-size: 8px;
+}
+
+/* Icons follow the workstation's interface scale and theme colour. */
+.lucide {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  pointer-events: none;
+}
+button:has(> .lucide) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  min-width: 28px;
+}
+button:has(> .lucide):focus-visible {
+  outline: 2px solid var(--tdw-accent, currentColor);
+  outline-offset: 2px;
 }
 
 .dgw-bypass.is-active {

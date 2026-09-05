@@ -97,14 +97,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Variant Consequences",
         evaluation.consequence.status.clone(),
     )?;
-    require_usable_evidence("dbNSFP", evaluation.dbnsfp.status.clone())?;
     require_usable_evidence("ClinVar", evaluation.clinvar.status.clone())?;
     require_usable_evidence("COSMIC", evaluation.cosmic.status.clone())?;
     println!(
-        "evaluation={} consequences={:?} dbnsfp={:?} clinvar={:?} cosmic={:?}",
+        "evaluation={} consequences={:?} clinvar={:?} cosmic={:?}",
         variant.key.display(),
         evaluation.consequence.status,
-        evaluation.dbnsfp.status,
         evaluation.clinvar.status,
         evaluation.cosmic.status
     );
@@ -182,7 +180,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     require(
         reevaluated.cache_key == evaluation.cache_key
             && reevaluated.consequence == evaluation.consequence
-            && reevaluated.dbnsfp == evaluation.dbnsfp
             && reevaluated.clinvar == evaluation.clinvar
             && reevaluated.cosmic == evaluation.cosmic,
         "re-evaluation after reopening did not reuse equivalent device evidence",

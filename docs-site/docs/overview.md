@@ -57,7 +57,7 @@ A device changes one experimental track while leaving its source intact. Bypassi
 The rack has four device roles:
 
 - **Edit** devices propose reversible changes. Mutation Generator is the first built-in example.
-- **Evidence** devices report allele annotations, predictions, classifications, or observations. Variant Consequences, dbNSFP, ClinVar, and COSMIC fill this group.
+- **Evidence** devices report allele annotations, predictions, classifications, or observations. Variant Consequences, ClinVar, and COSMIC fill this group.
 - **Analyze** devices apply an explicit model to one or more track inputs. Genome Optimizer is the first built-in example and emits ordinary reversible proposals.
 - **Visualize** devices present track state and available results without proposing edits or contributing to an objective. Variant Map is the first built-in example.
 
@@ -65,7 +65,7 @@ Device code is separate from its resource pack. For example, Variant Consequence
 
 All built-ins appear in the function-grouped Device Browser, opened through **Create → Add Device** or the rack's add button. The selected track's Device Rack remains below the tracks and shows the full panels of only the instances applied to that track, arranged horizontally in order. The grouping describes purpose; it does not imply that outputs flow through an audio-like signal chain.
 
-The built-in **DGW Starter** project template pre-applies Mutation Generator, Variant Consequences, dbNSFP, ClinVar, COSMIC, Genome Optimizer, and Variant Map in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them; Variant Map is read-only. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
+The built-in **DGW Starter** project template pre-applies Mutation Generator, Variant Consequences, ClinVar, COSMIC, Genome Optimizer, and Variant Map in functional order. Mutation Generator and Genome Optimizer remain inert until the user explicitly previews/applies or runs them; Variant Map is read-only. **File → New from Template** also offers an **Empty** project. These project-creation choices are separate from the Device Browser and provide an immediately understandable first-run workstation.
 
 The **Genome Optimizer** is an implemented experimental device with two modes:
 
@@ -79,7 +79,7 @@ Its remaining controls define:
 - **Minimize** or **Maximize** for the displayed model; and
 - a maximum number of edits or positions for one run.
 
-In Conservative mode, Minimize proposes reference restorations only for active alleles that exactly match the immutable source VCF. Maximize only reintroduces exact original-source alleles that are currently absent. In Saturation mode, transcript-consequence impact is the comparable ranking signal across every candidate. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by a fixed guard where that guard applies; no match remains unknown. COSMIC and dbNSFP matches are reported as evidence context but do not lower the score. Unsupported non-SNV positions and incomplete three-ALT comparisons are excluded rather than guessed.
+In Conservative mode, Minimize proposes reference restorations only for active alleles that exactly match the immutable source VCF. Maximize only reintroduces exact original-source alleles that are currently absent. In Saturation mode, transcript-consequence impact is the comparable ranking signal across every candidate. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by a fixed guard where that guard applies; no match remains unknown. COSMIC matches are reported as evidence context but do not lower the score. Unsupported non-SNV positions and incomplete three-ALT comparisons are excluded rather than guessed.
 
 The faders and knob adjust the model, not the nucleotides. Output alleles remain discrete: for example, `A` or `T`, never a continuous mixture of the two. Every accepted proposal becomes an ordinary visible, bypassable edit block on the selected track.
 
@@ -97,7 +97,7 @@ All current devices are built into DGW. External community-device installation a
 
 ## Prediction and evidence stay separate
 
-Variant Consequences predicts transcript effects with `bcftools csq`. dbNSFP supplies computational scores for exact alleles. ClinVar and COSMIC report previously observed or curated evidence. DGW never treats “not found” as “benign.” Imported VCF INFO annotations are ignored; all displayed evidence comes from the currently configured resources.
+Variant Consequences predicts transcript effects with `bcftools csq`. ClinVar and COSMIC report previously observed or curated evidence. DGW never treats “not found” as “benign.” Imported VCF INFO annotations are ignored; all displayed evidence comes from the currently configured resources.
 
 ## Current boundary
 

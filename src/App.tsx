@@ -86,7 +86,6 @@ function messageOf(error: unknown): string {
 
 const DEVICE_IDS = {
   consequence: "org.dgw.builtin.variant-consequences",
-  dbnsfp: "org.dgw.builtin.dbnsfp",
   clinvar: "org.dgw.builtin.clinvar",
   cosmic: "org.dgw.builtin.cosmic",
   randomizer: "org.dgw.builtin.mutation-generator",
@@ -144,7 +143,7 @@ function variantKeyId(key: VariantKey) {
   return `${key.assembly}:${key.contig}:${key.position}:${key.reference}:${key.alternate}`;
 }
 
-const alleleDeviceIds = [DEVICE_IDS.consequence, DEVICE_IDS.dbnsfp, DEVICE_IDS.clinvar, DEVICE_IDS.cosmic];
+const alleleDeviceIds = [DEVICE_IDS.consequence, DEVICE_IDS.clinvar, DEVICE_IDS.cosmic];
 const rackCompactDeviceIds = [...alleleDeviceIds, DEVICE_IDS.variantMap];
 const dgwStarterDeviceIds = [DEVICE_IDS.randomizer, DEVICE_IDS.morph, ...alleleDeviceIds, DEVICE_IDS.optimizer, DEVICE_IDS.variantMap];
 
@@ -298,7 +297,6 @@ function evidenceSummary(evidence?: EvidenceResult) {
 function evaluationEvidence(result: EvaluationResult): DeviceEvidenceMap {
   return {
     [DEVICE_IDS.consequence]: result.consequence,
-    [DEVICE_IDS.dbnsfp]: result.dbnsfp,
     [DEVICE_IDS.clinvar]: result.clinvar,
     [DEVICE_IDS.cosmic]: result.cosmic
   };
@@ -517,15 +515,18 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
   }
 
   useEffect(() => {
-    api.suggestedBundles()
+    const refreshResources = () => { void api.suggestedBundles()
       .then((values) => {
         const value = values.find((candidate) => candidate.assembly === "b37") ?? values[0];
         setBundles(values);
         setBundle(value);
-        setBundleText(JSON.stringify(value, null, 2));
-        setStatus("Choose a reference profile, then select a VCF.");
+        setBundleText(value ? JSON.stringify(value, null, 2) : "");
+        setStatus(value ? "Choose a reference profile, then select a VCF." : "Open Settings → Resources to install or register genome resources.");
       })
-      .catch((error) => setStatus(`DGW must run inside the Tauri desktop shell: ${messageOf(error)}`));
+      .catch((error) => setStatus(`Could not load resources: ${messageOf(error)}`)); };
+    refreshResources();
+    window.addEventListener("dgw-resources-changed", refreshResources);
+    return () => window.removeEventListener("dgw-resources-changed", refreshResources);
   }, []);
 
   const filteredSamples = useMemo(() => {
@@ -746,7 +747,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         </div>
 
         <details className="resource-editor">
-          <summary><span>Resource bundle</span><small>{bundle?.id ?? "not loaded"}</small></summary>
+          <summary><span>Advanced resource configuration</span><small>{bundle?.id ?? "not loaded"}</small></summary>
           <textarea value={bundleText} onChange={(event) => setBundleText(event.target.value)} spellCheck={false} />
           <button className="button secondary" onClick={validateResources} disabled={busy || !bundleText}>Validate paths</button>
         </details>
@@ -1571,7 +1572,6 @@ function Workstation({
   }, [context.contig, contextMidpoint, variantContigs, variantBinsByScope, variantNavigationLoading]);
   const evidenceByDevice = useMemo<Record<string, EvidenceResult | undefined>>(() => ({
     [DEVICE_IDS.consequence]: deviceEvaluations[DEVICE_IDS.consequence] ?? evaluation?.consequence,
-    [DEVICE_IDS.dbnsfp]: deviceEvaluations[DEVICE_IDS.dbnsfp] ?? evaluation?.dbnsfp,
     [DEVICE_IDS.clinvar]: deviceEvaluations[DEVICE_IDS.clinvar] ?? evaluation?.clinvar,
     [DEVICE_IDS.cosmic]: deviceEvaluations[DEVICE_IDS.cosmic] ?? evaluation?.cosmic
   }), [deviceEvaluations, evaluation]);
@@ -1579,7 +1579,6 @@ function Workstation({
     const bundle = snapshot.manifest.resourceBundle;
     const order = new Map<string, number>([
       [DEVICE_IDS.consequence, 10],
-      [DEVICE_IDS.dbnsfp, 20],
       [DEVICE_IDS.clinvar, 30],
       [DEVICE_IDS.cosmic, 40],
       [DEVICE_IDS.variantMap, 60]
@@ -1598,8 +1597,6 @@ function Workstation({
           ? "Current track state and Track Monitor results"
           : manifest.id === DEVICE_IDS.consequence
           ? bundle.consequenceAnnotation?.release ?? "Transcript annotation not configured"
-          : manifest.id === DEVICE_IDS.dbnsfp
-            ? bundle.dbnsfp.release
             : manifest.id === DEVICE_IDS.clinvar
               ? bundle.clinvar.release
               : bundle.cosmic.release;
@@ -1608,8 +1605,6 @@ function Workstation({
           ? "visualization"
           : manifest.id === DEVICE_IDS.consequence
           ? "annotation"
-          : manifest.id === DEVICE_IDS.dbnsfp
-            ? "prediction"
             : "evidence";
         const running = runningDeviceId === manifest.id || runningDeviceId === "all";
         const scoringInput = optimizerWeights.find((input) => input.sourceDeviceId === manifest.id)
@@ -1768,7 +1763,6 @@ function Workstation({
       : undefined;
     const labels = new Map([
       [DEVICE_IDS.consequence, "Variant Consequences"],
-      [DEVICE_IDS.dbnsfp, "dbNSFP"],
       [DEVICE_IDS.clinvar, "ClinVar"],
       [DEVICE_IDS.cosmic, "COSMIC"]
     ]);

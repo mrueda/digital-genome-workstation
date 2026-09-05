@@ -19,7 +19,7 @@ const guideLinks = [
   {
     label: 'Interpret',
     title: 'Use analysis and evidence devices',
-    text: 'Inspect live transcript consequences and exact dbNSFP, ClinVar, and COSMIC matches, with resource versions recorded.',
+    text: 'Inspect live transcript consequences and exact ClinVar, and COSMIC matches, with resource versions recorded.',
     to: '/docs/usage/evaluate-alleles',
   },
   {
@@ -69,7 +69,7 @@ export default function Home() {
               <div className={styles.sequence}><b>COPY</b><code>TCCTTTACTT <em>T</em>CTACACCTC AGA</code></div>
               <div className={styles.variant}><span>A › T</span><strong>BRAF · p.Val600Glu</strong></div>
               <div className={styles.evidence}>
-                <span>Consequences <b>found</b></span><span>dbNSFP <b>found</b></span>
+                <span>Consequences <b>found</b></span><span>ClinVar <b>found</b></span>
                 <span>ClinVar <b>found</b></span><span>COSMIC <b>found</b></span>
               </div>
               <div className={styles.states}><i /> device active <i /> edit visible <i className={styles.branch} /> bypass to compare</div>

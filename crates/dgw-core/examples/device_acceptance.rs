@@ -11,9 +11,8 @@ use std::env;
 use std::fs::File;
 use std::path::PathBuf;
 
-const EVIDENCE_DEVICES: [&str; 4] = [
+const EVIDENCE_DEVICES: [&str; 3] = [
     CONSEQUENCE_DEVICE_ID,
-    "org.dgw.builtin.dbnsfp",
     "org.dgw.builtin.clinvar",
     "org.dgw.builtin.cosmic",
 ];

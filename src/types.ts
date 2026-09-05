@@ -51,7 +51,6 @@ export interface ResourceBundle {
   bcftoolsVersion: string;
   bgzipPath: string;
   tabixPath: string;
-  dbnsfp: IndexedResource;
   clinvar: IndexedResource;
   cosmic: IndexedResource;
   geneAnnotation?: GeneAnnotationResource;
@@ -62,7 +61,7 @@ export interface ResourceBundle {
 export type ResourceHealthStatus = "ready" | "warning" | "missing" | "notConfigured" | "error";
 
 export interface ResourceHealthItem {
-  id: "toolchain" | "reference" | "consequence" | "genes" | "dbnsfp" | "clinvar" | "cosmic";
+  id: "toolchain" | "reference" | "consequence" | "genes" | "clinvar" | "cosmic";
   label: string;
   status: ResourceHealthStatus;
   summary: string;
@@ -567,7 +566,6 @@ export interface EvaluationResult {
   variant: VariantKey;
   cacheKey: string;
   consequence: EvidenceResult;
-  dbnsfp: EvidenceResult;
   clinvar: EvidenceResult;
   cosmic: EvidenceResult;
   evaluatedAt: string;
