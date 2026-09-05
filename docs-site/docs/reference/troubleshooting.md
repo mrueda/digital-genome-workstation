@@ -1,5 +1,13 @@
 # Troubleshooting
 
+## Export reports that the destination exists
+
+Choose a new filename outside the `.dgw` project directory. Desktop and MCP exports refuse to replace an existing VCF, FASTA, or associated sidecar. Export finishes before reporting success; do not read its output while the job is still running. A process crash can leave partial files, so use another filename when retrying an interrupted export.
+
+## Morph asks for another preview
+
+Morph captures both participating track states, including bypass choices. If either changes, generate a fresh preview before applying. Pending previews created by older versions may also need regeneration; previously applied edits remain available.
+
 ## Tauri cannot find GTK or WebKitGTK
 
 On Ubuntu/Debian:

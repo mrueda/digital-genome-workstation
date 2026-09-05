@@ -8,9 +8,10 @@ use dgw_core::{
     GenomeTrack, Haplotype, LocalComputePool, OptimizerAlleleEvidenceInput, OptimizerDirection,
     OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest, ProcessProgress, Project,
     ProjectSnapshot, RandomizerPlan, RandomizerPreviewResult, RandomizerRequest, ResourceBundle,
-    SaturationAlleleInput, SelectionResolution, TrackMorphRequest, TransportTargetRequest,
-    TransportTargetResult, VariantContigSummary, VariantDensity, VariantNavigationBin, VariantPage,
-    VariantSelection, VcfInspection, WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
+    SaturationAlleleInput, SelectionResolution, TrackMorphPreviewResult, TrackMorphRequest,
+    TransportTargetRequest, TransportTargetResult, VariantContigSummary, VariantDensity,
+    VariantNavigationBin, VariantPage, VariantSelection, VcfInspection, WorkspaceSnapshot,
+    CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -230,24 +231,6 @@ struct CompoundLayerApplyResult {
 }
 
 const RANDOMIZER_INTERACTIVE_MATERIALIZATION_LIMIT: u32 = 1_000;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackMorphPreviewResult {
-    source_track_id: String,
-    source_state_id: String,
-    target_track_id: String,
-    target_state_id: String,
-    amount: u8,
-    differing_positions: u32,
-    differing_alleles: u32,
-    selected_positions: u32,
-    generated_edits: u32,
-    no_op_reason: Option<String>,
-    limitation: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    compound_layer_id: Option<String>,
-}
 
 fn resolve_randomizer_request(
     project: &Project,
@@ -702,7 +685,16 @@ fn export_focus_fasta(
     output_path: PathBuf,
 ) -> Result<FocusFastaExport, String> {
     Project::open(project_path)
-        .and_then(|project| project.export_focus_fasta(&track_id, context, output_path))
+        .and_then(|project| {
+            let track = project.track(&track_id)?;
+            project.export_focus_fasta_at_head(
+                &track_id,
+                &track.head_state_id,
+                &track.bypassed_edit_ids,
+                context,
+                output_path,
+            )
+        })
         .map_err(error_text)
 }
 
@@ -1416,8 +1408,10 @@ fn start_track_morph_preview_job(
         worker_threads: 1,
         request: serde_json::json!({
             "sourceStateId": &source_track.head_state_id,
+            "sourceBypassedEditIds": &source_track.bypassed_edit_ids,
             "targetTrackId": &target_track_id,
             "targetStateId": &target_track.head_state_id,
+            "targetBypassedEditIds": &target_track.bypassed_edit_ids,
             "morph": &request,
         }),
         result: None,
@@ -1451,6 +1445,9 @@ fn start_track_morph_preview_job(
         let job_id = job.id.clone();
         let cancelled = || job_was_cancelled(&cancelled_jobs, &job_id);
         let outcome = (|| -> Result<TrackMorphPreviewResult, String> {
+            project
+                .validate_morph_tracks(&source_track, &target_track)
+                .map_err(error_text)?;
             if cancelled() {
                 return Err("__cancelled__".into());
             }
@@ -1496,6 +1493,9 @@ fn start_track_morph_preview_job(
                 ),
             )?;
             let plan = plan_track_morph(&source, &target, &request).map_err(error_text)?;
+            project
+                .validate_morph_tracks(&source_track, &target_track)
+                .map_err(error_text)?;
             let mut compound_layer_id = None;
             if !plan.changes.is_empty() {
                 if cancelled() {
@@ -1521,10 +1521,9 @@ fn start_track_morph_preview_job(
                     plan.selected_positions
                 );
                 let layer = project
-                    .stage_compound_mutation_layer(
-                        &track_id,
-                        &source_track.head_state_id,
-                        "org.dgw.builtin.genome-morph",
+                    .stage_morph_layer(
+                        &source_track,
+                        &target_track,
                         plan.selected_positions,
                         &plan.changes,
                         Some(note),
@@ -2065,7 +2064,17 @@ fn render_track(
     output_path: PathBuf,
 ) -> Result<PathBuf, String> {
     Project::open(project_path)
-        .and_then(|project| project.render_track(&track_id, output_path))
+        .and_then(|project| {
+            let track = project.track(&track_id)?;
+            project
+                .export_track_vcf_at_head(
+                    &track_id,
+                    &track.head_state_id,
+                    &track.bypassed_edit_ids,
+                    output_path,
+                )
+                .map(|export| export.vcf_path)
+        })
         .map_err(error_text)
 }
 

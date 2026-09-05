@@ -173,4 +173,4 @@ A result should include:
 - candidates evaluated, exclusions, ties, proposed changes, $S_{\mathrm{before}}$, $S_{\mathrm{after}}$, and $\Delta S$;
 - the limitations listed above.
 
-Formal immutable storage of all these fields is planned. Current project history stores the resulting edits, but it is not yet a complete reproducible optimizer-run record.
+Terminal device runs now have immutable records for their declared inputs, resource context, request, result summary, and output edit IDs or staged layer ID. The workstation session separately restores current controls and displayed plans. Bulk results retain aggregate counts and scores rather than every candidate comparison row, so the run ledger is not a complete candidate table.

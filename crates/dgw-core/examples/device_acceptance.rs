@@ -168,6 +168,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         updated_at: now,
     };
     project.save_background_job(&profile_job)?;
+    project.persist_terminal_device_run(&profile_job)?;
+    let expected_run = project.device_run(&profile_job.id)?;
 
     let optimizer_track = project.duplicate_track(&base_track.id, "Saturation acceptance")?;
     let optimizer_current = project.effective_variants_for_track(&optimizer_track.id)?;
@@ -298,8 +300,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("saturation_repeat=no-op");
 
     let expected_optimizer_variants = project.effective_variants_for_track(&optimizer_track.id)?;
+    let session = serde_json::json!({
+        "schemaVersion": 1,
+        "appliedDevicesByTrack": { &randomizer_track.id: &device_ids },
+        "bypassedDevicesByTrack": { &randomizer_track.id: ["org.dgw.builtin.cosmic"] },
+        "selectedDeviceId": "org.dgw.builtin.mutation-generator"
+    });
+    project.save_workstation_session(&session)?;
+    let expected_tracks = project.list_tracks()?;
     drop(project);
     let reopened = Project::open(&project_path)?;
+    require(
+        reopened.list_tracks()? == expected_tracks,
+        "track metadata changed after reopening",
+    )?;
+    require(
+        reopened.workstation_session()? == Some(session.clone()),
+        "rack session changed after reopening",
+    )?;
+    require(
+        reopened.device_run(&profile_job.id)? == expected_run,
+        "immutable run changed after reopening",
+    )?;
+    let copied = reopened.save_copy(project_path.with_extension("copy.dgw"))?;
+    require(
+        copied.workstation_session()? == Some(session),
+        "rack session missing in Save Copy",
+    )?;
+    require(
+        copied.device_run(&profile_job.id)? == expected_run,
+        "run ledger missing in Save Copy",
+    )?;
+    require(
+        copied.effective_variants_for_track(&optimizer_track.id)? == expected_optimizer_variants,
+        "Save Copy changed effective alleles",
+    )?;
     require(
         reopened.effective_variants_for_track(&optimizer_track.id)? == expected_optimizer_variants,
         "optimized effective alleles changed after reopening",
@@ -319,10 +354,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "persisted Track Profiler result changed after reopening",
     )?;
 
-    let rendered = reopened.render_track(
+    let export_track = reopened.track(&optimizer_track.id)?;
+    let fasta = reopened.export_focus_fasta_at_head(
         &optimizer_track.id,
-        reopened.root().join("exports/device-acceptance.vcf.gz"),
+        &export_track.head_state_id,
+        &export_track.bypassed_edit_ids,
+        focus.clone(),
+        project_path.with_extension("fa"),
     )?;
+    require(
+        fasta.sequence_records == 3 && fasta.fasta_path.is_file(),
+        "guarded FASTA export failed",
+    )?;
+    let exported = reopened.export_track_vcf_at_head(
+        &optimizer_track.id,
+        &export_track.head_state_id,
+        &export_track.bypassed_edit_ids,
+        project_path.with_extension("vcf.gz"),
+    )?;
+    let provenance: serde_json::Value =
+        serde_json::from_reader(File::open(&exported.provenance_path)?)?;
+    require(
+        provenance["evidenceSidecar"]["path"] == serde_json::to_value(&exported.evidence_path)?,
+        "provenance refers to a temporary evidence path",
+    )?;
+    let rendered = exported.vcf_path;
     let inspection = inspect_vcf(&rendered, &initial.manifest.assembly)?;
     require(
         inspection.record_count == expected_optimizer_variants.len() as u64,

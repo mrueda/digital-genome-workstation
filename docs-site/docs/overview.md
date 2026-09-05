@@ -90,7 +90,7 @@ The score is an additive sum of independent allele-copy values. It does not mode
 :::
 
 :::note Prototype persistence limit
-Generated allele edits persist as normal track history. Device settings, device-to-edit grouping, score components, exclusions, and the complete optimizer run are not yet stored in the project schema. They are lost when the application session ends.
+Generated edits persist in track history. Device controls, rack configuration, and displayed plans resume from the project's workstation session. Separate immutable device-run records retain declared inputs, resource identity, and terminal result summaries. Bulk summaries do not contain every candidate comparison row.
 :::
 
 All current devices are built into DGW. External community-device installation and execution are a contract foundation and roadmap item, not an enabled plug-in system today.

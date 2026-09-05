@@ -1524,7 +1524,8 @@ impl Project {
         changes: &[CompoundMutationChange],
         note: Option<String>,
     ) -> Result<CompoundMutationLayer> {
-        let track = self.track(track_id)?;
+        let stored = self.stored_track(track_id)?;
+        let track = &stored.track;
         if track.read_only {
             return Err(DgwError::Project(
                 "the source genome track is read-only; duplicate it before making changes".into(),
@@ -1553,6 +1554,8 @@ impl Project {
             id: Uuid::new_v4().to_string(),
             track_id: track_id.into(),
             source_state_id: source_state_id.into(),
+            source_bypassed_edit_ids: Some(effective_bypassed_edit_ids(&stored)),
+            morph_target: None,
             device_id: device_id.into(),
             position_count,
             change_count: changes.len() as u32,
@@ -1592,6 +1595,52 @@ impl Project {
             }
         }
         transaction.commit()?;
+        Ok(layer)
+    }
+
+    pub fn validate_morph_tracks(&self, source: &GenomeTrack, target: &GenomeTrack) -> Result<()> {
+        if source.id == target.id || source.read_only {
+            return Err(DgwError::Project(
+                "Morph requires an editable source and a different target".into(),
+            ));
+        }
+        for expected in [source, target] {
+            let current = self.track(&expected.id)?;
+            if current.head_state_id != expected.head_state_id
+                || current.bypassed_edit_ids != expected.bypassed_edit_ids
+                || current.archived
+            {
+                return Err(DgwError::Project(
+                    "a Morph track changed; preview again".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stage_morph_layer(
+        &self,
+        source: &GenomeTrack,
+        target: &GenomeTrack,
+        position_count: u32,
+        changes: &[CompoundMutationChange],
+        note: Option<String>,
+    ) -> Result<CompoundMutationLayer> {
+        self.validate_morph_tracks(source, target)?;
+        let mut layer = self.stage_compound_mutation_layer(
+            &source.id,
+            &source.head_state_id,
+            "org.dgw.builtin.genome-morph",
+            position_count,
+            changes,
+            note,
+        )?;
+        self.validate_morph_tracks(source, target)?;
+        layer.morph_target = Some(target.clone());
+        self.connection()?.execute(
+            "UPDATE compound_mutation_layers SET payload = ?1 WHERE id = ?2",
+            params![serde_json::to_string(&layer)?, layer.id],
+        )?;
         Ok(layer)
     }
 
@@ -1641,6 +1690,13 @@ impl Project {
             ));
         }
 
+        if layer.source_bypassed_edit_ids.as_ref() != Some(&effective_bypassed_edit_ids(&stored)) {
+            return Err(DgwError::Project(
+                "the bulk preview has missing or changed bypass state; preview the bulk operation again"
+                    .into(),
+            ));
+        }
+
         // Loading once here verifies that the normalized child rows are intact.
         let changes = self.compound_layer_changes(layer_id)?;
         if changes.len() != layer.change_count as usize {
@@ -1686,6 +1742,20 @@ impl Project {
 
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        if layer.device_id == "org.dgw.builtin.genome-morph" {
+            let expected = layer.morph_target.as_ref().ok_or_else(|| {
+                DgwError::Project("Morph preview has no captured target; preview again".into())
+            })?;
+            let current = stored_track_from_connection(&transaction, &expected.id)?.track;
+            if current.head_state_id != expected.head_state_id
+                || current.bypassed_edit_ids != expected.bypassed_edit_ids
+                || current.archived
+            {
+                return Err(DgwError::Project(
+                    "the Morph target changed; preview again".into(),
+                ));
+            }
+        }
         transaction.execute(
             "INSERT INTO states(id, parent_id, edit_id, payload) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -2604,6 +2674,15 @@ impl Project {
         let current =
             self.effective_variants_for_track_at_loci(track_id, &request.selected_variants)?;
         let plan = plan_randomizer(&current, &request)?;
+        let after_planning = self.track(track_id)?;
+        if after_planning.head_state_id != track.head_state_id
+            || after_planning.bypassed_edit_ids != track.bypassed_edit_ids
+        {
+            return Err(DgwError::Project(
+                "the selected track changed during Mutation Generator planning; preview again"
+                    .into(),
+            ));
+        }
         let mut preview = compact_randomizer_preview(&plan);
         if stage_compound_layer && !plan.proposals.is_empty() {
             let note = format!(
@@ -3454,13 +3533,56 @@ impl Project {
         context: FocusContext,
         output_path: impl AsRef<Path>,
     ) -> Result<FocusFastaExport> {
-        if context.start == 0 || context.end < context.start || context.end - context.start > 50_000
+        let stored = self.stored_track(track_id)?;
+        self.export_focus_fasta_for_track(&stored, context, output_path)
+    }
+
+    /// Export a bounded FASTA only when the caller's explicit track view is
+    /// still current. This is the safe command boundary used by agent clients.
+    pub fn export_focus_fasta_at_head(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        expected_bypassed_edit_ids: &[String],
+        context: FocusContext,
+        output_path: impl AsRef<Path>,
+    ) -> Result<FocusFastaExport> {
+        let stored = self.stored_track(track_id)?;
+        ensure_track_export_state(&stored, expected_head_state_id, expected_bypassed_edit_ids)?;
+        let output_path = output_path.as_ref().to_path_buf();
+        let uncertainty_path = uncertainty_sidecar_path(&output_path);
+        self.ensure_new_external_export(&output_path, &[uncertainty_path.clone()])?;
+        let temporary = tempfile::tempdir_in(output_path.parent().unwrap())?;
+        let mut result = self.export_focus_fasta_for_track(
+            &stored,
+            context,
+            temporary.path().join("region.fa"),
+        )?;
+        let mut files = vec![(result.fasta_path.clone(), output_path.clone())];
+        if let Some(path) = &result.uncertainty_path {
+            files.push((path.clone(), uncertainty_path.clone()));
+        }
+        publish_new_export_files(&files)?;
+        result.fasta_path = output_path;
+        result.uncertainty_path = result.uncertainty_path.map(|_| uncertainty_path);
+        Ok(result)
+    }
+
+    fn export_focus_fasta_for_track(
+        &self,
+        stored: &StoredGenomeTrack,
+        context: FocusContext,
+        output_path: impl AsRef<Path>,
+    ) -> Result<FocusFastaExport> {
+        if context.start == 0
+            || context.end < context.start
+            || context.end.saturating_sub(context.start).saturating_add(1)
+                > MAX_SEQUENCE_FOCUS_BASES
         {
             return Err(DgwError::Project(
                 "FASTA export must be a valid reference interval no wider than 50 kb".into(),
             ));
         }
-        let stored = self.stored_track(track_id)?;
         let overlapping = self.effective_variants_in_context(
             &stored.track.head_state_id,
             &effective_bypassed_edit_ids(&stored),
@@ -3766,7 +3888,17 @@ impl Project {
         bypassed_edit_ids: &[String],
         output_path: impl AsRef<Path>,
     ) -> Result<PathBuf> {
-        let mut output_path = output_path.as_ref().to_path_buf();
+        self.render_state_for_destination(state_id, bypassed_edit_ids, output_path.as_ref(), None)
+    }
+
+    fn render_state_for_destination(
+        &self,
+        state_id: &str,
+        bypassed_edit_ids: &[String],
+        output_path: &Path,
+        published: Option<&TrackVcfExport>,
+    ) -> Result<PathBuf> {
+        let mut output_path = output_path.to_path_buf();
         if !output_path.to_string_lossy().ends_with(".vcf.gz") {
             output_path.set_extension("vcf.gz");
         }
@@ -3805,13 +3937,13 @@ impl Project {
             "edits": &operations,
             "renderedAt": Utc::now(),
             "evidenceSidecar": {
-                "path": evidence_path,
+                "path": published.map(|paths| &paths.evidence_path).unwrap_or(&evidence_path),
                 "sha256": evidence_fingerprint.sha256,
                 "size": evidence_fingerprint.size,
                 "cachedExactAlleleEntries": evidence_entry_count
             },
             "deviceRunsSidecar": {
-                "path": device_runs_path,
+                "path": published.map(|paths| &paths.device_runs_path).unwrap_or(&device_runs_path),
                 "sha256": device_runs_fingerprint.sha256,
                 "size": device_runs_fingerprint.size,
                 "runCount": device_run_count
@@ -3956,6 +4088,82 @@ impl Project {
             &effective_bypassed_edit_ids(&stored),
             output_path,
         )
+    }
+
+    /// Render a complete track only if its explicit state and visible bypass
+    /// choices still match the caller's view. Existing export artifacts are
+    /// never overwritten, and destinations inside the project package are
+    /// rejected.
+    pub fn export_track_vcf_at_head(
+        &self,
+        track_id: &str,
+        expected_head_state_id: &str,
+        expected_bypassed_edit_ids: &[String],
+        output_path: impl AsRef<Path>,
+    ) -> Result<TrackVcfExport> {
+        let stored = self.stored_track(track_id)?;
+        ensure_track_export_state(&stored, expected_head_state_id, expected_bypassed_edit_ids)?;
+        let artifacts = track_vcf_export_paths(output_path.as_ref());
+        let plain_path = artifacts.vcf_path.with_extension("").with_extension("vcf");
+        self.ensure_new_external_export(
+            &artifacts.vcf_path,
+            &[
+                plain_path.clone(),
+                artifacts.index_path.clone(),
+                artifacts.evidence_path.clone(),
+                artifacts.device_runs_path.clone(),
+                artifacts.provenance_path.clone(),
+            ],
+        )?;
+        let temporary = tempfile::tempdir_in(artifacts.vcf_path.parent().unwrap())?;
+        let staged = track_vcf_export_paths(&temporary.path().join("track.vcf.gz"));
+        self.render_state_for_destination(
+            &stored.track.head_state_id,
+            &effective_bypassed_edit_ids(&stored),
+            &staged.vcf_path,
+            Some(&artifacts),
+        )?;
+        publish_new_export_files(&[
+            (staged.vcf_path, artifacts.vcf_path.clone()),
+            (staged.index_path, artifacts.index_path.clone()),
+            (staged.evidence_path, artifacts.evidence_path.clone()),
+            (staged.device_runs_path, artifacts.device_runs_path.clone()),
+            (staged.provenance_path, artifacts.provenance_path.clone()),
+        ])?;
+        Ok(artifacts)
+    }
+
+    fn ensure_new_external_export(&self, primary: &Path, related: &[PathBuf]) -> Result<()> {
+        if !primary.is_absolute() {
+            return Err(DgwError::Project(
+                "export destination must be an absolute path".into(),
+            ));
+        }
+        let parent = primary.parent().ok_or_else(|| {
+            DgwError::Project("export destination has no parent directory".into())
+        })?;
+        if !parent.is_dir() {
+            return Err(DgwError::Project(format!(
+                "export directory does not exist: {}",
+                parent.display()
+            )));
+        }
+        let canonical_parent = parent.canonicalize()?;
+        let canonical_project = self.root.canonicalize()?;
+        if canonical_parent.starts_with(&canonical_project) {
+            return Err(DgwError::Project(
+                "exports must be written outside the .dgw project package".into(),
+            ));
+        }
+        for path in std::iter::once(primary).chain(related.iter().map(PathBuf::as_path)) {
+            if path.symlink_metadata().is_ok() {
+                return Err(DgwError::Project(format!(
+                    "export will not overwrite existing file: {}",
+                    path.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn source_meta_headers(&self) -> Result<Vec<String>> {
@@ -4508,6 +4716,62 @@ fn uncertainty_sidecar_path(fasta_path: &Path) -> PathBuf {
     path
 }
 
+fn ensure_track_export_state(
+    stored: &StoredGenomeTrack,
+    expected_head_state_id: &str,
+    expected_bypassed_edit_ids: &[String],
+) -> Result<()> {
+    if stored.track.head_state_id != expected_head_state_id
+        || stored.track.bypassed_edit_ids != expected_bypassed_edit_ids
+    {
+        return Err(DgwError::Project(
+            "the track changed after it was inspected; refresh it before exporting".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn track_vcf_export_paths(output_path: &Path) -> TrackVcfExport {
+    let mut vcf_path = output_path.to_path_buf();
+    if !vcf_path.to_string_lossy().ends_with(".vcf.gz") {
+        vcf_path.set_extension("vcf.gz");
+    }
+    TrackVcfExport {
+        index_path: PathBuf::from(format!("{}.csi", vcf_path.display())),
+        evidence_path: PathBuf::from(format!("{}.evidence.json.gz", vcf_path.display())),
+        device_runs_path: PathBuf::from(format!("{}.device-runs.json.gz", vcf_path.display())),
+        provenance_path: PathBuf::from(format!("{}.provenance.json", vcf_path.display())),
+        vcf_path,
+    }
+}
+
+fn publish_new_export_files(files: &[(PathBuf, PathBuf)]) -> Result<()> {
+    // Reserve every destination atomically before writing through the owned
+    // handles. A collision never truncates another export or follows a symlink.
+    let mut reserved = Vec::new();
+    let result = (|| -> Result<()> {
+        for (_, destination) in files {
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(destination)?;
+            reserved.push((destination.clone(), file));
+        }
+        for ((source, _), (_, destination)) in files.iter().zip(reserved.iter_mut()) {
+            std::io::copy(&mut File::open(source)?, destination)?;
+            destination.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for (path, file) in reserved {
+            drop(file);
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
+}
+
 fn append_unique(target: &mut Vec<String>, additions: &[String]) {
     for edit_id in additions {
         if !target.contains(edit_id) {
@@ -4636,6 +4900,84 @@ mod tests {
         project.save_background_job(&job).unwrap();
         assert_eq!(project.background_job(&job.id).unwrap(), job);
         assert_eq!(project.list_background_jobs(10).unwrap(), vec![job]);
+    }
+
+    #[test]
+    fn agent_exports_require_current_state_and_new_external_paths() {
+        let (temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+
+        let stale = project
+            .export_focus_fasta_at_head(
+                &track.id,
+                "stale-state",
+                &track.bypassed_edit_ids,
+                FocusContext {
+                    contig: "1".into(),
+                    start: 1,
+                    end: 10,
+                },
+                temporary.path().join("stale.fa"),
+            )
+            .unwrap_err();
+        assert!(stale.to_string().contains("track changed"));
+
+        fs::create_dir_all(project.root().join("exports")).unwrap();
+        let inside = project
+            .export_track_vcf_at_head(
+                &track.id,
+                &track.head_state_id,
+                &track.bypassed_edit_ids,
+                project.root().join("exports/agent.vcf.gz"),
+            )
+            .unwrap_err();
+        assert!(inside.to_string().contains("outside the .dgw"));
+
+        let existing = temporary.path().join("existing.vcf.gz");
+        File::create(&existing).unwrap();
+        let collision = project
+            .export_track_vcf_at_head(
+                &track.id,
+                &track.head_state_id,
+                &track.bypassed_edit_ids,
+                existing,
+            )
+            .unwrap_err();
+        assert!(collision.to_string().contains("will not overwrite"));
+
+        let too_wide = project
+            .export_focus_fasta_at_head(
+                &track.id,
+                &track.head_state_id,
+                &track.bypassed_edit_ids,
+                FocusContext {
+                    contig: "1".into(),
+                    start: 1,
+                    end: MAX_SEQUENCE_FOCUS_BASES + 1,
+                },
+                temporary.path().join("too-wide.fa"),
+            )
+            .unwrap_err();
+        assert!(too_wide.to_string().contains("no wider than 50 kb"));
+    }
+
+    #[test]
+    fn track_vcf_export_paths_report_the_complete_artifact_set() {
+        let paths = track_vcf_export_paths(Path::new("/tmp/example"));
+        assert_eq!(paths.vcf_path, PathBuf::from("/tmp/example.vcf.gz"));
+        assert_eq!(paths.index_path, PathBuf::from("/tmp/example.vcf.gz.csi"));
+        assert_eq!(
+            paths.evidence_path,
+            PathBuf::from("/tmp/example.vcf.gz.evidence.json.gz")
+        );
+        assert_eq!(
+            paths.device_runs_path,
+            PathBuf::from("/tmp/example.vcf.gz.device-runs.json.gz")
+        );
+        assert_eq!(
+            paths.provenance_path,
+            PathBuf::from("/tmp/example.vcf.gz.provenance.json")
+        );
     }
 
     #[test]
@@ -4818,11 +5160,48 @@ mod tests {
         assert_eq!(focused.len(), 1);
         assert_eq!(focused[0].key.alternate, "T");
 
+        let pending = project
+            .stage_compound_mutation_layer(
+                &working.id,
+                &state.id,
+                "org.dgw.builtin.mutation-generator",
+                1,
+                &[CompoundMutationChange {
+                    haplotype: Haplotype::One,
+                    edit: EditKind::RestoreReference {
+                        source_key: effective[0].key.clone(),
+                    },
+                }],
+                None,
+            )
+            .unwrap();
+
         project
             .toggle_track_edit_bypass(&working.id, &edit_id, true)
             .unwrap();
         let bypassed = project.effective_variants_for_track(&working.id).unwrap();
         assert!(bypassed.iter().all(|variant| variant.key.alternate == "C"));
+        let reopened = Project::open(project.root()).unwrap();
+        assert_eq!(reopened.track(&working.id).unwrap().head_state_id, state.id);
+        let error = reopened
+            .apply_compound_mutation_layer(&working.id, &pending.id)
+            .unwrap_err();
+        assert!(error.to_string().contains("bypass state"));
+        assert_eq!(
+            reopened.effective_variants_for_track(&working.id).unwrap(),
+            bypassed
+        );
+        assert!(reopened
+            .compound_mutation_layer(&pending.id)
+            .unwrap()
+            .applied_edit_id
+            .is_none());
+        reopened
+            .toggle_track_edit_bypass(&working.id, &edit_id, false)
+            .unwrap();
+        reopened
+            .apply_compound_mutation_layer(&working.id, &pending.id)
+            .unwrap();
     }
 
     #[test]
@@ -4889,6 +5268,88 @@ mod tests {
                 .change_count,
             POSITION_COUNT as u32
         );
+    }
+
+    #[test]
+    fn morph_layer_rejects_target_bypass_after_reopen() {
+        let (_temporary, project) = test_project();
+        let source = project.active_track().unwrap();
+        let root = observed_variant("1", 100);
+        insert_root_variants(&project, &[root.clone()]);
+        let target = project.duplicate_track(&source.id, "Morph target").unwrap();
+        let state = project
+            .apply_edit_to_track(
+                &target.id,
+                Haplotype::One,
+                EditKind::RestoreReference {
+                    source_key: root.key.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        let target = project.track(&target.id).unwrap();
+        let layer = project
+            .stage_morph_layer(
+                &source,
+                &target,
+                1,
+                &[CompoundMutationChange {
+                    haplotype: Haplotype::One,
+                    edit: EditKind::RestoreReference {
+                        source_key: root.key,
+                    },
+                }],
+                None,
+            )
+            .unwrap();
+        project
+            .toggle_track_edit_bypass(&target.id, state.edit_id.as_ref().unwrap(), true)
+            .unwrap();
+        let reopened = Project::open(project.root()).unwrap();
+        assert!(reopened
+            .apply_compound_mutation_layer(&source.id, &layer.id)
+            .unwrap_err()
+            .to_string()
+            .contains("target changed"));
+        assert_eq!(
+            reopened.track(&source.id).unwrap().head_state_id,
+            source.head_state_id
+        );
+        reopened
+            .toggle_track_edit_bypass(&target.id, state.edit_id.as_ref().unwrap(), false)
+            .unwrap();
+        reopened
+            .apply_compound_mutation_layer(&source.id, &layer.id)
+            .unwrap();
+    }
+
+    #[test]
+    fn export_publication_rolls_back_only_owned_files_and_has_one_winner() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input");
+        fs::write(&input, b"complete export").unwrap();
+        let first = directory.path().join("first");
+        let collision = directory.path().join("collision");
+        fs::write(&collision, b"keep this").unwrap();
+        assert!(publish_new_export_files(&[
+            (input.clone(), first.clone()),
+            (input.clone(), collision.clone())
+        ])
+        .is_err());
+        assert!(!first.exists());
+        assert_eq!(fs::read(&collision).unwrap(), b"keep this");
+        let barrier = std::sync::Barrier::new(2);
+        let wins = std::thread::scope(|scope| {
+            let run = || {
+                barrier.wait();
+                publish_new_export_files(&[(input.clone(), first.clone())]).is_ok()
+            };
+            let a = scope.spawn(run);
+            let b = scope.spawn(run);
+            usize::from(a.join().unwrap()) + usize::from(b.join().unwrap())
+        });
+        assert_eq!(wins, 1);
+        assert_eq!(fs::read(&first).unwrap(), b"complete export");
     }
 
     #[test]

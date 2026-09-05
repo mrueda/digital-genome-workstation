@@ -449,6 +449,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn profile_score_json_round_trip_preserves_exact_value() {
+        let score = 1990.6499999998614_f64;
+        let encoded = serde_json::to_string(&score).unwrap();
+        let decoded: f64 = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(score.to_bits(), decoded.to_bits());
+    }
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;

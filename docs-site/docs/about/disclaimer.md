@@ -10,6 +10,6 @@ The experimental Genome Optimizer is bounded to selected input-VCF loci. Conserv
 
 **Minimize** and **Maximize** refer only to the selected technical score. No result may be described as perfect, healthy, safe, or biologically optimal. REF itself is not a benign or healthy classification.
 
-Device settings and the complete optimizer plan are not yet persisted. Generated edits remain in immutable state ancestry, but the project package alone cannot currently reproduce the displayed optimizer run.
+Device settings and displayed plans resume from the project's workstation session. Generated edits retain immutable ancestry, and terminal device runs have separate immutable input and result records. Bulk results retain aggregate comparisons, not every candidate row; repeating an evaluation also requires the recorded external resources.
 
 The software reconstructs reference sequence plus calls represented in the imported VCF. It has no read coverage or callable-region evidence and must not represent omitted loci as experimentally confirmed reference genotypes.

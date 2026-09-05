@@ -368,6 +368,16 @@ pub struct FocusFastaExport {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct TrackVcfExport {
+    pub vcf_path: PathBuf,
+    pub index_path: PathBuf,
+    pub evidence_path: PathBuf,
+    pub device_runs_path: PathBuf,
+    pub provenance_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectSnapshot {
     pub manifest: ProjectManifest,
     pub workspace: WorkspaceSnapshot,
@@ -526,6 +536,12 @@ pub struct CompoundMutationLayer {
     pub id: String,
     pub track_id: String,
     pub source_state_id: String,
+    /// Effective exclusions at staging, including consolidated baseline edits.
+    /// Older pending layers must be previewed again before they can be applied.
+    #[serde(default)]
+    pub source_bypassed_edit_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub morph_target: Option<GenomeTrack>,
     pub device_id: String,
     pub position_count: u32,
     pub change_count: u32,

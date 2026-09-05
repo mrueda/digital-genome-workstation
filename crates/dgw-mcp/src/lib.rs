@@ -1,11 +1,13 @@
 use dgw_core::{
-    AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind, EffectiveVariant,
-    EvaluationService, FocusContext, GeneSearchHit, GenomeState, GenomeTrack, Haplotype,
-    LocalComputePool, OptimizerDirection, OptimizerMode, OptimizerObjective,
-    OptimizerPreviewResult, OptimizerRequest, OptimizerWeights, Project, RandomizerPreviewResult,
-    RandomizerRequest, SubstitutionPattern, VariantContigSummary, VariantKey, VariantPage,
-    VariantSelection, CONSEQUENCE_DEVICE_ID, MAX_OPTIMIZER_EDITS, MAX_RANDOMIZER_POSITIONS,
-    MAX_SATURATION_POSITIONS, TRACK_PROFILE_EVIDENCE_DEVICES,
+    plan_track_morph, AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind,
+    EffectiveVariant, EvaluationService, FocusContext, FocusFastaExport, GeneSearchHit,
+    GenomeState, GenomeTrack, Haplotype, LocalComputePool, MorphOrdering, OptimizerDirection,
+    OptimizerMode, OptimizerObjective, OptimizerPreviewResult, OptimizerRequest, OptimizerWeights,
+    Project, RandomizerPreviewResult, RandomizerRequest, SubstitutionPattern,
+    TrackMorphPreviewResult, TrackMorphRequest, TrackVcfExport, VariantContigSummary, VariantKey,
+    VariantPage, VariantSelection, CONSEQUENCE_DEVICE_ID, MAX_OPTIMIZER_EDITS,
+    MAX_RANDOMIZER_POSITIONS, MAX_SATURATION_POSITIONS, MAX_SEQUENCE_FOCUS_BASES,
+    TRACK_PROFILE_EVIDENCE_DEVICES,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -211,6 +213,48 @@ pub struct ApplyMutationGeneratorPreviewRequest {
 
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum GenomeMorphOrdering {
+    Genomic,
+    SeededRandom,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct StartGenomeMorphPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable source track identifier")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId of the editable source track")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Different project track whose effective genotype is the target")]
+    pub target_track_id: String,
+    #[schemars(description = "Current headStateId of the target track")]
+    pub expected_target_head_state_id: String,
+    #[schemars(description = "Percentage of differing whole positions to copy, from 0 to 100")]
+    pub amount: u8,
+    pub ordering: GenomeMorphOrdering,
+    #[schemars(description = "Seed used only for seeded_random ordering")]
+    pub seed: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ApplyGenomeMorphPreviewRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Editable source track identifier used by the preview job")]
+    pub track_id: String,
+    #[schemars(description = "Source-track head captured when the preview job was started")]
+    pub expected_head_state_id: String,
+    #[schemars(description = "Target track identifier used by the preview job")]
+    pub target_track_id: String,
+    #[schemars(description = "Target-track head captured when the preview job was started")]
+    pub expected_target_head_state_id: String,
+    #[schemars(description = "Completed Genome Morph preview job identifier")]
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum GenomeOptimizerMode {
     Saturation,
     Conservative,
@@ -273,6 +317,39 @@ pub struct StartTrackProfilerRequest {
     pub device_ids: Option<Vec<String>>,
     #[schemars(description = "Bounded local worker count; omit for available CPUs minus one")]
     pub worker_threads: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct StartTrackVcfExportRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Track identifier returned by list_tracks")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    #[schemars(
+        description = "Absolute path for a new .vcf.gz file outside the .dgw package; existing files are never overwritten"
+    )]
+    pub output_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ExportRegionFastaRequest {
+    #[schemars(description = "Optional .dgw project path; omit it to use the active project")]
+    pub project_path: Option<String>,
+    #[schemars(description = "Track identifier returned by list_tracks")]
+    pub track_id: String,
+    #[schemars(description = "Current headStateId returned by list_tracks")]
+    pub expected_head_state_id: String,
+    pub contig: String,
+    #[schemars(description = "One-based inclusive region start")]
+    pub start: u64,
+    #[schemars(description = "One-based inclusive region end; the span cannot exceed 50 kb")]
+    pub end: u64,
+    #[schemars(
+        description = "Absolute path for a new FASTA file outside the .dgw package; existing files are never overwritten"
+    )]
+    pub output_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -398,6 +475,18 @@ struct AppliedMutationGeneratorResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AppliedGenomeMorphResult {
+    project_path: String,
+    job_id: String,
+    applied: bool,
+    preview: TrackMorphPreviewResult,
+    state: Option<GenomeState>,
+    track: GenomeTrack,
+    active_mutation_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AppliedGenomeOptimizerResult {
     project_path: String,
     job_id: String,
@@ -406,6 +495,16 @@ struct AppliedGenomeOptimizerResult {
     state: Option<GenomeState>,
     track: GenomeTrack,
     active_mutation_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RegionFastaExportResult {
+    project_path: String,
+    track_id: String,
+    state_id: String,
+    region: FocusContext,
+    export: FocusFastaExport,
 }
 
 #[derive(Clone)]
@@ -705,7 +804,7 @@ impl DgwMcpServer {
         };
         let display_path = path.display().to_string();
         let worker_path = path.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || -> Result<BackgroundJob, String> {
             let project = Project::open(&path).map_err(|error| error.to_string())?;
             let track = project
                 .track(&request.track_id)
@@ -823,6 +922,14 @@ impl DgwMcpServer {
                     .ok_or_else(|| "completed preview job has no result".to_owned())?,
             )
             .map_err(|error| error.to_string())?;
+            if project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?
+                .head_state_id
+                != request.expected_head_state_id
+            {
+                return Err("the target track changed after preview; run it again".into());
+            }
             let state = match preview.compound_layer_id.as_deref() {
                 Some(layer_id) => Some(
                     project
@@ -839,6 +946,190 @@ impl DgwMcpServer {
                 .map_err(|error| error.to_string())?
                 .len();
             Ok(AppliedMutationGeneratorResult {
+                project_path,
+                job_id: request.job_id,
+                applied: state.is_some(),
+                preview,
+                state,
+                track,
+                active_mutation_count,
+            })
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Start a persistent Genome Morph preview between two compatible tracks in the active project. The source and target heads are explicit; whole differing positions are copied in genomic or seeded-random order. Poll with get_job, then apply explicitly."
+    )]
+    async fn start_genome_morph_preview(
+        &self,
+        Parameters(request): Parameters<StartGenomeMorphPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if let Err(error) = validate_genome_morph_request(&request) {
+            return Ok(tool_error(error));
+        }
+        let path = match self.resolve_project_path(request.project_path.clone()) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let display_path = path.display().to_string();
+        let worker_path = path.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> Result<BackgroundJob, String> {
+            let project = Project::open(&path).map_err(|error| error.to_string())?;
+            let source_track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            if source_track.read_only {
+                return Err(String::from(
+                    "the source genome track is read-only; duplicate it before morphing",
+                ));
+            }
+            if source_track.head_state_id != request.expected_head_state_id {
+                return Err("the source track head changed; inspect the tracks and retry".into());
+            }
+            let target_track = project
+                .track(&request.target_track_id)
+                .map_err(|error| error.to_string())?;
+            if target_track.head_state_id != request.expected_target_head_state_id {
+                return Err("the target track head changed; inspect the tracks and retry".into());
+            }
+            let morph = TrackMorphRequest {
+                amount: request.amount,
+                ordering: match request.ordering {
+                    GenomeMorphOrdering::Genomic => MorphOrdering::Genomic,
+                    GenomeMorphOrdering::SeededRandom => MorphOrdering::SeededRandom,
+                },
+                seed: request.seed,
+            };
+            let now = chrono::Utc::now();
+            let job = BackgroundJob {
+                id: Uuid::new_v4().to_string(),
+                operation: "trackMorphPreview".into(),
+                device_id: "org.dgw.builtin.genome-morph".into(),
+                track_id: request.track_id,
+                status: BackgroundJobStatus::Queued,
+                progress: 0,
+                stage: "queued".into(),
+                message: "Waiting for the MCP background compute slot".into(),
+                worker_threads: 1,
+                request: json!({
+                    "sourceStateId": request.expected_head_state_id,
+                    "sourceBypassedEditIds": source_track.bypassed_edit_ids,
+                    "targetTrackId": request.target_track_id,
+                    "targetStateId": request.expected_target_head_state_id,
+                    "targetBypassedEditIds": target_track.bypassed_edit_ids,
+                    "morph": morph,
+                    "host": "mcp"
+                }),
+                result: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            };
+            project
+                .save_background_job(&job)
+                .map_err(|error| error.to_string())?;
+            Ok(job)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let job = match outcome {
+            Ok(job) => job,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let job_id = job.id.clone();
+        let job_lock = Arc::clone(&self.job_lock);
+        tokio::task::spawn_blocking(move || {
+            let _guard = job_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = execute_genome_morph_job(&worker_path, &job_id);
+        });
+        structured(StartedBackgroundJobResult {
+            project_path: display_path,
+            job,
+        })
+    }
+
+    #[tool(
+        description = "Apply a completed Genome Morph preview as one compact reversible mutation layer on its source track. DGW rejects changed source or target states, bypass changes, cross-track previews, and repeated application."
+    )]
+    async fn apply_genome_morph_preview(
+        &self,
+        Parameters(request): Parameters<ApplyGenomeMorphPreviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty()
+            || request.expected_head_state_id.trim().is_empty()
+            || request.target_track_id.trim().is_empty()
+            || request.expected_target_head_state_id.trim().is_empty()
+            || request.job_id.trim().is_empty()
+        {
+            return Ok(tool_error(
+                "track_id, expected_head_state_id, target_track_id, expected_target_head_state_id, and job_id must not be empty",
+            ));
+        }
+        self.run_project(request.project_path, move |project, project_path| {
+            let job = project
+                .background_job(&request.job_id)
+                .map_err(|error| error.to_string())?;
+            if job.operation != "trackMorphPreview" {
+                return Err("job is not a Genome Morph preview".into());
+            }
+            if job.track_id != request.track_id {
+                return Err("preview job belongs to a different source track".into());
+            }
+            let target_track_id = job
+                .request
+                .get("targetTrackId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "preview job has no target track".to_owned())?;
+            if target_track_id != request.target_track_id {
+                return Err("preview job belongs to a different target track".into());
+            }
+            let source_state_id = job
+                .request
+                .get("sourceStateId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "preview job has no source state".to_owned())?;
+            let target_state_id = job
+                .request
+                .get("targetStateId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "preview job has no target state".to_owned())?;
+            if source_state_id != request.expected_head_state_id
+                || target_state_id != request.expected_target_head_state_id
+            {
+                return Err("expected track heads do not match the preview job".into());
+            }
+            if job.status != BackgroundJobStatus::Completed {
+                return Err(format!(
+                    "preview job is {:?}; wait for completion before applying it",
+                    job.status
+                ));
+            }
+            ensure_morph_tracks_unchanged(&project, &job)?;
+            let preview: TrackMorphPreviewResult = serde_json::from_value(
+                job.result
+                    .clone()
+                    .ok_or_else(|| "completed preview job has no result".to_owned())?,
+            )
+            .map_err(|error| error.to_string())?;
+            let state = match preview.compound_layer_id.as_deref() {
+                Some(layer_id) => Some(
+                    project
+                        .apply_compound_mutation_layer(&request.track_id, layer_id)
+                        .map_err(|error| error.to_string())?,
+                ),
+                None => None,
+            };
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            let active_mutation_count = project
+                .active_track_mutations(&request.track_id)
+                .map_err(|error| error.to_string())?
+                .len();
+            Ok(AppliedGenomeMorphResult {
                 project_path,
                 job_id: request.job_id,
                 applied: state.is_some(),
@@ -1154,6 +1445,145 @@ impl DgwMcpServer {
     }
 
     #[tool(
+        description = "Start a persistent whole-track VCF export job from an explicit track head. The output is a new BGZF/CSI VCF with DGW evidence, device-run, and provenance sidecars. The absolute destination must be outside the .dgw package and no existing artifact is overwritten. Poll with get_job."
+    )]
+    async fn start_track_vcf_export(
+        &self,
+        Parameters(request): Parameters<StartTrackVcfExportRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty()
+            || request.expected_head_state_id.trim().is_empty()
+            || request.output_path.trim().is_empty()
+        {
+            return Ok(tool_error(
+                "track_id, expected_head_state_id, and output_path must not be empty",
+            ));
+        }
+        if !PathBuf::from(&request.output_path).is_absolute() {
+            return Ok(tool_error("output_path must be absolute"));
+        }
+        let path = match self.resolve_project_path(request.project_path) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let display_path = path.display().to_string();
+        let worker_path = path.clone();
+        let outcome = tokio::task::spawn_blocking(move || -> Result<BackgroundJob, String> {
+            let project = Project::open(&path).map_err(|error| error.to_string())?;
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            if track.head_state_id != request.expected_head_state_id {
+                return Err("the selected track head changed; inspect the track and retry".into());
+            }
+            let now = chrono::Utc::now();
+            let job = BackgroundJob {
+                id: Uuid::new_v4().to_string(),
+                operation: "trackVcfExport".into(),
+                device_id: "org.dgw.host.track-vcf-export".into(),
+                track_id: request.track_id,
+                status: BackgroundJobStatus::Queued,
+                progress: 0,
+                stage: "queued".into(),
+                message: "Waiting for the MCP background compute slot".into(),
+                worker_threads: 1,
+                request: json!({
+                    "stateId": request.expected_head_state_id,
+                    "bypassedEditIds": track.bypassed_edit_ids,
+                    "outputPath": request.output_path,
+                    "host": "mcp"
+                }),
+                result: None,
+                error: None,
+                created_at: now,
+                updated_at: now,
+            };
+            project
+                .save_background_job(&job)
+                .map_err(|error| error.to_string())?;
+            Ok(job)
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let job = match outcome {
+            Ok(job) => job,
+            Err(error) => return Ok(tool_error(error)),
+        };
+        let job_id = job.id.clone();
+        let job_lock = Arc::clone(&self.job_lock);
+        tokio::task::spawn_blocking(move || {
+            let _guard = job_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ = execute_track_vcf_export_job(&worker_path, &job_id);
+        });
+        structured(StartedBackgroundJobResult {
+            project_path: display_path,
+            job,
+        })
+    }
+
+    #[tool(
+        description = "Export a one-based reference interval of at most 50 kb as three FASTA records: reference, chromosome copy A, and chromosome copy B. Unphased alleles are masked and reported in an optional TSV sidecar. The explicit track head must still match; the absolute destination must be outside the .dgw package and is never overwritten."
+    )]
+    async fn export_region_fasta(
+        &self,
+        Parameters(request): Parameters<ExportRegionFastaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        if request.track_id.trim().is_empty()
+            || request.expected_head_state_id.trim().is_empty()
+            || request.contig.trim().is_empty()
+            || request.output_path.trim().is_empty()
+        {
+            return Ok(tool_error(
+                "track_id, expected_head_state_id, contig, and output_path must not be empty",
+            ));
+        }
+        if request.start == 0
+            || request.end < request.start
+            || request.end.saturating_sub(request.start).saturating_add(1)
+                > MAX_SEQUENCE_FOCUS_BASES
+        {
+            return Ok(tool_error(
+                "region must be a valid one-based inclusive interval no wider than 50 kb",
+            ));
+        }
+        if !PathBuf::from(&request.output_path).is_absolute() {
+            return Ok(tool_error("output_path must be absolute"));
+        }
+        self.run_project(request.project_path, move |project, project_path| {
+            let track = project
+                .track(&request.track_id)
+                .map_err(|error| error.to_string())?;
+            if track.head_state_id != request.expected_head_state_id {
+                return Err("the selected track head changed; inspect the track and retry".into());
+            }
+            let region = FocusContext {
+                contig: request.contig,
+                start: request.start,
+                end: request.end,
+            };
+            let export = project
+                .export_focus_fasta_at_head(
+                    &request.track_id,
+                    &request.expected_head_state_id,
+                    &track.bypassed_edit_ids,
+                    region.clone(),
+                    PathBuf::from(request.output_path),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(RegionFastaExportResult {
+                project_path,
+                track_id: request.track_id,
+                state_id: request.expected_head_state_id,
+                region,
+                export,
+            })
+        })
+        .await
+    }
+
+    #[tool(
         description = "List contigs represented in the imported VCF, with variant counts and one-based coordinate bounds. Use this before requesting bounded variant pages."
     )]
     async fn list_variant_contigs(
@@ -1284,7 +1714,7 @@ impl ServerHandler for DgwMcpServer {
                 ),
             },
             instructions: Some(
-                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator and Genome Optimizer each use a background preview, get_job until completed, and an explicit apply tool. Analyze an applied head with start_track_profiler and poll get_job for the Track Monitor result."
+                "Call open_project with an existing .dgw directory first. Read operations are bounded; list_variants returns at most 200 variants per call. Positions are one-based. Genome changes require an editable track and its current head. Manual changes use preview_allele_edit before apply_allele_edit. Mutation Generator, Genome Morph, and Genome Optimizer each use a background preview, get_job until completed, and an explicit apply tool. Genome Morph also requires a different target track and its current head. Analyze an applied head with start_track_profiler. Export a captured head with start_track_vcf_export or export_region_fasta; exports require new absolute paths outside the project package."
                     .into(),
             ),
             ..Default::default()
@@ -1464,6 +1894,75 @@ fn validate_mutation_generator_request(
         return Err(format!(
             "max_positions must be between 1 and {MAX_RANDOMIZER_POSITIONS}"
         ));
+    }
+    Ok(())
+}
+
+fn validate_genome_morph_request(request: &StartGenomeMorphPreviewRequest) -> Result<(), String> {
+    if request.track_id.trim().is_empty()
+        || request.expected_head_state_id.trim().is_empty()
+        || request.target_track_id.trim().is_empty()
+        || request.expected_target_head_state_id.trim().is_empty()
+    {
+        return Err(
+            "track_id, expected_head_state_id, target_track_id, and expected_target_head_state_id must not be empty"
+                .into(),
+        );
+    }
+    if request.track_id == request.target_track_id {
+        return Err("Genome Morph requires a different target track".into());
+    }
+    if request.amount > 100 {
+        return Err("amount must be between 0 and 100".into());
+    }
+    Ok(())
+}
+
+fn ensure_morph_tracks_unchanged(project: &Project, job: &BackgroundJob) -> Result<(), String> {
+    let source_state_id = job
+        .request
+        .get("sourceStateId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Genome Morph job has no source state".to_owned())?;
+    let source_bypasses: Vec<String> = serde_json::from_value(
+        job.request
+            .get("sourceBypassedEditIds")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .map_err(|error| error.to_string())?;
+    let target_track_id = job
+        .request
+        .get("targetTrackId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Genome Morph job has no target track".to_owned())?;
+    let target_state_id = job
+        .request
+        .get("targetStateId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Genome Morph job has no target state".to_owned())?;
+    let target_bypasses: Vec<String> = serde_json::from_value(
+        job.request
+            .get("targetBypassedEditIds")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .map_err(|error| error.to_string())?;
+    let source_track = project
+        .track(&job.track_id)
+        .map_err(|error| error.to_string())?;
+    let target_track = project
+        .track(target_track_id)
+        .map_err(|error| error.to_string())?;
+    if source_track.head_state_id != source_state_id
+        || source_track.bypassed_edit_ids != source_bypasses
+    {
+        return Err("the Genome Morph source track changed; run the preview again".into());
+    }
+    if target_track.head_state_id != target_state_id
+        || target_track.bypassed_edit_ids != target_bypasses
+    {
+        return Err("the Genome Morph target track changed; run the preview again".into());
     }
     Ok(())
 }
@@ -1701,6 +2200,20 @@ fn update_persistent_job(
     stage: &str,
     message: impl Into<String>,
 ) -> Result<(), String> {
+    update_background_job(project, job, status, progress, stage, message)?;
+    project
+        .persist_terminal_device_run(job)
+        .map_err(|error| error.to_string())
+}
+
+fn update_background_job(
+    project: &Project,
+    job: &mut BackgroundJob,
+    status: BackgroundJobStatus,
+    progress: u8,
+    stage: &str,
+    message: impl Into<String>,
+) -> Result<(), String> {
     job.status = status;
     job.progress = progress.min(100);
     job.stage = stage.into();
@@ -1708,9 +2221,6 @@ fn update_persistent_job(
     job.updated_at = chrono::Utc::now();
     project
         .save_background_job(job)
-        .map_err(|error| error.to_string())?;
-    project
-        .persist_terminal_device_run(job)
         .map_err(|error| error.to_string())
 }
 
@@ -1782,6 +2292,158 @@ fn execute_mutation_generator_job(project_path: &PathBuf, job_id: &str) -> Resul
                 100,
                 "completed",
                 "Mutation Generator preview completed",
+            )
+        }
+        Err(error) => {
+            job.error = Some(error.clone());
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+    }
+}
+
+fn execute_genome_morph_job(project_path: &PathBuf, job_id: &str) -> Result<(), String> {
+    let project = Project::open(project_path).map_err(|error| error.to_string())?;
+    let mut job = project
+        .background_job(job_id)
+        .map_err(|error| error.to_string())?;
+    update_persistent_job(
+        &project,
+        &mut job,
+        BackgroundJobStatus::Running,
+        10,
+        "source",
+        "Reading the source track's effective allele state",
+    )?;
+    let outcome = (|| -> Result<TrackMorphPreviewResult, String> {
+        ensure_morph_tracks_unchanged(&project, &job)?;
+        let source_state_id = job
+            .request
+            .get("sourceStateId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "Genome Morph job has no source state".to_owned())?;
+        let target_track_id = job
+            .request
+            .get("targetTrackId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "Genome Morph job has no target track".to_owned())?;
+        let target_state_id = job
+            .request
+            .get("targetStateId")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "Genome Morph job has no target state".to_owned())?;
+        let request: TrackMorphRequest = serde_json::from_value(
+            job.request
+                .get("morph")
+                .cloned()
+                .ok_or_else(|| "Genome Morph job has no request".to_owned())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let source_track = project
+            .track(&job.track_id)
+            .map_err(|error| error.to_string())?;
+        let target_track = project
+            .track(&target_track_id)
+            .map_err(|error| error.to_string())?;
+        let source = project
+            .effective_variants_for_track(&job.track_id)
+            .map_err(|error| error.to_string())?;
+
+        update_persistent_job(
+            &project,
+            &mut job,
+            BackgroundJobStatus::Running,
+            35,
+            "target",
+            "Reading the target track's effective allele state",
+        )?;
+        let target = project
+            .effective_variants_for_track(&target_track_id)
+            .map_err(|error| error.to_string())?;
+
+        update_persistent_job(
+            &project,
+            &mut job,
+            BackgroundJobStatus::Running,
+            60,
+            "difference",
+            format!("Comparing {} with {}", source_track.name, target_track.name),
+        )?;
+        let plan =
+            plan_track_morph(&source, &target, &request).map_err(|error| error.to_string())?;
+        ensure_morph_tracks_unchanged(&project, &job)?;
+        let mut compound_layer_id = None;
+        if !plan.changes.is_empty() {
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Running,
+                82,
+                "staging",
+                format!(
+                    "Storing {} allele changes across {} positions",
+                    plan.generated_edits, plan.selected_positions
+                ),
+            )?;
+            let note = format!(
+                "Genome Morph · {} → {} · {}% · {} · {} positions",
+                source_track.name,
+                target_track.name,
+                request.amount,
+                request.ordering.label(),
+                plan.selected_positions
+            );
+            let layer = project
+                .stage_morph_layer(
+                    &source_track,
+                    &target_track,
+                    plan.selected_positions,
+                    &plan.changes,
+                    Some(note),
+                )
+                .map_err(|error| error.to_string())?;
+            compound_layer_id = Some(layer.id);
+        }
+        Ok(TrackMorphPreviewResult {
+            source_track_id: job.track_id.clone(),
+            source_state_id,
+            target_track_id,
+            target_state_id,
+            amount: request.amount,
+            differing_positions: plan.differing_positions,
+            differing_alleles: plan.differing_alleles,
+            selected_positions: plan.selected_positions,
+            generated_edits: plan.generated_edits,
+            no_op_reason: plan.no_op_reason,
+            limitation: plan.limitation,
+            compound_layer_id,
+        })
+    })();
+    match outcome {
+        Ok(preview) => {
+            let message = preview.no_op_reason.clone().unwrap_or_else(|| {
+                format!(
+                    "Morph preview prepared {} changes across {} positions",
+                    preview.generated_edits, preview.selected_positions
+                )
+            });
+            job.result = Some(serde_json::to_value(preview).map_err(|error| error.to_string())?);
+            update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Completed,
+                100,
+                "completed",
+                message,
             )
         }
         Err(error) => {
@@ -1895,6 +2557,68 @@ fn execute_optimizer_job(
         Err(error) => {
             job.error = Some(error.clone());
             update_persistent_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Failed,
+                100,
+                "failed",
+                error,
+            )
+        }
+    }
+}
+
+fn execute_track_vcf_export_job(project_path: &PathBuf, job_id: &str) -> Result<(), String> {
+    let project = Project::open(project_path).map_err(|error| error.to_string())?;
+    let mut job = project
+        .background_job(job_id)
+        .map_err(|error| error.to_string())?;
+    let state_id = job
+        .request
+        .get("stateId")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "VCF export job has no captured track state".to_owned())?;
+    let bypassed_edit_ids: Vec<String> = serde_json::from_value(
+        job.request
+            .get("bypassedEditIds")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    )
+    .map_err(|error| error.to_string())?;
+    let output_path = job
+        .request
+        .get("outputPath")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| "VCF export job has no output path".to_owned())?;
+    update_background_job(
+        &project,
+        &mut job,
+        BackgroundJobStatus::Running,
+        10,
+        "render",
+        "Rendering the captured track and writing provenance sidecars",
+    )?;
+    let outcome: Result<TrackVcfExport, String> = project
+        .export_track_vcf_at_head(&job.track_id, &state_id, &bypassed_edit_ids, output_path)
+        .map_err(|error| error.to_string());
+    match outcome {
+        Ok(export) => {
+            let message = format!("Exported track VCF to {}", export.vcf_path.display());
+            job.result = Some(serde_json::to_value(export).map_err(|error| error.to_string())?);
+            update_background_job(
+                &project,
+                &mut job,
+                BackgroundJobStatus::Completed,
+                100,
+                "completed",
+                message,
+            )
+        }
+        Err(error) => {
+            job.error = Some(error.clone());
+            update_background_job(
                 &project,
                 &mut job,
                 BackgroundJobStatus::Failed,
@@ -2108,9 +2832,11 @@ mod tests {
             names,
             vec![
                 "apply_allele_edit",
+                "apply_genome_morph_preview",
                 "apply_genome_optimizer_preview",
                 "apply_mutation_generator_preview",
                 "duplicate_track",
+                "export_region_fasta",
                 "get_job",
                 "list_jobs",
                 "list_tracks",
@@ -2122,9 +2848,11 @@ mod tests {
                 "rename_track",
                 "search_genes",
                 "select_track",
+                "start_genome_morph_preview",
                 "start_genome_optimizer_preview",
                 "start_mutation_generator_preview",
                 "start_track_profiler",
+                "start_track_vcf_export",
             ]
         );
     }

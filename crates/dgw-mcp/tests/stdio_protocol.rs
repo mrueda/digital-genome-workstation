@@ -43,7 +43,7 @@ fn initializes_and_lists_tools_over_stdio() {
     );
     let listed = receive(&mut stdout);
     let tools = listed["result"]["tools"].as_array().expect("tool array");
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 22);
     assert!(tools.iter().any(|tool| tool["name"] == "open_project"));
     assert!(tools.iter().any(|tool| tool["name"] == "list_variants"));
     assert!(tools.iter().any(|tool| tool["name"] == "apply_allele_edit"));
@@ -59,6 +59,18 @@ fn initializes_and_lists_tools_over_stdio() {
     assert!(tools
         .iter()
         .any(|tool| tool["name"] == "apply_genome_optimizer_preview"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "start_genome_morph_preview"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "apply_genome_morph_preview"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "start_track_vcf_export"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "export_region_fasta"));
     assert!(tools.iter().all(|tool| tool["inputSchema"].is_object()));
 
     drop(stdin);

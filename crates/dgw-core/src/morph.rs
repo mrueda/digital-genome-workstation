@@ -46,6 +46,24 @@ pub struct TrackMorphPlan {
     pub limitation: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMorphPreviewResult {
+    pub source_track_id: String,
+    pub source_state_id: String,
+    pub target_track_id: String,
+    pub target_state_id: String,
+    pub amount: u8,
+    pub differing_positions: u32,
+    pub differing_alleles: u32,
+    pub selected_positions: u32,
+    pub generated_edits: u32,
+    pub no_op_reason: Option<String>,
+    pub limitation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compound_layer_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Position {
     assembly: String,

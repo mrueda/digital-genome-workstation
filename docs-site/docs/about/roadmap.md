@@ -36,10 +36,9 @@
 
 ## Engineering next
 
-- Persist device settings and device-to-edit ownership.
-- Add formal optimizer-run provenance: input identity, scoring contract/version, request, components, exclusions, output edit IDs, and uncertainty.
+- Extend persisted device-run summaries with exportable bulk candidate comparisons where needed.
 - Benchmark and harden bulk Saturation near its experimental ceiling, add resumable resource-fingerprinted candidate caches, and retain a bounded downloadable audit artifact without transferring every comparison row into the live interface.
-- Include track identity, consolidation details, and device/run records in export provenance.
+- Verify export provenance against saved track, consolidation, and device-run records on each supported platform.
 - Publish versioned DGW Device API schemas for editing, analysis, and evidence devices.
 - Move built-in Genome Optimizer, Variant Consequences, dbNSFP, ClinVar, and COSMIC adapters behind the same conformance-tested host boundary.
 - Present built-in editing, analysis, and evidence devices through one generic rack lifecycle and UI.
@@ -64,7 +63,7 @@
 - Cross-genome morphing between samples from the same joint-called VCF, with explicit `0/0` versus `./.`, shared callability scope, same-assembly normalization, and multi-sample provenance.
 - Haplotype-aware compound transcript/protein consequences.
 - Interaction-aware objectives only where a scientifically validated model supports them.
-- GRCh38 resource bundles and carefully explicit assembly migration.
+- Explicit assembly migration between projects; GRCh37 and GRCh38 resources already have separate development profiles.
 - Splice/regulatory models.
 - Sequence-resolved structural variants after the small-variant state model is validated.
 
