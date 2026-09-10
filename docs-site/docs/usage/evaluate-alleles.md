@@ -10,6 +10,8 @@ With DGW Starter, the selected track's Rack initially shows the complete seven-d
 
 DGW sends each request as a VCF batch to the registered `bcftools csq --local-csq` engine. It reports effect, impact, gene, transcript, strand, amino-acid change, DNA change, bcftools version, and Ensembl annotation release. A no-feature result is shown explicitly rather than treated as missing database evidence.
 
+When several records are returned, use **Transcript consequences** in the Evidence panel to inspect each transcript and its raw record. Other Evidence cards offer **Matched records**. Switching records changes only the displayed detail, not the allele or its score; the first record is not necessarily the most severe.
+
 ## Evidence layers
 
 - **ClinVar** returns exact VCF records with significance, review status, conditions, identifiers, and oncogenicity fields when supplied by the configured release.

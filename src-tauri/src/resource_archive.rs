@@ -240,7 +240,10 @@ fn verify_manifest(
         declared.insert("NOTICE.txt".into());
     }
     if actual != declared {
-        return Err("Resource package contains files not covered by its manifest".into());
+        return Err(format!(
+            "Resource package contains files not covered by its manifest: {:?}",
+            actual.difference(&declared).collect::<Vec<_>>()
+        ));
     }
     Ok(manifest)
 }

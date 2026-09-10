@@ -4,6 +4,8 @@ Digital Genome Workstation (DGW) is a desktop application for testing changes to
 
 Application-level navigation separates project work from user preferences. Colour theme, interface scale, side-panel visibility, and reduced motion follow the user across projects without entering scientific project provenance.
 
+New to the workstation idea? The [FAQ compares DGW with music software](reference/faq.md), including tracks, the Allele Roll, bypass, devices and the Monitor.
+
 DGW is a variant what-if workspace. It answers a focused question: **if this sample had a different allele at this VCF position, what predicted consequence and known evidence would that allele have?** You can use the reference allele or substitute another ALT, compare experimental genome tracks, and export the track you want to keep.
 
 DGW is not IGV. It does not present chromosome-scale read tracks or accept BAM/CRAM input. The interface stays centered on the small region and allele currently being worked on.

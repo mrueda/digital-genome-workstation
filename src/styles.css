@@ -290,6 +290,9 @@ label > input, label > select { margin-top: 6px; }
 .mini-brand { width: 42px; height: 42px; margin: 0; border-radius: 10px; box-shadow: none; }
 .app-header > div:nth-child(2) { display: flex; flex-direction: column; }
 .app-header strong { font-size: 13px; }
+.evidence-summary { color: var(--text); overflow-wrap: anywhere; }
+.evidence-record-selector { display: grid; gap: 6px; margin: 10px 0; color: var(--muted); }
+.evidence-record-selector select { width: 100%; min-width: 0; }
 .app-header span { color: var(--muted); font-size: 10px; }
 .worker-state { display: flex; align-items: center; gap: 8px; max-width: 360px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 11px; }
 .worker-state.processing { color: var(--theme-text); }

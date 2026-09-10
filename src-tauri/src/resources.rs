@@ -31,7 +31,7 @@ pub struct ResourceFile {
     manifest_sha256: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceRelease {
     id: String,
@@ -40,14 +40,17 @@ pub struct ResourceRelease {
     assembly: String,
     platform: String,
     files: Vec<ResourceFile>,
-    bundle: ResourceBundle,
+    #[serde(skip)]
+    data: ResourceArtifact,
+    #[serde(skip)]
+    tools: ResourceArtifact,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Catalog {
     schema_version: u32,
-    releases: Vec<ResourceRelease>,
+    download_base_url: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -161,13 +164,106 @@ pub fn registered_bundles(app: &tauri::AppHandle) -> Result<Vec<ResourceBundle>,
         .filter_map(|path| read_bundle(path).ok())
         .collect())
 }
-fn catalog() -> Result<Catalog, String> {
+fn catalog() -> Result<Vec<ResourceRelease>, String> {
     let catalog: Catalog = serde_json::from_str(include_str!("../../config/resource-catalog.json"))
         .map_err(|e| e.to_string())?;
     if catalog.schema_version != 1 {
         return Err("Unsupported resource catalog".into());
     }
-    Ok(catalog)
+    available_releases(&catalog, &artifact_catalog()?, &platform_id())
+}
+
+fn available_releases(
+    catalog: &Catalog,
+    artifacts: &ArtifactCatalog,
+    platform: &str,
+) -> Result<Vec<ResourceRelease>, String> {
+    let Some(base) = &catalog.download_base_url else {
+        return Ok(Vec::new());
+    };
+    let base = reqwest::Url::parse(&format!("{}/", base.trim_end_matches('/')))
+        .map_err(|_| "Invalid resource download URL")?;
+    if base.scheme() != "https"
+        || base.host_str().is_none()
+        || !base.username().is_empty()
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+    {
+        return Err("Resource downloads require a public HTTPS URL without credentials".into());
+    }
+    let tools = artifacts
+        .artifacts
+        .iter()
+        .filter(|a| a.kind == "tools" && a.platform.as_deref() == Some(platform))
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        return Ok(Vec::new());
+    }
+    if tools.len() != 1 {
+        return Err("Resource catalog has ambiguous platform tools".into());
+    }
+    let tools = tools[0];
+    let mut releases = Vec::new();
+    let mut assemblies = std::collections::BTreeSet::new();
+    for data in artifacts.artifacts.iter().filter(|a| a.kind == "data") {
+        let assembly = data
+            .assembly
+            .as_deref()
+            .ok_or("Missing resource assembly")?;
+        if !matches!(assembly, "b37" | "hg38") || !assemblies.insert(assembly) {
+            return Err("Invalid or duplicate resource assembly".into());
+        }
+        let mut files = Vec::new();
+        for artifact in [tools, data] {
+            if !safe_relative(Path::new(&artifact.id))
+                || artifact.id.contains(['/', '\\', ':'])
+                || artifact.bytes == 0
+                || artifact.unpacked_bytes == 0
+                || [&artifact.sha256, &artifact.manifest_sha256]
+                    .iter()
+                    .any(|hash| hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err("Invalid resource artifact descriptor".into());
+            }
+            let name = artifact
+                .file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or("Invalid resource archive name")?;
+            if name != format!("{}.tar.gz", artifact.id) {
+                return Err("Resource archive name does not match its identity".into());
+            }
+            files.push(ResourceFile {
+                path: name.into(),
+                url: base.join(name).map_err(|e| e.to_string())?.to_string(),
+                sha256: artifact.sha256.clone(),
+                bytes: artifact.bytes,
+                executable: false,
+                archive_root: Some(artifact.id.clone()),
+                unpacked_bytes: artifact.unpacked_bytes,
+                manifest_sha256: Some(artifact.manifest_sha256.clone()),
+            });
+        }
+        releases.push(ResourceRelease {
+            id: format!("{}--{}", data.id, tools.id),
+            name: format!(
+                "{} resources",
+                if assembly == "b37" {
+                    "GRCh37"
+                } else {
+                    "GRCh38"
+                }
+            ),
+            version: data.id.clone(),
+            assembly: assembly.into(),
+            platform: platform.into(),
+            files,
+            data: data.clone(),
+            tools: tools.clone(),
+        });
+    }
+    Ok(releases)
 }
 
 fn artifact_catalog() -> Result<ArtifactCatalog, String> {
@@ -216,7 +312,7 @@ pub async fn resource_inventory(app: tauri::AppHandle) -> Result<ResourceInvento
         Ok(ResourceInventory {
             directory: directory(&app, &settings)?,
             platform: platform_id(),
-            releases: catalog()?.releases,
+            releases: catalog()?,
             installed,
             issues,
         })
@@ -433,6 +529,46 @@ fn bundle_from_archives(
     })
 }
 
+fn write_bundle_descriptor(root: &Path, portable: &ResourceBundle) -> Result<PathBuf, String> {
+    let resolved = resolve_bundle_paths(portable.clone(), root).map_err(|e| e.to_string())?;
+    validate_resource_bundle(&resolved).map_err(|e| e.to_string())?;
+    let descriptor = root.join("dgw-bundle.json");
+    persist_bundle_descriptor(&descriptor, portable)?;
+    descriptor.canonicalize().map_err(|e| e.to_string())
+}
+
+fn persist_bundle_descriptor(descriptor: &Path, portable: &ResourceBundle) -> Result<(), String> {
+    if descriptor.symlink_metadata().is_ok() {
+        if descriptor
+            .symlink_metadata()
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("Existing DGW bundle descriptor is a symbolic link".into());
+        }
+        let existing: ResourceBundle =
+            serde_json::from_reader(File::open(descriptor).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        if existing != *portable {
+            return Err("Existing DGW bundle descriptor differs".into());
+        }
+    } else {
+        let mut output = tempfile::NamedTempFile::new_in(
+            descriptor
+                .parent()
+                .ok_or("Descriptor has no parent directory")?,
+        )
+        .map_err(|e| e.to_string())?;
+        serde_json::to_writer_pretty(&mut output, portable).map_err(|e| e.to_string())?;
+        output.as_file().sync_all().map_err(|e| e.to_string())?;
+        output
+            .persist_noclobber(descriptor)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn install_downloaded_packages(
     app: tauri::AppHandle,
@@ -523,25 +659,7 @@ pub async fn install_downloaded_packages(
             total,
         );
         let portable = bundle_from_archives(data, tools, &data_manifest)?;
-        let resolved = resolve_bundle_paths(portable.clone(), &root).map_err(|e| e.to_string())?;
-        validate_resource_bundle(&resolved).map_err(|e| e.to_string())?;
-        let descriptor = root.join("dgw-bundle.json");
-        if descriptor.exists() {
-            let existing: ResourceBundle =
-                serde_json::from_reader(File::open(&descriptor).map_err(|e| e.to_string())?)
-                    .map_err(|e| e.to_string())?;
-            if existing != portable {
-                return Err("Existing DGW bundle descriptor differs".into());
-            }
-        } else {
-            let mut output = tempfile::NamedTempFile::new_in(&root).map_err(|e| e.to_string())?;
-            serde_json::to_writer_pretty(&mut output, &portable).map_err(|e| e.to_string())?;
-            output.as_file().sync_all().map_err(|e| e.to_string())?;
-            output
-                .persist_noclobber(&descriptor)
-                .map_err(|e| e.to_string())?;
-        }
-        let descriptor = descriptor.canonicalize().map_err(|e| e.to_string())?;
+        let descriptor = write_bundle_descriptor(&root, &portable)?;
         if !settings.registered.contains(&descriptor) {
             settings.registered.push(descriptor);
         }
@@ -566,7 +684,6 @@ pub async fn install_resource_release(
             .try_lock()
             .map_err(|_| "An installation is already running")?;
         let release = catalog()?
-            .releases
             .into_iter()
             .find(|entry| entry.id == release_id)
             .ok_or("This resource release is not published yet")?;
@@ -585,7 +702,6 @@ pub async fn install_resource_release(
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let root = root.canonicalize().map_err(|e| e.to_string())?;
         let total: u64 = release.files.iter().map(|file| file.bytes).sum();
-        let mut completed = 0;
         let report = |stage: &str, message: String, completed_bytes| {
             let _ = on_progress.send(InstallProgress {
                 stage: stage.into(),
@@ -594,132 +710,8 @@ pub async fn install_resource_release(
                 total_bytes: total,
             });
         };
-        let client = reqwest::blocking::Client::builder()
-            .https_only(true)
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
-        for entry in &release.files {
-            if !safe_relative(&entry.path)
-                || entry.sha256.len() != 64
-                || !entry.sha256.bytes().all(|c| c.is_ascii_hexdigit())
-            {
-                return Err("Invalid resource file descriptor".into());
-            }
-            let destination = root.join(&entry.path);
-            if let Some(name) = &entry.archive_root {
-                let manifest_sha256 = entry
-                    .manifest_sha256
-                    .as_deref()
-                    .ok_or("Resource archive does not declare its manifest checksum")?;
-                let extracted = root.join(name);
-                if extracted.exists() {
-                    report("verify", format!("Checking installed {name}"), completed);
-                    crate::resource_archive::verify_installed(&extracted, name, manifest_sha256)?;
-                    completed += entry.bytes;
-                    continue;
-                }
-            }
-            fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
-            if !destination
-                .parent()
-                .unwrap()
-                .canonicalize()
-                .map_err(|e| e.to_string())?
-                .starts_with(&root)
-            {
-                return Err("Resource destination escapes its installation directory".into());
-            }
-            report(
-                "verify",
-                format!("Checking {}", entry.path.display()),
-                completed,
-            );
-            if !file_matches(&destination, entry)? {
-                if destination.symlink_metadata().is_ok() {
-                    return Err(format!(
-                        "Existing resource is different: {}. Choose a new installation folder.",
-                        entry.path.display()
-                    ));
-                }
-                let mut response = client
-                    .get(&entry.url)
-                    .send()
-                    .and_then(|r| r.error_for_status())
-                    .map_err(|e| e.to_string())?;
-                let mut output = tempfile::NamedTempFile::new_in(destination.parent().unwrap())
-                    .map_err(|e| e.to_string())?;
-                let mut received = 0u64;
-                let mut buffer = vec![0; 1024 * 1024];
-                loop {
-                    let count = response.read(&mut buffer).map_err(|e| e.to_string())?;
-                    if count == 0 {
-                        break;
-                    }
-                    received += count as u64;
-                    if received > entry.bytes {
-                        return Err("Download exceeds its declared size".into());
-                    }
-                    output
-                        .write_all(&buffer[..count])
-                        .map_err(|e| e.to_string())?;
-                    report(
-                        "download",
-                        format!("Downloading {}", entry.path.display()),
-                        completed + received,
-                    );
-                }
-                report(
-                    "verify",
-                    format!("Verifying {}", entry.path.display()),
-                    completed + received,
-                );
-                if !file_matches(output.path(), entry)? {
-                    return Err(format!(
-                        "Checksum verification failed for {}",
-                        entry.path.display()
-                    ));
-                }
-                output.as_file().sync_all().map_err(|e| e.to_string())?;
-                output
-                    .persist_noclobber(&destination)
-                    .map_err(|e| e.to_string())?;
-            }
-            #[cfg(unix)]
-            if entry.executable {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))
-                    .map_err(|e| e.to_string())?;
-            }
-            if let Some(name) = &entry.archive_root {
-                report(
-                    "extract",
-                    format!("Unpacking {name}"),
-                    completed + entry.bytes,
-                );
-                crate::resource_archive::install(
-                    &destination,
-                    &root,
-                    name,
-                    entry.unpacked_bytes,
-                    entry.manifest_sha256.as_deref(),
-                )?;
-                fs::remove_file(&destination).map_err(|e| e.to_string())?;
-            }
-            completed += entry.bytes;
-        }
-        report(
-            "configure",
-            "Checking the installed resources".into(),
-            completed,
-        );
-        let bundle =
-            resolve_bundle_paths(release.bundle.clone(), &root).map_err(|e| e.to_string())?;
-        validate_resource_bundle(&bundle).map_err(|e| e.to_string())?;
-        let descriptor = root.join("dgw-bundle.json");
-        let mut output = tempfile::NamedTempFile::new_in(&root).map_err(|e| e.to_string())?;
-        serde_json::to_writer_pretty(&mut output, &release.bundle).map_err(|e| e.to_string())?;
-        output.persist(&descriptor).map_err(|e| e.to_string())?;
+        let portable = install_release_files(&root, &release, report)?;
+        let descriptor = write_bundle_descriptor(&root, &portable)?;
         if !settings.registered.contains(&descriptor) {
             settings.registered.push(descriptor);
         }
@@ -731,9 +723,245 @@ pub async fn install_resource_release(
     .map_err(|e| e.to_string())?
 }
 
+fn install_release_files(
+    root: &Path,
+    release: &ResourceRelease,
+    report: impl Fn(&str, String, u64),
+) -> Result<ResourceBundle, String> {
+    let mut completed = 0;
+    let mut data_manifest = None;
+    let client = reqwest::blocking::Client::builder()
+        .https_only(true)
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    for entry in &release.files {
+        if !safe_relative(&entry.path)
+            || entry.sha256.len() != 64
+            || !entry.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err("Invalid resource file descriptor".into());
+        }
+        let destination = root.join(&entry.path);
+        if let Some(name) = &entry.archive_root {
+            let manifest_sha256 = entry
+                .manifest_sha256
+                .as_deref()
+                .ok_or("Resource archive does not declare its manifest checksum")?;
+            let extracted = root.join(name);
+            if extracted.exists() {
+                report("verify", format!("Checking installed {name}"), completed);
+                let manifest =
+                    crate::resource_archive::verify_installed(&extracted, name, manifest_sha256)?;
+                if name == &release.data.id {
+                    data_manifest = Some(manifest);
+                }
+                completed += entry.bytes;
+                continue;
+            }
+        }
+        fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
+        if !destination
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(&root)
+        {
+            return Err("Resource destination escapes its installation directory".into());
+        }
+        report(
+            "verify",
+            format!("Checking {}", entry.path.display()),
+            completed,
+        );
+        if !file_matches(&destination, entry)? {
+            if destination.symlink_metadata().is_ok() {
+                return Err(format!(
+                    "Existing resource is different: {}. Choose a new installation folder.",
+                    entry.path.display()
+                ));
+            }
+            let mut response = client
+                .get(&entry.url)
+                .send()
+                .and_then(|r| r.error_for_status())
+                .map_err(|e| e.to_string())?;
+            let mut output = tempfile::NamedTempFile::new_in(destination.parent().unwrap())
+                .map_err(|e| e.to_string())?;
+            let mut received = 0u64;
+            let mut buffer = vec![0; 1024 * 1024];
+            loop {
+                let count = response.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                received += count as u64;
+                if received > entry.bytes {
+                    return Err("Download exceeds its declared size".into());
+                }
+                output
+                    .write_all(&buffer[..count])
+                    .map_err(|e| e.to_string())?;
+                report(
+                    "download",
+                    format!("Downloading {}", entry.path.display()),
+                    completed + received,
+                );
+            }
+            report(
+                "verify",
+                format!("Verifying {}", entry.path.display()),
+                completed + received,
+            );
+            if !file_matches(output.path(), entry)? {
+                return Err(format!(
+                    "Checksum verification failed for {}",
+                    entry.path.display()
+                ));
+            }
+            output.as_file().sync_all().map_err(|e| e.to_string())?;
+            output
+                .persist_noclobber(&destination)
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(unix)]
+        if entry.executable {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(name) = &entry.archive_root {
+            report(
+                "extract",
+                format!("Unpacking {name}"),
+                completed + entry.bytes,
+            );
+            let manifest = crate::resource_archive::install(
+                &destination,
+                &root,
+                name,
+                entry.unpacked_bytes,
+                entry.manifest_sha256.as_deref(),
+            )?;
+            if name == &release.data.id {
+                data_manifest = Some(manifest);
+            }
+            fs::remove_file(&destination).map_err(|e| e.to_string())?;
+        }
+        completed += entry.bytes;
+    }
+    report(
+        "configure",
+        "Checking the installed resources".into(),
+        completed,
+    );
+    let portable = bundle_from_archives(
+        &release.data,
+        &release.tools,
+        &data_manifest.ok_or("Installed data manifest is missing")?,
+    )?;
+    Ok(portable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn public_catalog() -> Catalog {
+        Catalog {
+            schema_version: 1,
+            download_base_url: Some(
+                "https://github.com/mrueda/dgw-data/releases/download/resources-r1".into(),
+            ),
+        }
+    }
+
+    #[test]
+    fn pairs_each_assembly_with_only_the_current_platform() {
+        let artifacts = artifact_catalog().unwrap();
+        for platform in [
+            "linux-aarch64",
+            "linux-x86_64",
+            "darwin-aarch64",
+            "darwin-x86_64",
+            "windows-x86_64",
+        ] {
+            let releases = available_releases(&public_catalog(), &artifacts, platform).unwrap();
+            assert_eq!(releases.len(), 2);
+            for release in releases {
+                assert_eq!(release.platform, platform);
+                assert_eq!(release.tools.platform.as_deref(), Some(platform));
+                assert_eq!(release.files.len(), 2);
+                assert_eq!(release.files[0].sha256, release.tools.sha256);
+                assert_eq!(release.files[1].sha256, release.data.sha256);
+                assert_eq!(
+                    release.files[0].archive_root.as_deref(),
+                    Some(release.tools.id.as_str())
+                );
+                for file in &release.files {
+                    assert_eq!(
+                        file.url,
+                        format!(
+                            "https://github.com/mrueda/dgw-data/releases/download/resources-r1/{}",
+                            file.path.display()
+                        )
+                    );
+                }
+                let wire = serde_json::to_value(release).unwrap();
+                assert!(wire.get("data").is_none());
+                assert!(wire.get("tools").is_none());
+            }
+        }
+        assert!(
+            available_releases(&public_catalog(), &artifacts, "windows-aarch64")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(available_releases(
+            &Catalog {
+                schema_version: 1,
+                download_base_url: None
+            },
+            &artifacts,
+            "linux-aarch64"
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn rejects_unsafe_download_catalogs() {
+        for url in [
+            "http://example.org",
+            "https://user:secret@example.org",
+            "https://example.org?token=secret",
+            "https://example.org/#fragment",
+        ] {
+            let config = Catalog {
+                schema_version: 1,
+                download_base_url: Some(url.into()),
+            };
+            assert!(
+                available_releases(&config, &artifact_catalog().unwrap(), "linux-aarch64").is_err()
+            );
+        }
+        let mut artifacts = artifact_catalog().unwrap();
+        let tool = artifacts
+            .artifacts
+            .iter()
+            .find(|a| a.platform.as_deref() == Some("linux-aarch64"))
+            .unwrap()
+            .clone();
+        artifacts.artifacts.push(tool);
+        assert!(available_releases(&public_catalog(), &artifacts, "linux-aarch64").is_err());
+        let mut artifacts = artifact_catalog().unwrap();
+        artifacts.artifacts[0].id = "../escape".into();
+        assert!(available_releases(&public_catalog(), &artifacts, "linux-aarch64").is_err());
+        let mut artifacts = artifact_catalog().unwrap();
+        artifacts.artifacts[0].sha256 = "invalid".into();
+        assert!(available_releases(&public_catalog(), &artifacts, "linux-aarch64").is_err());
+    }
+
     #[test]
     #[ignore = "Requires DGW_TEST_DATA_ARCHIVE and DGW_TEST_TOOL_ARCHIVE"]
     fn native_release_pair_builds_a_valid_bundle() {
@@ -745,25 +973,36 @@ mod tests {
         assert_eq!(data.kind, "data");
         assert_eq!(tools.platform.as_deref(), Some(platform_id().as_str()));
         let root = tempfile::tempdir().unwrap();
-        crate::resource_archive::install(
-            &tool_path,
-            root.path(),
-            &tools.id,
-            tools.unpacked_bytes,
-            Some(&tools.manifest_sha256),
-        )
-        .unwrap();
-        let manifest = crate::resource_archive::install(
-            &data_path,
-            root.path(),
-            &data.id,
-            data.unpacked_bytes,
-            Some(&data.manifest_sha256),
-        )
-        .unwrap();
-        let portable = bundle_from_archives(&data, &tools, &manifest).unwrap();
-        let resolved = resolve_bundle_paths(portable, root.path()).unwrap();
-        validate_resource_bundle(&resolved).unwrap();
+        let release = available_releases(&public_catalog(), &catalog, &platform_id())
+            .unwrap()
+            .into_iter()
+            .find(|r| r.data.id == data.id)
+            .unwrap();
+        // Seed verified downloads from local archives; no remote data transfer.
+        for path in [&data_path, &tool_path] {
+            let destination = root.path().join(path.file_name().unwrap());
+            if fs::hard_link(path, &destination).is_err() {
+                fs::copy(path, &destination).unwrap();
+            }
+        }
+        let portable = install_release_files(root.path(), &release, |_, _, _| {}).unwrap();
+        let descriptor = write_bundle_descriptor(root.path(), &portable).unwrap();
+        let original = fs::read(&descriptor).unwrap();
+        let retry = install_release_files(root.path(), &release, |_, _, _| {}).unwrap();
+        assert_eq!(portable, retry);
+        assert_eq!(
+            write_bundle_descriptor(root.path(), &retry).unwrap(),
+            descriptor
+        );
+        assert_eq!(fs::read(&descriptor).unwrap(), original);
+        let mut changed = portable.clone();
+        changed.id = "do-not-overwrite".into();
+        assert!(persist_bundle_descriptor(&descriptor, &changed).is_err());
+        assert_eq!(fs::read(&descriptor).unwrap(), original);
+        assert!(release
+            .files
+            .iter()
+            .all(|f| !root.path().join(&f.path).exists()));
     }
     #[test]
     fn verifies_downloads_and_rejects_escaping_paths() {

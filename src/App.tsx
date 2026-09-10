@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
+import { refreshedAlleleFocus } from "./alleleFocus";
+import { EvidenceCard } from "./EvidenceCard";
 import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId } from "./ApplicationChrome";
 import {
   TrackDeviceWorkspace,
@@ -891,23 +893,6 @@ function VariantChangeLens({
         {consequenceDetails.length > 0 && <small>{consequenceDetails.join(" · ")}</small>}
       </div>
     </div>
-  );
-}
-
-function EvidenceCard({ evidence }: { evidence: EvidenceResult }) {
-  const important = evidence.records[0];
-  const highlights = important
-    ? ["effect", "impact", "geneName", "featureId", "transcriptBiotype", "strand", "dnaChange", "aminoAcidChange", "engine", "engineVersion", "annotationRelease", "hgvsC", "hgvsP", "CADD_phred", "REVEL_score", "SIFT_score", "Polyphen2_HDIV_score", "CLNSIG", "CLNREVSTAT", "GENEINFO", "ONC", "SCI", "id", "CNT"]
-        .flatMap((key) => important[key] ? [[key, important[key]] as const] : [])
-    : [];
-  return (
-    <article className="evidence-card">
-      <header><h4>{evidence.source}</h4><span className={`status ${evidence.status}`}>{evidence.status.replace(/[A-Z]/g, (value) => ` ${value.toLowerCase()}`)}</span></header>
-      {evidence.message && <p className="warning">{evidence.message}</p>}
-      {highlights.length > 0 && <dl>{highlights.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
-      {important?.raw && <details><summary>Raw matched record</summary><code className="raw-record">{important.raw}</code></details>}
-      {evidence.status === "noExactMatch" && <p className="muted">No exact normalized allele was found. This is not evidence of benignity.</p>}
-    </article>
   );
 }
 
@@ -2255,18 +2240,14 @@ function Workstation({
         if (generation !== focusRefreshGeneration.current) return;
         setFocus(view);
         setContext(nextContext);
-        if (selected) {
-          const refreshedSelection = view.variants.find((item) => item.key.assembly === selected.key.assembly && variantLabel(item.key) === variantLabel(selected.key));
-          setSelected(refreshedSelection ?? view.variants[0] ?? selected);
-        } else {
-          setSelected(view.variants[0]);
-        }
+        const variants = view.variants;
+        setSelected(current => refreshedAlleleFocus(current, variants, nextContext));
       } catch (error) {
         loadErrors.push(`Focused region unavailable: ${messageOf(error)}`);
       }
 
       if (generation !== focusRefreshGeneration.current) return;
-      setNotice(loadErrors.length > 0 ? loadErrors.join(" · ") : "Focused region is up to date");
+      if (loadErrors.length > 0) setNotice(loadErrors.join(" · "));
       return { view, lanes };
     } finally {
       if (!background && generation === focusRefreshGeneration.current) setBusy(false);
@@ -2522,7 +2503,6 @@ function Workstation({
         recordAction({ kind: "editBatch", trackId: activeTrack.id, editIds: [createdEditId], label: "Apply mutation" });
       }
       let mutationCount: number | undefined;
-      let profiledAutomatically = false;
       if (createdEditId && refreshed?.lanes) {
         const lane = refreshed.lanes.find((item) => item.track.id === nextSnapshot.activeTrack.id);
         mutationCount = lane?.edits.length;
@@ -2532,13 +2512,10 @@ function Workstation({
         setSelectedEditId(createdEditId);
         if (lane && trackEvidenceDeviceIds(nextSnapshot.activeTrack.id).length > 0) {
           void analyzeTrack(nextSnapshot.activeTrack.id, lane, "automatic");
-          profiledAutomatically = true;
         }
       }
       setDetailMode("allele");
-      if (!createdEditId || !profiledAutomatically) {
-        setNotice(`Mutation state${mutationCount ? ` ${mutationCount}` : ""} added to ${nextSnapshot.activeTrack.name}`);
-      }
+      setNotice(`Mutation state${mutationCount ? ` ${mutationCount}` : ""} added to ${nextSnapshot.activeTrack.name}`);
     } catch (error) {
       setNotice(messageOf(error));
       throw error;
@@ -3867,7 +3844,7 @@ function Workstation({
           message: `Submitting ${totalBulkMutations.toLocaleString()} mutations to the background Evidence profiler…`
         }
       }));
-      setNotice(`${trigger === "automatic" ? "Track Profiler started automatically" : "Track Profiler started"} for ${totalBulkMutations.toLocaleString()} mutations`);
+      if (trigger === "manual") setNotice(`Track Profiler started for ${totalBulkMutations.toLocaleString()} mutations`);
       try {
         const workerThreads = settings.workerThreads === "auto"
           ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1)
@@ -3920,7 +3897,8 @@ function Workstation({
               : `Background profile completed for ${result.activeMutations.toLocaleString()} mutations with ${activeDeviceIds.length} Evidence devices.`
           }
         }));
-        setNotice(incomplete ? "Background Track Profile completed with partial Evidence coverage" : "Background Track Profile is complete");
+        // Completion and coverage belong to the track's profiler panel. Do not
+        // overwrite confirmation of a more recent user action in the header.
       } catch (error) {
         setTrackProfilerRuns((current) => ({
           ...current,
@@ -4055,9 +4033,6 @@ function Workstation({
       automaticEvaluationTimer.current = undefined;
       if (generation !== evaluationGeneration.current) return;
       setRunningDeviceId("all");
-      setNotice(missingDeviceIds.length > 0
-        ? `Evaluating the selected allele with ${missingDeviceIds.length} ${missingDeviceIds.length === 1 ? "device" : "devices"}…`
-        : "Loading cached evidence for the selected allele…");
       const pending = missingDeviceIds.length > 0
         ? collectDeviceEvidence(evaluatedVariant.key, missingDeviceIds, true)
         : Promise.resolve({} as DeviceEvidenceMap);
@@ -4067,11 +4042,7 @@ function Workstation({
         setDeviceEvaluations(currentEvidence);
         await recordSelectedMutationMeter(currentEvidence, activeDeviceIds, generation);
         if (generation !== evaluationGeneration.current) return;
-        const transientFailures = Object.values(currentEvidence)
-          .filter((evidence) => evidence.status === "error" || evidence.status === "resourceUnavailable").length;
-        setNotice(transientFailures > 0
-          ? `Selected-allele evidence updated · ${transientFailures} ${transientFailures === 1 ? "device needs" : "devices need"} attention`
-          : "Selected-allele evidence updated automatically");
+        // Each evidence card retains its own result/error status.
       }).catch((error) => {
         if (generation === evaluationGeneration.current) setNotice(`Automatic evidence evaluation failed: ${messageOf(error)}`);
       }).finally(() => {
@@ -4811,7 +4782,7 @@ function Workstation({
             <p className="evaluation-scope">Active devices run automatically for this exact allele. Imported VCF annotations are not used.</p>
             <button className="button primary wide" onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}>{runningDeviceId ? "Evaluating…" : "Refresh active Evidence devices"}</button>
             {visibleEvidence.length > 0 ? <div className="evidence-stack">
-              {visibleEvidence.map((evidence, index) => <EvidenceCard evidence={evidence} key={`${evidence.source}-${index}`} />)}
+              {visibleEvidence.map((evidence, index) => <EvidenceCard evidence={evidence} key={`${selectedEvidenceKey}-${evidence.source}-${index}`} />)}
               <p className="limitation">{evaluation?.limitation ?? "Consequences and evidence are evaluated independently for one exact allele. Compound and phase-dependent effects are not calculated."}</p>
             </div> : <div className="empty-inspector"><span>◇</span><p>{runningDeviceId ? "Evaluating this exact allele…" : "Select an active Evidence device or refresh to evaluate this exact allele."}</p></div>}
           </> : <div className="empty-inspector"><span>⌖</span><p>Select an allele in the focused region.</p></div>}

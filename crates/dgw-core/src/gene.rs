@@ -251,9 +251,31 @@ fn readonly_connection(path: &Path) -> Result<Connection> {
             path.display()
         )));
     }
+    // Gene indexes are frozen resources. SQLite's ordinary read-only mode can
+    // still create WAL/SHM files, changing a checksum-verified resource package.
+    let path = path.canonicalize()?;
+    let mut wal_path = path.as_os_str().to_os_string();
+    wal_path.push("-wal");
+    match std::fs::metadata(std::path::PathBuf::from(wal_path)) {
+        Ok(metadata) if metadata.len() > 0 => return Err(DgwError::InvalidResource(
+            "gene index has an uncheckpointed WAL; close its writer and checkpoint it before use"
+                .into(),
+        )),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
+    let mut uri = url::Url::from_file_path(&path).map_err(|_| {
+        DgwError::InvalidResource(format!(
+            "gene index path cannot be represented as a file URL: {}",
+            path.display()
+        ))
+    })?;
+    uri.query_pairs_mut().append_pair("immutable", "1");
     Ok(Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        uri.as_str(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )?)
 }
 
@@ -297,10 +319,32 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn rejects_a_gene_index_with_pending_wal_data() {
+        let temporary = tempdir().unwrap();
+        let path = temporary.path().join("live.sqlite");
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch(
+            "PRAGMA journal_mode=WAL; CREATE TABLE pending(value INTEGER); INSERT INTO pending VALUES (1);"
+        ).unwrap();
+        assert!(readonly_connection(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("uncheckpointed WAL"));
+        drop(writer);
+        let reader = readonly_connection(&path).unwrap();
+        assert_eq!(
+            reader
+                .query_row("SELECT value FROM pending", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
     fn builds_and_searches_a_gene_only_gtf_index() {
         let temporary = tempdir().unwrap();
         let gtf_path = temporary.path().join("genes.gtf.gz");
-        let index_path = temporary.path().join("genes.sqlite");
+        let index_path = temporary.path().join("genes #é.sqlite");
         let file = File::create(&gtf_path).unwrap();
         let mut writer = GzEncoder::new(file, Compression::default());
         writeln!(writer, "#!genome-build GRCh37.p13").unwrap();
@@ -327,7 +371,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(metadata.gene_count, 2);
+        let files_before = std::fs::read_dir(temporary.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(gene_index_metadata(&index_path).unwrap(), metadata);
+        let files_after = std::fs::read_dir(temporary.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            files_before, files_after,
+            "Reading a resource must not create SQLite sidecars"
+        );
         let result = search_gene_index(&index_path, "brca", 10).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].gene_id, "ENSG1");

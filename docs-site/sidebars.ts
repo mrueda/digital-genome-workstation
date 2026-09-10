@@ -56,6 +56,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Reference',
       items: [
+        {type: 'doc', id: 'reference/faq', label: 'FAQ'},
         {type: 'doc', id: 'reference/evidence-statuses', label: 'Evidence Statuses'},
         {type: 'doc', id: 'reference/performance', label: 'Performance'},
         {type: 'doc', id: 'reference/troubleshooting', label: 'Troubleshooting'},

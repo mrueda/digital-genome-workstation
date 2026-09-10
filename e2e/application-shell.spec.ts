@@ -94,6 +94,44 @@ test("shows verified downloaded-package installation in resource settings", asyn
   await expect(dialog.getByRole("button", { name: "Use existing resources" })).toBeVisible();
 });
 
+test("installs a matching resource release and recovers from an installation error", async ({ page }) => {
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: {
+      invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown>
+    } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    let attempts = 0;
+    internals.invoke = async (name, args) => {
+      if (name === "resource_inventory") return {
+        directory: "/synthetic/resources", platform: "linux-aarch64", issues: [],
+        releases: [{ id: "test-b37-linux-aarch64", name: "GRCh37 resources", version: "r1",
+          assembly: "b37", platform: "linux-aarch64", files: [{ bytes: 1125563187 }, { bytes: 7754857 }] }],
+        installed: attempts > 1 ? [{ descriptor: "/synthetic/resources/dgw-bundle.json",
+          bundle: { id: "test-b37-linux-aarch64", assembly: "b37" }, ready: true, message: "Ready" }] : []
+      };
+      if (name === "install_resource_release") {
+        if (args?.releaseId !== "test-b37-linux-aarch64") throw new Error("Wrong release selected");
+        attempts += 1;
+        if (attempts === 1) throw new Error("Connection interrupted. Retry installation.");
+        return null;
+      }
+      return original(name, args);
+    };
+  });
+  await page.getByRole("button", { name: "Settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "User settings" });
+  await dialog.getByRole("button", { name: "Resources", exact: true }).click();
+  const install = dialog.getByRole("button", { name: "Install resources", exact: true });
+  await expect(install).toHaveCount(1);
+  await expect(dialog).toContainText("1.1 GB");
+  await install.click();
+  await expect(dialog.getByRole("alert")).toContainText("Connection interrupted");
+  await expect(install).toBeEnabled();
+  await install.click();
+  await expect(dialog).toContainText("Ready · test-b37-linux-aarch64");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+});
+
 test("presents authorship and software identity in About DGW", async ({ page }) => {
   await page.getByText("Help", { exact: true }).click();
   await page.getByRole("button", { name: "About DGW" }).click();
@@ -172,4 +210,57 @@ test("resets changed Mutation Generator controls", async ({ page }) => {
   await page.getByRole("button", { name: "Reset selected" }).click();
   await expect(seed).toHaveValue("42");
   await expect(page.getByText("Mutation Generator controls reset. Existing track edits were not changed.")).toBeVisible();
+});
+
+test("keeps the edited locus through replacement, undo, redo and reference restoration", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.evaluate(async () => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    await internals.invoke("test_enable_mutable_edits");
+  });
+  const mark = page.getByRole("button", { name: "Edit candidate allele 7:140453112 G to A", exact: true }).first();
+  await mark.click();
+  const editor = page.getByLabel("Selected allele editor");
+  const position = editor.locator(".locked-position");
+  await expect(position).toContainText("140,453,112 G→A");
+  await editor.getByLabel("ALT", { exact: true }).fill("C");
+  await page.getByRole("button", { name: "Reset view", exact: true }).click();
+  await expect(editor.getByLabel("ALT", { exact: true })).toHaveValue("C");
+  await editor.getByRole("button", { name: "Add mutation block to track", exact: true }).click();
+  await expect(position).toContainText("140,453,112 G→C");
+  await expect(page.getByRole("button", { name: "Edit candidate allele 7:140453112 G to C", exact: true })).toHaveCount(1);
+  await page.keyboard.press("Control+z");
+  await expect(position).toContainText("140,453,112 G→A");
+  await page.keyboard.press("Control+Shift+z");
+  await expect(position).toContainText("140,453,112 G→C");
+  await editor.getByRole("button", { name: "Use reference", exact: true }).click();
+  await editor.getByRole("button", { name: "Add mutation block to track", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit candidate allele 7:140453112 G to C", exact: true })).toHaveCount(0);
+  await expect(position).toContainText("140,453,112");
+  await page.getByRole("button", { name: "Bypass C→G edit", exact: true }).click();
+  await expect(position).toContainText("140,453,112 G→C");
+  await page.getByRole("button", { name: "Enable C→G edit", exact: true }).click();
+  await expect(position).toContainText("140,453,112");
+  await expect(page.getByRole("button", { name: "Inspect source allele 7:140453112 G to A", exact: true })).toHaveCount(1);
+});
+
+test("makes every transcript evidence record accessible without changing the allele", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByText("View", { exact: true }).click();
+  // Evidence is initially hidden by the default settings in some saved profiles.
+  const evidenceMenu = page.getByRole("button", { name: /Evidence panel$/ });
+  if (!(await evidenceMenu.getAttribute("class"))?.includes("is-selected")) await evidenceMenu.click();
+  await page.keyboard.press("Escape");
+  const card = page.getByRole("article", { name: "Variant Consequences evidence" });
+  const selector = card.getByLabel("Variant Consequences record");
+  await expect(selector).toHaveCount(1);
+  await selector.selectOption("1");
+  await expect(card.locator("dl")).toContainText("ENST00000479537");
+  await expect(card.locator("dl")).toContainText("synonymous");
+  await card.getByText("Raw matched record", { exact: true }).click();
+  await expect(card).toContainText("Synthetic second transcript record");
+  await selector.selectOption("0");
+  await expect(card.locator("dl")).toContainText("ENST00000288602");
 });

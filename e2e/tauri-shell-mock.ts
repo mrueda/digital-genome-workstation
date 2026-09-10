@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import type { EffectiveVariant, GenomeTrackLane, GenomeState, EditKind } from "../src/types";
 
 export async function installTauriShellMock(page: Page) {
   await page.addInitScript(() => {
@@ -84,7 +85,7 @@ export async function installTauriShellMock(page: Page) {
     const positions = [140_453_105, 140_453_112, 140_453_121, 140_453_136, 140_453_148, 140_453_161, 140_453_176];
     const refs = ["C", "G", "T", "A", "C", "G", "T"];
     const alts = ["T", "A", "C", "T", "G", "T", "C"];
-    const sourceVariants = positions.map((position, index) => ({
+    const sourceVariants: EffectiveVariant[] = positions.map((position, index) => ({
       key: { assembly: "b37", contig: "7", position, reference: refs[index], alternate: alts[index] },
       haplotype1Alt: index % 3 === 0,
       haplotype2Alt: index % 3 === 1,
@@ -118,13 +119,13 @@ export async function installTauriShellMock(page: Page) {
     const alternativeVariants = sourceVariants.map((variant) => variant.key.position === brafSourceKey.position
       ? { ...variant, key: { ...variant.key, alternate: "C" }, origin: "edited", editIds: ["edit-alternative"], sourceKey: brafSourceKey }
       : variant);
-    const states = [
+    const states: GenomeState[] = [
       rootState,
       { id: "state-restored", parentId: "state-root", editId: "edit-restored", createdAt: now, label: "Restore BRAF" },
       { id: "state-alternative", parentId: "state-root", editId: "edit-alternative", createdAt: now, label: "Alternative BRAF ALT" }
     ];
     const tracks = [sourceTrack, restoredTrack, alternativeTrack];
-    const lanes = [
+    const lanes: GenomeTrackLane[] = [
       { track: sourceTrack, edits: [], variants: sourceVariants, sourceVariantTotal: 10, variantsTruncated: false },
       { track: restoredTrack, edits: [restoredEdit], variants: restoredVariants, sourceVariantTotal: 10, variantsTruncated: false },
       { track: alternativeTrack, edits: [alternativeEdit], variants: alternativeVariants, sourceVariantTotal: 10, variantsTruncated: false }
@@ -134,6 +135,28 @@ export async function installTauriShellMock(page: Page) {
     let exampleKind: "synthetic" | "wes" = "synthetic";
     let exampleAssembly: "b37" | "hg38" = "b37";
     let workspaceFocus = focus;
+    let mutableEdits = false;
+    const initialVariants = new Map(lanes.map(lane => [lane.track.id, structuredClone(lane.variants)]));
+    const appliedOperations: Array<{ trackId: string; id: string; edit: EditKind; haplotype: string }> = [];
+
+    // Small stateful interaction fixture, not a biological evaluator. Rust tests
+    // remain authoritative for normalization, multi-copy edits and scoring.
+    function replayEdits(trackId: string) {
+      const lane = lanes.find(item => item.track.id === trackId)!;
+      let variants = structuredClone(initialVariants.get(trackId)!);
+      for (const operation of appliedOperations.filter(item => item.trackId === trackId)) {
+        if (lane.track.bypassedEditIds.includes(operation.id)) continue;
+        const edit = operation.edit;
+        if (edit.kind === "compoundMutationLayer") throw Error("Unsupported interaction fixture edit");
+        const sourceKey = edit.sourceKey;
+        const source = variants.find(item => JSON.stringify(item.key) === JSON.stringify(sourceKey));
+        if (!source) continue; // An earlier operation may be bypassed.
+        variants = variants.filter(item => item !== source);
+        if (edit.kind === "setAllele") variants.push({ ...source, key: edit.key,
+          sourceKey: source.sourceKey ?? source.key, origin: "edited", editIds: [operation.id] });
+      }
+      lane.variants = variants.sort((a, b) => a.key.position - b.key.position);
+    }
 
     function activeTrack() {
       return tracks.find((track) => track.id === activeTrackId) ?? restoredTrack;
@@ -216,6 +239,7 @@ export async function installTauriShellMock(page: Page) {
     }
 
     async function command(commandName: string, args: JsonObject = {}) {
+      if (commandName === "test_enable_mutable_edits") { mutableEdits = true; return null; }
       if (commandName === "plugin:webview|set_webview_zoom") return null;
       if (commandName === "suggested_development_bundles") return [bundle, hg38Bundle];
       if (commandName === "resource_inventory") return {
@@ -235,7 +259,33 @@ export async function installTauriShellMock(page: Page) {
         activeTrackId = String(args.name).includes("alternative") ? alternativeTrack.id : restoredTrack.id;
         return snapshot();
       }
-      if (commandName === "apply_edit") return states.find((state) => state.id === activeTrack().headStateId) ?? rootState;
+      if (commandName === "apply_edit") {
+        if (!mutableEdits) return states.find(state => state.id === activeTrack().headStateId) ?? rootState;
+        const lane = lanes.find(item => item.track.id === args.trackId)!;
+        if (lane.track.readOnly) throw Error("Source track is read-only");
+        const edit = args.edit as EditKind;
+        if (edit.kind === "compoundMutationLayer") throw Error("Unsupported interaction fixture edit");
+        const source = lane.variants.find(item => JSON.stringify(item.key) === JSON.stringify(edit.sourceKey));
+        if (!source) throw Error("Selected source allele is absent");
+        if (Number(source.haplotype1Alt) + Number(source.haplotype2Alt) + Number(source.unphasedAlt) !== 1) throw Error("Fixture supports single-copy edits only");
+        const id = `test-edit-${appliedOperations.length + 1}`;
+        const state = { id: `state-${id}`, parentId: lane.track.headStateId, editId: id, createdAt: now };
+        lane.edits.push({ id, parentStateId: lane.track.headStateId, haplotype: args.haplotype as "one" | "two" | "unphased", edit, createdAt: now });
+        lane.track.headStateId = state.id;
+        appliedOperations.push({ trackId: lane.track.id, id, edit, haplotype: String(args.haplotype) });
+        states.push(state);
+        replayEdits(lane.track.id);
+        return state;
+      }
+      if (commandName === "set_track_edit_bypass" || commandName === "set_track_edits_bypass") {
+        const lane = lanes.find(item => item.track.id === args.trackId)!;
+        const ids = commandName === "set_track_edit_bypass" ? [String(args.editId)] : args.editIds as string[];
+        lane.track.bypassedEditIds = args.bypassed
+          ? [...new Set([...lane.track.bypassedEditIds, ...ids])]
+          : lane.track.bypassedEditIds.filter(id => !ids.includes(id));
+        replayEdits(lane.track.id);
+        return snapshot();
+      }
       if (commandName === "select_track") { activeTrackId = String(args.trackId); return snapshot(); }
       if (commandName === "rename_track") {
         activeTrackId = String(args.trackId);
@@ -299,7 +349,10 @@ export async function installTauriShellMock(page: Page) {
       }
       if (commandName === "evaluate_device") {
         const deviceId = String(args.deviceId);
-        if (deviceId === "org.dgw.builtin.variant-consequences") return { source: "Variant Consequences", status: "found", records: [{ impact: "HIGH", consequence: "missense_variant", transcript: "ENST00000288602", engine: "bcftools csq 1.24" }] };
+        if (deviceId === "org.dgw.builtin.variant-consequences") return { source: "Variant Consequences", status: "found", records: [
+          { impact: "HIGH", effect: "stop_gained", featureId: "ENST00000288602", engine: "bcftools csq 1.24" },
+          { impact: "LOW", effect: "synonymous", featureId: "ENST00000479537", engine: "bcftools csq 1.24", raw: "Synthetic second transcript record" }
+        ] };
         return { source: deviceId.split(".").at(-1), status: "noExactMatch", records: [], message: "No exact allele match in the configured release." };
       }
       throw new Error(`Unhandled browser-test command: ${commandName}`);
@@ -323,7 +376,7 @@ export async function installTauriShellMock(page: Page) {
         if (entry?.once) internals.unregisterCallback(id);
       },
       convertFileSrc(path: string) { return path; },
-      invoke: command
+      invoke: async (name: string, args?: JsonObject) => structuredClone(await command(name, args))
     };
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: internals });
   });
