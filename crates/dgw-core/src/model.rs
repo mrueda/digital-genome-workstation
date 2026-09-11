@@ -400,6 +400,31 @@ pub struct VariantPage {
     pub has_more: bool,
 }
 
+/// A source-locus page, comparing reconstructed allele/copy state rather than
+/// edit history. Paging never splits the ALTs of a multiallelic locus.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackComparisonPage {
+    pub track_id: String,
+    pub revision: String,
+    pub offset: u64,
+    pub limit: u32,
+    pub total_loci: u64,
+    pub has_more: bool,
+    pub rows: Vec<TrackComparisonLocus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackComparisonLocus {
+    pub contig: String,
+    pub position: u64,
+    pub reference: String,
+    pub source: Vec<EffectiveVariant>,
+    pub current: Vec<EffectiveVariant>,
+    pub changed: bool,
+}
+
 /// A bounded source-variant navigation row. Counts come from indexed SQLite
 /// columns and do not materialize variant payloads.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

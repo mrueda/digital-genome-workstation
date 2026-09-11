@@ -2371,6 +2371,92 @@ impl Project {
         })
     }
 
+    pub fn track_comparison_page(
+        &self,
+        track_id: &str,
+        offset: u64,
+        limit: u32,
+    ) -> Result<TrackComparisonPage> {
+        let stored = self.stored_track(track_id)?;
+        let bypassed = effective_bypassed_edit_ids(&stored);
+        let revision = hash_text(&serde_json::to_string(&(
+            &stored.track.head_state_id,
+            &bypassed,
+        ))?);
+        let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
+        let connection = self.connection()?;
+        let total_loci: u64 = connection.query_row(
+            "SELECT COUNT(*) FROM (SELECT contig, position, reference FROM root_variants GROUP BY contig, position, reference)", [], |row| row.get(0))?;
+        let mut statement = connection.prepare(
+            "SELECT contig, position, reference, MIN(alternate) FROM root_variants
+             GROUP BY contig, position, reference ORDER BY contig, position, reference LIMIT ?1 OFFSET ?2")?;
+        let keys = statement
+            .query_map(params![limit, offset], |row| {
+                Ok(VariantKey {
+                    assembly: self.manifest.resource_bundle.assembly.clone(),
+                    contig: row.get(0)?,
+                    position: row.get(1)?,
+                    reference: row.get(2)?,
+                    alternate: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let source = self.source_variants_at_loci(&keys)?;
+        let current =
+            self.effective_variants_at_loci(&stored.track.head_state_id, &bypassed, &keys)?;
+        let rows = keys
+            .into_iter()
+            .map(|key| {
+                let at_locus = |v: &&EffectiveVariant| {
+                    v.key.contig == key.contig
+                        && v.key.position == key.position
+                        && v.key.reference == key.reference
+                };
+                let before: Vec<_> = source.iter().filter(at_locus).cloned().collect();
+                let after: Vec<_> = current.iter().filter(at_locus).cloned().collect();
+                let signature = |variants: &[EffectiveVariant]| {
+                    variants
+                        .iter()
+                        .map(|v| {
+                            (
+                                v.key.stable_key(),
+                                v.haplotype1_alt,
+                                v.haplotype2_alt,
+                                v.unphased_alt,
+                                v.unphased_slot,
+                            )
+                        })
+                        .collect::<BTreeSet<_>>()
+                };
+                TrackComparisonLocus {
+                    contig: key.contig,
+                    position: key.position,
+                    reference: key.reference,
+                    changed: signature(&before) != signature(&after),
+                    source: before,
+                    current: after,
+                }
+            })
+            .collect();
+        let latest = self.stored_track(track_id)?;
+        if latest.track.head_state_id != stored.track.head_state_id
+            || effective_bypassed_edit_ids(&latest) != bypassed
+        {
+            return Err(DgwError::Project(
+                "track changed while comparing; reload the page".into(),
+            ));
+        }
+        Ok(TrackComparisonPage {
+            track_id: track_id.into(),
+            revision,
+            offset,
+            limit,
+            total_loci,
+            has_more: offset.saturating_add(u64::from(limit)) < total_loci,
+            rows,
+        })
+    }
+
     pub fn variant_contig_summaries(&self) -> Result<Vec<VariantContigSummary>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
@@ -5716,6 +5802,135 @@ mod tests {
     }
 
     #[test]
+    fn comparison_pages_group_multiallelic_loci_and_bound_payloads() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let mut roots: Vec<_> = (1..=205)
+            .map(|position| observed_variant("1", position))
+            .collect();
+        let mut second = roots[199].clone();
+        second.key.alternate = "T".into();
+        second.haplotype1_alt = false;
+        second.haplotype2_alt = true;
+        roots.push(second);
+        insert_root_variants(&project, &roots);
+        let first = project
+            .track_comparison_page(&track.id, 0, u32::MAX)
+            .unwrap();
+        assert_eq!(first.total_loci, 205);
+        assert_eq!(first.rows.len(), 200);
+        assert_eq!(first.rows[199].source.len(), 2);
+        assert!(first.rows.iter().all(|row| !row.changed));
+        let next = project.track_comparison_page(&track.id, 200, 200).unwrap();
+        assert_eq!(next.rows.len(), 5);
+        assert_eq!(next.rows[0].position, 201);
+        assert!(!next.has_more);
+        assert_eq!(first.revision, next.revision);
+    }
+
+    #[test]
+    fn comparison_uses_final_copy_state_after_restore_bypass_and_consolidation() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let mut root = observed_variant("1", 100);
+        root.haplotype2_alt = true;
+        insert_root_variants(&project, &[root.clone()]);
+        let baseline = project.track_comparison_page(&track.id, 0, 200).unwrap();
+        let state = project
+            .apply_edit_to_track(
+                &track.id,
+                Haplotype::One,
+                EditKind::RestoreReference {
+                    source_key: root.key,
+                },
+                None,
+            )
+            .unwrap();
+        let changed = project.track_comparison_page(&track.id, 0, 200).unwrap();
+        assert!(changed.rows[0].changed);
+        assert_eq!(changed.rows[0].current.len(), 1);
+        assert!(!changed.rows[0].current[0].haplotype1_alt);
+        assert!(changed.rows[0].current[0].haplotype2_alt);
+        let edit = state.edit_id.unwrap();
+        project
+            .toggle_track_edit_bypass(&track.id, &edit, true)
+            .unwrap();
+        let bypassed = project.track_comparison_page(&track.id, 0, 200).unwrap();
+        assert!(!bypassed.rows[0].changed);
+        assert_ne!(changed.revision, bypassed.revision);
+        project
+            .toggle_track_edit_bypass(&track.id, &edit, false)
+            .unwrap();
+        project.consolidate_track(&track.id).unwrap();
+        let consolidated = project.track_comparison_page(&track.id, 0, 200).unwrap();
+        assert_eq!(changed.rows, consolidated.rows);
+        assert!(!baseline.rows[0].changed);
+    }
+
+    #[test]
+    fn comparison_ignores_edit_history_when_the_original_allele_is_recreated() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let root = observed_variant("1", 100);
+        insert_root_variants(&project, &[root.clone()]);
+        let mut alternative = root.key.clone();
+        alternative.alternate = "T".into();
+        project
+            .apply_edit_to_track(
+                &track.id,
+                Haplotype::One,
+                EditKind::SetAllele {
+                    key: alternative.clone(),
+                    source_key: Some(root.key.clone()),
+                    unphased_slot: None,
+                },
+                None,
+            )
+            .unwrap();
+        project
+            .apply_edit_to_track(
+                &track.id,
+                Haplotype::One,
+                EditKind::SetAllele {
+                    key: root.key,
+                    source_key: Some(alternative),
+                    unphased_slot: None,
+                },
+                None,
+            )
+            .unwrap();
+        let page = project.track_comparison_page(&track.id, 0, 200).unwrap();
+        assert!(!page.rows[0].changed);
+        assert_eq!(project.edits_for_track(&track.id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn comparison_preserves_unphased_multiallelic_genotype_slots() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let mut first = observed_variant("1", 100);
+        first.haplotype1_alt = false;
+        first.unphased_alt = true;
+        first.unphased_slot = Some(1);
+        let mut second = first.clone();
+        second.key.alternate = "T".into();
+        second.unphased_slot = Some(2);
+        insert_root_variants(&project, &[first, second]);
+        let page = project.track_comparison_page(&track.id, 0, 1).unwrap();
+        assert_eq!(page.total_loci, 1);
+        assert_eq!(page.rows[0].source.len(), 2);
+        assert!(!page.rows[0].changed);
+        assert_eq!(
+            page.rows[0]
+                .current
+                .iter()
+                .filter_map(|v| v.unphased_slot)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([1, 2])
+        );
+    }
+
+    #[test]
     fn variant_pages_are_capped_and_report_the_remaining_rows() {
         let (_temporary, project) = test_project();
         let working = project.active_track().unwrap();
@@ -6717,12 +6932,18 @@ mod tests {
                 "window": 500
             },
             "selectedAlleleIds": ["b37:1:200:A:T"],
+            "selectedEditId": "edit-restored",
             "hiddenTrackIds": ["track-2"]
         });
         let updated_at = project.save_workstation_session(&session).unwrap();
 
         assert!(!updated_at.is_empty());
-        assert_eq!(project.workstation_session().unwrap(), Some(session));
+        assert_eq!(
+            project.workstation_session().unwrap(),
+            Some(session.clone())
+        );
+        let reopened = Project::open(project.root()).unwrap();
+        assert_eq!(reopened.workstation_session().unwrap(), Some(session));
     }
 
     #[test]

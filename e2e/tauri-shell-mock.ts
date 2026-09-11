@@ -238,7 +238,27 @@ export async function installTauriShellMock(page: Page) {
       };
     }
 
+    const sessions = new Map<string, unknown>();
+    let failNextSessionSave = false;
+    let largeComparison = false;
+    let failComparison = false;
     async function command(commandName: string, args: JsonObject = {}) {
+      if (commandName === "test_fail_next_comparison") { failComparison = true; return null; }
+      if (commandName === "test_large_comparison") { largeComparison = true; return null; }
+      if (commandName === "track_comparison_page") {
+        if (failComparison) { failComparison = false; throw Error("Synthetic comparison read failure"); }
+        const offset = Number(args.offset);
+        const limit = Math.min(200, Number(args.limit ?? 200));
+        const sources = largeComparison ? Array.from({ length: 205 }, (_, index) => ({ ...sourceVariants[0], key: { ...sourceVariants[0].key, contig: index < 200 ? "7" : "17", position: 1000 + index } })) : sourceVariants;
+        return { trackId: String(args.trackId), revision: "comparison-fixture-v1", offset, limit, totalLoci: sources.length,
+          hasMore: offset + limit < sources.length,
+          rows: sources.slice(offset, offset + limit).map((source, index) => ({
+            contig: source.key.contig, position: source.key.position, reference: source.key.reference,
+            source: [source], current: offset + index === 204 ? [] : [source], changed: offset + index === 204
+          })) };
+      }
+      if (commandName === "test_fail_next_session_save") { failNextSessionSave = true; return null; }
+      if (commandName === "plugin:dialog|open") return "/synthetic/DGW-Allele-Editing-Demo.dgw";
       if (commandName === "test_enable_mutable_edits") { mutableEdits = true; return null; }
       if (commandName === "plugin:webview|set_webview_zoom") return null;
       if (commandName === "suggested_development_bundles") return [bundle, hg38Bundle];
@@ -305,8 +325,12 @@ export async function installTauriShellMock(page: Page) {
         return snapshot();
       }
       if (commandName === "open_project") return snapshot();
-      if (commandName === "load_workstation_session") return null;
-      if (commandName === "save_workstation_session") return now;
+      if (commandName === "load_workstation_session") return structuredClone(sessions.get(String(args.projectPath)) ?? null);
+      if (commandName === "save_workstation_session") {
+        if (failNextSessionSave) { failNextSessionSave = false; throw Error("Synthetic session write failure"); }
+        sessions.set(String(args.projectPath), structuredClone(args.session));
+        return now;
+      }
       if (commandName === "device_catalog") return deviceCatalog;
       if (commandName === "list_background_jobs") return [];
       if (commandName === "variant_contigs") return [

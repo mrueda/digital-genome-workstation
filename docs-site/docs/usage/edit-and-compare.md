@@ -6,7 +6,25 @@ The imported genome is the read-only source track. Duplicate it to create an exp
 
 The left **Variants** browser is a stable catalog of alleles imported from the source VCF. It does not add or remove rows when the selected working track restores an ALT to REF or introduces an edit. The backend returns 200-row pages and the browser renders only the rows currently on screen. Track-specific effective alleles and mutation blocks appear in the track lanes instead.
 
+## Compare source and candidate
+
+Use **Compare source and candidate** above the tracks to open a dedicated comparison view. It replaces the track area and temporarily hides the Evidence sidebar; **Back to tracks** restores the workspace. The source column uses the individual's imported ALT, not the reference genome. Rows include chromosome-copy placement, with unphased calls left unassigned.
+
+The view covers only alleles loaded in the current genomic region. **Compare predictions** compares up to 200 changed source/current ALT pairs through the active Variant Consequences device, with four concurrent workers and cached evidence reuse. Filters separate DNA changes, different predictions, identical predictions and missing evidence. Prediction equality means the same returned transcript/consequence/impact tuples, not equivalent biological effects. REF restorations are listed separately and are not scored as ALT pairs.
+
+Choose **Evidence** for source/current results from active devices, or **Go to allele** to return to editing that position. Source alleles that cannot be resolved are marked unknown. This is not a replacement for background Track Profiler jobs.
+
+### Whole-track DNA comparison
+
+Select **Whole track DNA** to page across all imported loci, including other contigs. Each page contains at most 200 loci; all ALTs sharing a contig, position and REF stay together. Source and current columns show reconstructed allele/copy state. Edit IDs and history length do not determine whether DNA changed, and consolidation does not erase the comparison.
+
+**Changed loci on this page** filters only the loaded page. Counts are also page-specific, not a whole-track changed-locus total. **Focus region** returns to the genomic workspace at that locus. Read errors offer Retry; a detected revision change between pages returns to the first page. Pages use database contig ordering.
+
+This view compares DNA at imported coordinates; it does not enumerate unreported reference positions or independently introduced alleles outside those loci. “No ALT at this locus” describes the reconstructed state there, not a benign classification. Unphased genotype slots remain unassigned to parental chromosome copies. Whole-track prediction filtering is not implemented: use the focused view for prediction pairs or Track Profiler for aggregate evidence.
+
 ## Persistent edit blocks
+
+The allele editor separates **Reference**, **Saved on track**, and **Proposal · not saved**. Typing an ALT changes only the proposal; add the mutation block to save it and trigger evaluation. After restoring REF, the removed ALT can still be inspected, but its evidence is not evidence for the reference allele. Bypass the restoration block or undo it to edit that ALT again.
 
 Changes appear as blocks anchored to the focused reference coordinates. They remain visible and individually selectable until you remove them or consolidate the track.
 

@@ -293,6 +293,33 @@ label > input, label > select { margin-top: 6px; }
 .evidence-summary { color: var(--text); overflow-wrap: anywhere; }
 .evidence-record-selector { display: grid; gap: 6px; margin: 10px 0; color: var(--muted); }
 .evidence-record-selector select { width: 100%; min-width: 0; }
+.allele-edit-comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 12px 0; }
+.allele-edit-comparison > div { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+.allele-edit-comparison span { color: var(--muted); font-size: 0.8em; }
+.allele-edit-comparison code { font-size: 1.2em; overflow-wrap: anywhere; }
+.allele-edit-comparison .proposed { border-style: dashed; }
+.allele-evidence-comparison { margin-top: 12px; overflow-x: auto; }
+.allele-evidence-comparison h4 { margin: 0; }
+.allele-evidence-comparison table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 0.85em; }
+.allele-evidence-comparison th, .allele-evidence-comparison td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.allele-evidence-comparison th code { display: block; color: var(--cyan); }
+.comparison-entry { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
+.comparison-entry span { color: var(--muted); font-size: 0.85em; }
+.comparison-workspace { overflow: auto; min-height: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.comparison-workspace header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.comparison-workspace h2 { margin: 0; }
+.comparison-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; margin: 18px 0; }
+.comparison-actions select { margin-left: 8px; }
+.comparison-table-scroll { overflow: auto; max-height: 45vh; }
+.comparison-workspace table { border-collapse: collapse; width: 100%; }
+.comparison-workspace th, .comparison-workspace td { text-align: left; padding: 10px; border-bottom: 1px solid var(--line); }
+.comparison-workspace tr[aria-selected="true"] { background: var(--surface-active); }
+.comparison-workspace td code { color: var(--cyan); overflow-wrap: anywhere; }
+.comparison-copy { display: block; color: var(--muted); margin-top: 4px; }
+.comparison-actions button[aria-pressed], .comparison-workspace button:not(.button) { font: inherit; padding: 6px 10px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.comparison-actions button[aria-pressed="true"] { border-color: var(--cyan); background: var(--surface-active); }
+.comparison-workspace button:disabled { opacity: 0.5; cursor: default; }
+.comparison-actions label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
 .app-header span { color: var(--muted); font-size: 10px; }
 .worker-state { display: flex; align-items: center; gap: 8px; max-width: 360px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 11px; }
 .worker-state.processing { color: var(--theme-text); }

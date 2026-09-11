@@ -3,6 +3,10 @@ import { confirm as confirmDialog, message as messageDialog, open, save } from "
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
 import { refreshedAlleleFocus } from "./alleleFocus";
+import { savedAllele } from "./alleleComparison";
+import { ComparisonWorkspace } from "./ComparisonWorkspace";
+import { WholeTrackComparison } from "./WholeTrackComparison";
+import { comparisonRows } from "./comparisonRows";
 import { EvidenceCard } from "./EvidenceCard";
 import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId } from "./ApplicationChrome";
 import {
@@ -201,6 +205,7 @@ interface WorkstationSessionV1 {
   context: FocusContext;
   activeGene?: GeneSearchHit;
   selectedVariant?: VariantKey;
+  selectedEditId?: string;
   selectedAlleleIds: string[];
   symbolicSelection?: { selection: VariantSelection; total: number };
   detailMode: "devices" | "allele";
@@ -1077,6 +1082,8 @@ function AlleleRoll({
 
 function EditPanel({
   variant,
+  savedBase,
+  restored,
   rollChoice,
   onApply,
   busy,
@@ -1085,6 +1092,8 @@ function EditPanel({
   onDuplicateProtectedTrack
 }: {
   variant?: EffectiveVariant;
+  savedBase?: string;
+  restored: boolean;
   rollChoice?: AlleleRollChoice;
   onApply: (haplotype: Haplotype, edit: EditKind, note: string) => Promise<void>;
   busy: boolean;
@@ -1188,19 +1197,29 @@ function EditPanel({
           <label>ALT<input className="allele-input" value={alternate} onChange={(event) => setAlternate(event.target.value)} /></label>
         </>}
       </div>
+      {variant && <section className="allele-edit-comparison" aria-label="Allele comparison">
+        <div><span>Reference</span><code>{variant.key.reference}</code></div>
+        <div><span>Saved on track</span><code>{savedBase ?? "—"}</code></div>
+        <div className="proposed"><span>Proposal · not saved</span><code>{restored || !savedBase ? "—" : mode === "restore" ? variant.key.reference : alternateIsValid ? normalizedAlternate : "—"}</code></div>
+      </section>}
+      {restored && <p className="mutation-validation">Reference restored. The selected ALT is no longer active on this copy. Bypass its restoration block or undo to edit that ALT again.</p>}
+      {!savedBase && variant && <p className="mutation-validation">This ALT is not in the current view of the track. Select an active allele to edit it.</p>}
+      {savedBase && !restored && <p className="placement-help">The proposal affects the selected copy only. Evidence and Track Monitor describe saved changes, not this unsaved proposal.</p>}
       {mode === "replace" && variant && !alternateIsChanged && <p className="mutation-validation">Enter an ALT different from the current <code>{variant.key.alternate}</code>.</p>}
       {mode === "replace" && variant && alternateIsReference && <p className="mutation-validation error"><code>{variant.key.reference}</code> is the REF allele. Choose <b>Use reference</b> above instead of Change ALT.</p>}
       {mode === "replace" && alternate && !alternateIsValid && <p className="mutation-validation error">ALT may contain only A, C, G, T, or N.</p>}
       <p className="placement-help">Only a position present in the input VCF can be edited. DGW can target a named copy only when the selected ALT is phased onto that copy. A regular VCF cannot prove that unreported positions were confidently called reference.</p>
       <label>Note <span className="optional">optional</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why are you testing this change?" /></label>
       {saveFeedback && <p className={`mutation-save-feedback ${saveFeedback.tone}`} role={saveFeedback.tone === "error" ? "alert" : "status"}>{saveFeedback.message}</p>}
-      <button className="button primary wide" onClick={submit} disabled={busy || !editable || !variant || (mode === "replace" && (!alternateIsValid || !alternateIsChanged || alternateIsReference))}>{busy ? "Saving…" : "Add mutation block to track"}</button>
+      <button className="button primary wide" onClick={submit} disabled={busy || !editable || !variant || !savedBase || restored || (mode === "replace" && (!alternateIsValid || !alternateIsChanged || alternateIsReference))}>{busy ? "Saving…" : "Add mutation block to track"}</button>
     </section>
   );
 }
 
 function AlleleEditorPane({
   variant,
+  savedBase,
+  restored,
   focus,
   context,
   consequenceEvidence,
@@ -1212,6 +1231,8 @@ function AlleleEditorPane({
   onShowDevices
 }: {
   variant?: EffectiveVariant;
+  savedBase?: string;
+  restored: boolean;
   focus?: FocusView;
   context: FocusContext;
   consequenceEvidence?: EvidenceResult;
@@ -1255,7 +1276,8 @@ function AlleleEditorPane({
           onSelectVariant={onSelectVariant}
           onStageBase={(base, haplotype) => setRollChoice((current) => ({ base, haplotype, revision: (current?.revision ?? 0) + 1 }))}
         /> : <>
-          <VariantChangeLens variant={variant} referenceSequence={focus?.referenceSequence} context={context} consequenceEvidence={consequenceEvidence} />
+          {restored ? <p className="phase-notice">Reference restored. Evidence still describes the removed ALT, not the reference allele.</p>
+            : savedBase ? <VariantChangeLens variant={variant} referenceSequence={focus?.referenceSequence} context={context} consequenceEvidence={consequenceEvidence} /> : null}
           <div className="coordinate-ruler"><span>{context.contig}:{context.start.toLocaleString()}</span><i /><span>{context.end.toLocaleString()}</span></div>
           <SequenceRow label="REF" sequence={focus?.referenceSequence} tone="reference" context={context} variants={focus?.variants ?? []} track="reference" selected={variant} />
           <SequenceRow label="CHR COPY A" sequence={focus?.haplotype1Sequence} tone="hap-one" context={context} variants={focus?.variants ?? []} track="one" selected={variant} />
@@ -1266,6 +1288,8 @@ function AlleleEditorPane({
       </div>
       <EditPanel
         variant={variant}
+        savedBase={savedBase}
+        restored={restored}
         rollChoice={rollChoice}
         onApply={onApply}
         busy={busy}
@@ -1358,6 +1382,8 @@ function Workstation({
   const [notice, setNotice] = useState("Ready");
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [detailMode, setDetailMode] = useState<"devices" | "allele">("devices");
+  const [showComparison, setShowComparison] = useState(false);
+  const [wholeTrackComparison, setWholeTrackComparison] = useState(false);
   const [transportKind, setTransportKind] = useState<TransportTargetKind>("variants");
   const [transportLoop, setTransportLoop] = useState(false);
   const [transportState, setTransportState] = useState<TransportState>("idle");
@@ -1422,6 +1448,7 @@ function Workstation({
     context,
     activeGene,
     selectedVariant: selected?.key,
+    selectedEditId,
     selectedAlleleIds,
     symbolicSelection,
     detailMode,
@@ -1436,7 +1463,7 @@ function Workstation({
     redoActions,
     transportKind,
     transportLoop
-  }), [activeGene, appliedDevicesByTrack, bypassedDevicesByTrack, context, detailMode, hiddenTrackIds, morphs, optimizers, randomizers, redoActions, selected, selectedAlleleIds, selectedDeviceId, symbolicSelection, transportKind, transportLoop, undoActions]);
+  }), [activeGene, appliedDevicesByTrack, bypassedDevicesByTrack, context, detailMode, hiddenTrackIds, morphs, optimizers, randomizers, redoActions, selected, selectedEditId, selectedAlleleIds, selectedDeviceId, symbolicSelection, transportKind, transportLoop, undoActions]);
   const workstationSessionJson = useMemo(() => JSON.stringify(workstationSession), [workstationSession]);
   const saveSequenceRef = useRef<Promise<unknown>>(Promise.resolve());
   const persistWorkstationSession = useCallback(async () => {
@@ -2387,12 +2414,14 @@ function Workstation({
     void (async () => {
       let restoredContext = initial;
       let restoredSelectedVariant: VariantKey | undefined;
+      let restoredSelectedEditId: string | undefined;
       try {
         const stored = await api.loadWorkstationSession<WorkstationSessionV1>(projectPath);
         if (cancelled) return;
         if (isWorkstationSession(stored)) {
           restoredContext = stored.context;
           restoredSelectedVariant = stored.selectedVariant;
+          restoredSelectedEditId = stored.selectedEditId;
           initialViewportRef.current = restoredContext;
           setContext(restoredContext);
           setActiveGene(stored.activeGene);
@@ -2419,7 +2448,13 @@ function Workstation({
         const restored = await refresh(restoredContext);
         if (cancelled) return;
         if (restoredSelectedVariant && restored?.view) {
-          const variant = restored.view.variants.find((candidate) => sameVariant(candidate.key, restoredSelectedVariant!));
+          const lane = restored.lanes?.find(item => item.track.id === restored.view?.activeTrack.id);
+          const editVariant = lane && restoredSelectedEditId ? variantForTrackEdit(lane, restoredSelectedEditId) : undefined;
+          // The persisted edit must belong to this track and identify this allele.
+          // Prefer its copy-specific anchor over an identical ALT on another copy.
+          const validEdit = editVariant && sameVariant(editVariant.key, restoredSelectedVariant);
+          const variant = validEdit ? editVariant : restored.view.variants.find((candidate) => sameVariant(candidate.key, restoredSelectedVariant!));
+          setSelectedEditId(validEdit ? restoredSelectedEditId : undefined);
           if (variant) setSelected(variant);
           else setDetailMode("devices");
         }
@@ -4005,6 +4040,9 @@ function Workstation({
   }
 
   const selectedEvidenceKey = selected ? selectionEvidenceKey(selected.key) : "";
+  const selectedOperation = trackDeck.find(lane => lane.track.id === activeTrack.id)?.edits
+    .find(edit => edit.id === selectedEditId && !activeTrack.bypassedEditIds.includes(edit.id));
+  const selectedSavedAllele = savedAllele(selected, focus?.variants ?? [], selectedOperation);
   const activeAnalyzerSignature = activeAnalyzerDeviceIds.join("|");
   useEffect(() => {
     const generation = ++evaluationGeneration.current;
@@ -4534,7 +4572,7 @@ function Workstation({
 
   return (
     <main
-      className={`workstation${settings.showVariantBrowser ? "" : " hide-variants"}${settings.showEvidenceInspector ? "" : " hide-evidence"}`}
+      className={`workstation${settings.showVariantBrowser ? "" : " hide-variants"}${settings.showEvidenceInspector && !showComparison ? "" : " hide-evidence"}`}
       onMouseOver={(event) => updateContextHelp(event.target)}
       onFocusCapture={(event) => updateContextHelp(event.target)}
     >
@@ -4686,7 +4724,29 @@ function Workstation({
         </section>}
 
         <div className="track-workspace-shell" data-context-help="tracks">
-          <TrackDeviceWorkspace
+          {!showComparison && <div className="comparison-entry"><button type="button" onClick={() => { interruptTransportForUser(); setShowComparison(true); }} disabled={busy}>Compare source and candidate</button><span>See what changed in this region</span></div>}
+          {showComparison && <div className="comparison-actions" role="group" aria-label="Comparison scope">
+            <button aria-pressed={!wholeTrackComparison} onClick={() => setWholeTrackComparison(false)}>Focused region</button>
+            <button aria-pressed={wholeTrackComparison} onClick={() => setWholeTrackComparison(true)}>Whole track DNA</button>
+          </div>}
+          {showComparison && wholeTrackComparison ? <WholeTrackComparison projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
+            revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
+            onBack={() => setShowComparison(false)} onFocus={row => {
+              setShowComparison(false);
+              setSelected(undefined); setSelectedEditId(undefined); setDetailMode("devices");
+              void refresh({ contig: row.contig, start: Math.max(1, row.position - 40), end: row.position + Math.max(40, row.reference.length) });
+            }} /> : showComparison ? <ComparisonWorkspace
+            rows={comparisonRows(focusedSourceVariants ?? [], trackDeck.find(lane => lane.track.id === activeTrack.id))}
+            trackName={activeTrack.name} scope={`${context.contig}:${context.start.toLocaleString()}–${context.end.toLocaleString()}`}
+            revision={`${activeTrack.id}:${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}:${context.contig}:${context.start}:${context.end}:${activeAnalyzerSignature}`}
+            deviceIds={activeAnalyzerDeviceIds} load={collectDeviceEvidence}
+            onBack={() => setShowComparison(false)}
+            onOpen={row => {
+              setShowComparison(false);
+              if (row.editId) void openTrackEdit(activeTrack.id, row.editId);
+              else if (row.current) void openTrackAllele(activeTrack.id, alleleId(row.current));
+            }}
+          /> : <TrackDeviceWorkspace
             region={context}
             tracks={trackModels}
             selectedTrackId={activeTrack.id}
@@ -4712,6 +4772,8 @@ function Workstation({
             busy={busy}
             detailPanel={detailMode === "allele" ? <AlleleEditorPane
               variant={selected}
+              savedBase={selectedSavedAllele.base}
+              restored={selectedSavedAllele.restored}
               focus={focus}
               context={context}
               consequenceEvidence={activeConsequenceEvidence}
@@ -4766,7 +4828,7 @@ function Workstation({
             onRemoveDevice={removeRackDevice}
             onResetDevice={resetRackDevice}
             onAnalyzeTrack={(trackId) => { void analyzeTrack(trackId); }}
-          />
+          />}
         </div>
       </section>
 
@@ -4779,6 +4841,7 @@ function Workstation({
           </div>}
           {selected ? <>
             <div className="selected-variant"><p>{selected.key.contig}:{selected.key.position.toLocaleString()}</p><h3>{selected.key.reference}<i>›</i>{selected.key.alternate}</h3><span>{selected.origin} · {variantPhaseLabel(selected)}</span></div>
+            {!selectedSavedAllele.base || selectedSavedAllele.restored ? <p className="phase-notice">{selectedSavedAllele.restored ? "Reference is restored on the edited copy. " : "This ALT is not active in the current track view. "}Evidence below describes the selected ALT, not a reference call or an unsaved proposal.</p> : null}
             <p className="evaluation-scope">Active devices run automatically for this exact allele. Imported VCF annotations are not used.</p>
             <button className="button primary wide" onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}>{runningDeviceId ? "Evaluating…" : "Refresh active Evidence devices"}</button>
             {visibleEvidence.length > 0 ? <div className="evidence-stack">

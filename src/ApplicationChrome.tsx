@@ -269,7 +269,7 @@ export function ApplicationMenu({
           <button type="button" onClick={(event) => { closeMenu(event); setAboutOpen(true); }}>About DGW</button>
         </div>
       </details>
-      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
+      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${saveStatus === "error" ? saveMessage ?? "Save failed" : projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
     </nav>
     {aboutOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}>
       <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">

@@ -120,6 +120,24 @@ export interface EffectiveVariant {
   sourceInfo: Record<string, string>;
 }
 
+export interface TrackComparisonLocus {
+  contig: string;
+  position: number;
+  reference: string;
+  source: EffectiveVariant[];
+  current: EffectiveVariant[];
+  changed: boolean;
+}
+export interface TrackComparisonPage {
+  trackId: string;
+  revision: string;
+  offset: number;
+  limit: number;
+  totalLoci: number;
+  hasMore: boolean;
+  rows: TrackComparisonLocus[];
+}
+
 export interface GenomeState {
   id: string;
   parentId?: string;

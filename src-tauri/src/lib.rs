@@ -10,10 +10,10 @@ use dgw_core::{
     GenomeTrack, Haplotype, LocalComputePool, OptimizerAlleleEvidenceInput, OptimizerDirection,
     OptimizerMode, OptimizerObjective, OptimizerPlan, OptimizerRequest, ProcessProgress, Project,
     ProjectSnapshot, RandomizerPlan, RandomizerPreviewResult, RandomizerRequest, ResourceBundle,
-    SaturationAlleleInput, SelectionResolution, TrackMorphPreviewResult, TrackMorphRequest,
-    TransportTargetRequest, TransportTargetResult, VariantContigSummary, VariantDensity,
-    VariantNavigationBin, VariantPage, VariantSelection, VcfInspection, WorkspaceSnapshot,
-    CONSEQUENCE_DEVICE_ID,
+    SaturationAlleleInput, SelectionResolution, TrackComparisonPage, TrackMorphPreviewResult,
+    TrackMorphRequest, TransportTargetRequest, TransportTargetResult, VariantContigSummary,
+    VariantDensity, VariantNavigationBin, VariantPage, VariantSelection, VcfInspection,
+    WorkspaceSnapshot, CONSEQUENCE_DEVICE_ID,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -765,6 +765,28 @@ fn variant_page(
             )
         })
         .map_err(error_text)
+}
+
+#[tauri::command]
+async fn track_comparison_page(
+    project_path: PathBuf,
+    track_id: String,
+    offset: u64,
+    limit: Option<u32>,
+) -> Result<TrackComparisonPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Project::open(project_path)
+            .and_then(|project| {
+                project.track_comparison_page(
+                    &track_id,
+                    offset,
+                    limit.unwrap_or(dgw_core::VARIANT_PAGE_SIZE),
+                )
+            })
+            .map_err(error_text)
+    })
+    .await
+    .map_err(error_text)?
 }
 
 #[tauri::command]
@@ -2134,6 +2156,7 @@ pub fn run() {
             export_focus_fasta,
             track_deck,
             variant_page,
+            track_comparison_page,
             variant_contigs,
             variant_navigation_bins,
             variant_density,

@@ -30,6 +30,7 @@ import type {
   VariantNavigationBin,
   VariantDensity,
   VariantPage,
+  TrackComparisonPage,
   VariantSelection,
   SelectionResolution,
   TrackEvidenceProfileResult,
@@ -116,6 +117,8 @@ export const api = {
     invoke<GenomeTrackLane[]>("track_deck", { projectPath, context }),
   variantPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
     invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
+  trackComparisonPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
+    invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, offset, limit }),
   variantContigs: (projectPath: string) =>
     invoke<VariantContigSummary[]>("variant_contigs", { projectPath }),
   variantNavigationBins: (projectPath: string, contig: string, bins = 16, start?: number, end?: number) =>
