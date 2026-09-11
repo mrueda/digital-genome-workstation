@@ -87,16 +87,23 @@ test("fresh installation explains required resources and routes examples back to
   await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toContainText("Synthetic");
 });
 
-test("compact track toolbar leaves room for tracks", async ({ page }, testInfo) => {
+test("track toolbar keeps tracks visible and selectable", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   const heading = page.locator(".dgw-track-deck-header");
   await expect(heading.locator(".dgw-edit-target")).not.toBeEmpty();
   await expect(heading.locator("details")).not.toHaveAttribute("open", "");
   await expect(heading.getByRole("button", { name: "Select all variants · all chromosomes", exact: true })).toBeVisible();
-  const bounds = await heading.boundingBox();
-  expect(bounds?.height).toBeLessThan(170);
+  // Toolbar rows may wrap differently with platform fonts. Protect usable
+  // track space and interaction, not an exact toolbar pixel height.
+  const bounds = (await heading.boundingBox())!;
   const tracks = await page.locator(".dgw-track-list").boundingBox();
   expect(tracks?.height).toBeGreaterThan(70);
+  expect(tracks!.y).toBeGreaterThanOrEqual(bounds.y + bounds.height - 1);
+  expect(tracks!.y + tracks!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  const sourceSelect = page.locator(".dgw-track.is-source .dgw-track-select");
+  await expect(sourceSelect).toBeInViewport();
+  await sourceSelect.click();
+  await expect(sourceSelect).toHaveAttribute("aria-pressed", "true");
   await page.screenshot({ path: testInfo.outputPath("compact-workspace.png") });
 });
 
