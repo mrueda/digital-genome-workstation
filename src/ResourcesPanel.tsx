@@ -7,11 +7,13 @@ function size(bytes: number) {
   return `${(bytes / 1e9).toFixed(1)} GB`;
 }
 
-export function ResourcesPanel() {
+export function ResourcesPanel({ onBusyChange }: { onBusyChange?: (busy: boolean) => void } = {}) {
   const [inventory, setInventory] = useState<ResourceInventory>();
   const [progress, setProgress] = useState<ResourceInstallProgress>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [assembly, setAssembly] = useState("b37");
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   async function refresh() {
     try { setInventory(await api.resourceInventory()); }
     catch (reason) { setError(String(reason)); }
@@ -38,43 +40,44 @@ export function ResourcesPanel() {
     const paths = await open({ multiple: true, title: "Choose a DGW data package and tool package", filters: [{ name: "DGW packages", extensions: ["gz"] }] });
     if (Array.isArray(paths) && paths.length) await run(() => api.installDownloadedPackages(paths, setProgress));
   }
+  const release = inventory?.releases.find(entry => entry.assembly === assembly && entry.platform === inventory.platform);
+  const installed = inventory?.installed.filter(entry => entry.bundle.assembly === assembly) ?? [];
+  const ready = installed.some(entry => entry.ready);
+  const downloadBytes = release?.files.reduce((sum, file) => sum + file.bytes, 0) ?? 0;
+  const storageBytes = release?.files.reduce((sum, file) => sum + file.bytes + (file.unpackedBytes ?? 0), 0) ?? 0;
   return <section className="resources-panel" aria-label="Resources">
     <h3>Genome resources</h3>
-    <p>Install the reference and supporting data for the assembly you use. Existing projects keep their recorded resource versions.</p>
+    <p>Choose the reference genome used by your VCF. DGW includes the matching tools automatically.</p>
     {!inventory && !error && <p role="status">Checking installed resources…</p>}
     {inventory && <>
       {inventory.issues.map((issue) => <p className="warning" key={issue}>{issue}</p>)}
-      <div className="resource-assembly-cards">
-        {(["b37", "hg38"] as const).map((assembly) => {
-          const installed = inventory.installed.filter((entry) => entry.bundle.assembly === assembly);
-          const releases = inventory.releases.filter((entry) => entry.assembly === assembly && entry.platform === inventory.platform);
-          return <article key={assembly}>
-            <h4>{assembly === "b37" ? "GRCh37" : "GRCh38"}</h4>
-            {installed.map((entry) => <div key={entry.descriptor}>
-              <b>{entry.ready ? "Ready" : "Needs attention"} · {entry.bundle.id}</b>
-              <p>{entry.message}</p>
-            </div>)}
-            {!installed.length && <p>Not installed</p>}
-            {releases.map((release) => <div key={release.id}>
-              <p>{release.name} · {release.version} · {size(release.files.reduce((sum, file) => sum + file.bytes, 0))}</p>
-              <button type="button" className="button primary" disabled={busy} onClick={() => void run(() => api.installResourceRelease(release.id, setProgress))}>
-                Install resources
-              </button>
-            </div>)}
-            {!releases.length && <small>Automatic download is not available in this build. You can install downloaded packages below.</small>}
-          </article>;
-        })}
-      </div>
-      <p>Already downloaded the packages? Select one assembly data archive and the tool archive for this computer ({inventory.platform}). DGW checks both before installing.</p>
-      <button type="button" className="button primary" disabled={busy} onClick={() => void installDownloaded()}>Install downloaded packages</button>
-      <p>Install location: <span className="resource-location">{inventory.directory}</span></p>
+      <fieldset disabled={busy} className="resource-genome-choice"><legend>1. Choose genome</legend>
+        {(["b37", "hg38"] as const).map(value => <label key={value}>
+          <input type="radio" name="resource-genome" value={value} checked={assembly === value} onChange={() => setAssembly(value)} />
+          {value === "b37" ? "GRCh37" : "GRCh38"}
+        </label>)}
+      </fieldset>
+      <h4>2. Choose storage folder</h4>
+      <p className="resource-location">{inventory.directory}</p>
       <button type="button" className="button secondary" disabled={busy} onClick={() => void chooseDirectory()}>Choose location</button>
-      <small>Changing this location affects future installations. Existing resources are not moved.</small>
+      <small>You can use another drive. Existing resources are not moved.</small>
+      <h4>3. Install resources</h4>
+      {ready ? <p role="status">{assembly === "b37" ? "GRCh37" : "GRCh38"} is ready to use.</p> : release ? <>
+        <p>{size(downloadBytes)} download{release.files.every(file => file.unpackedBytes !== undefined) ? ` · At least ${size(storageBytes)} for archives and installed files, plus temporary working space` : ""}</p>
+        <button type="button" className="button primary" disabled={busy} onClick={() => void run(() => api.installResourceRelease(release.id, setProgress))}>Download and install</button>
+      </> : <p>Downloads are not available for this genome on this computer. Use existing resources or downloaded files below.</p>}
+      {installed.filter(entry => !entry.ready).map(entry => <p className="warning" key={entry.descriptor}>{entry.message}</p>)}
+      <details><summary>Other installation options</summary>
+        <p>Select one assembly data archive and the tool archive for this computer. DGW verifies them before installation.</p>
+        <button type="button" className="button secondary" disabled={busy} onClick={() => void installDownloaded()}>Install downloaded packages</button>
+        <p>Choose the JSON descriptor for resources already on your computer. No data is copied.</p>
+        <button type="button" className="button secondary" disabled={busy} onClick={() => void register()}>Use existing resources</button>
+      </details>
       <details>
         <summary>Advanced</summary>
         <p>Register resources you already have using their DGW JSON descriptor. Relative paths are resolved from its folder.</p>
-        <button type="button" className="button secondary" disabled={busy} onClick={() => void register()}>Use existing resources</button>
         <p>Computer: {inventory.platform}</p>
+        {installed.map(entry => <p key={entry.descriptor}>{entry.ready ? "Ready" : "Needs attention"} · {entry.bundle.id}</p>)}
       </details>
     </>}
     {busy && !progress && <p role="status">Checking resources…</p>}
@@ -84,6 +87,10 @@ export function ResourcesPanel() {
       <small>{size(progress.completedBytes)} / {size(progress.totalBytes)}</small>
     </div>}
     {error && <p role="alert" className="warning">{error}</p>}
-    <p><small>Interrupted installations reuse verified complete files. A partially downloaded file restarts when you retry. COSMIC is not included.</small></p>
+    <p><small>Interrupted installations reuse verified complete files. A partially downloaded file restarts when you retry.</small></p>
+    <details>
+      <summary>Optional resources</summary>
+      <p>COSMIC is optional and distributed separately. DGW does not need it for editing or consequence prediction. To use it, register a compatible resource bundle containing your separately obtained COSMIC data.</p>
+    </details>
   </section>;
 }

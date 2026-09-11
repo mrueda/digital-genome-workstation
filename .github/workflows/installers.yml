@@ -1,0 +1,55 @@
+name: Build test installers
+
+# Explicit test builds only. No publishing on push and no GitHub releases.
+on:
+  workflow_dispatch:
+
+jobs:
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: linux-x86_64
+            bundle: appimage
+          - os: ubuntu-24.04-arm
+            name: linux-aarch64
+            bundle: appimage
+          - os: macos-15
+            name: macos-aarch64
+            bundle: dmg
+          - os: windows-2022
+            name: windows-x86_64
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Build-host libraries (not end-user installation)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev patchelf libfuse2
+      - run: npm ci
+      - run: cargo test -p dgw-desktop --lib
+      - run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+      - name: FUSE-free Linux package
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/test_linux_setup_launcher.py
+          python3 scripts/package-portable.py "target/release/bundle/appimage/Digital Genome Workstation.AppDir" "target/release/bundle/appimage/dgw-setup-${{ matrix.name }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dgw-test-${{ matrix.name }}
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.tar.gz*
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7

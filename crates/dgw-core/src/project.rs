@@ -2377,12 +2377,6 @@ impl Project {
         offset: u64,
         limit: u32,
     ) -> Result<TrackComparisonPage> {
-        let stored = self.stored_track(track_id)?;
-        let bypassed = effective_bypassed_edit_ids(&stored);
-        let revision = hash_text(&serde_json::to_string(&(
-            &stored.track.head_state_id,
-            &bypassed,
-        ))?);
         let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
         let connection = self.connection()?;
         let total_loci: u64 = connection.query_row(
@@ -2401,6 +2395,113 @@ impl Project {
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.comparison_page_from_keys(track_id, offset, limit, total_loci, keys)
+    }
+
+    pub fn track_comparison_revision(&self, track_id: &str) -> Result<String> {
+        let stored = self.stored_track(track_id)?;
+        Ok(hash_text(&serde_json::to_string(&(
+            &stored.track.head_state_id,
+            effective_bypassed_edit_ids(&stored),
+        ))?))
+    }
+
+    pub fn build_track_comparison_index(&self, track_id: &str) -> Result<TrackComparisonIndex> {
+        let stored = self.stored_track(track_id)?;
+        let bypassed = effective_bypassed_edit_ids(&stored);
+        let revision = hash_text(&serde_json::to_string(&(
+            &stored.track.head_state_id,
+            &bypassed,
+        ))?);
+        let roots = self.root_variants()?;
+        let current = effective_variants(
+            &roots,
+            &self.expanded_edits_to_state(&stored.track.head_state_id)?,
+            &bypassed,
+        )?;
+        let locus = |key: &VariantKey| (key.contig.clone(), key.position, key.reference.clone());
+        let mut before = BTreeMap::<_, Vec<EffectiveVariant>>::new();
+        let mut after = BTreeMap::<_, Vec<EffectiveVariant>>::new();
+        for root in &roots {
+            before
+                .entry(locus(&root.key))
+                .or_default()
+                .push(observed_effective_variant(root));
+        }
+        for variant in current {
+            after.entry(locus(&variant.key)).or_default().push(variant);
+        }
+        let total_loci = before.len() as u64;
+        let changed_keys = before
+            .into_iter()
+            .filter_map(|(key, variants)| {
+                let current = after.remove(&key).unwrap_or_default();
+                (comparison_signature(&variants) != comparison_signature(&current))
+                    .then(|| variants[0].key.clone())
+            })
+            .collect();
+        if self.track_comparison_revision(track_id)? != revision {
+            return Err(DgwError::Project(
+                "track changed while indexing; retry comparison".into(),
+            ));
+        }
+        Ok(TrackComparisonIndex {
+            track_id: track_id.into(),
+            revision,
+            total_loci,
+            changed_keys,
+        })
+    }
+
+    pub fn changed_comparison_page(
+        &self,
+        index: &TrackComparisonIndex,
+        offset: u64,
+        limit: u32,
+    ) -> Result<TrackComparisonPage> {
+        if self.track_comparison_revision(&index.track_id)? != index.revision {
+            return Err(DgwError::Project(
+                "comparison index is stale; rebuild it".into(),
+            ));
+        }
+        let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(index.changed_keys.len());
+        let keys = index
+            .changed_keys
+            .iter()
+            .skip(start)
+            .take(limit as usize)
+            .cloned()
+            .collect();
+        let mut page =
+            self.comparison_page_from_keys(&index.track_id, offset, limit, index.total_loci, keys)?;
+        if page.revision != index.revision {
+            return Err(DgwError::Project(
+                "track changed while comparing; retry comparison".into(),
+            ));
+        }
+        page.matching_loci = index.changed_keys.len() as u64;
+        page.changed_loci = Some(page.matching_loci);
+        page.has_more = offset.saturating_add(u64::from(limit)) < page.matching_loci;
+        Ok(page)
+    }
+
+    fn comparison_page_from_keys(
+        &self,
+        track_id: &str,
+        offset: u64,
+        limit: u32,
+        total_loci: u64,
+        keys: Vec<VariantKey>,
+    ) -> Result<TrackComparisonPage> {
+        let stored = self.stored_track(track_id)?;
+        let bypassed = effective_bypassed_edit_ids(&stored);
+        let revision = hash_text(&serde_json::to_string(&(
+            &stored.track.head_state_id,
+            &bypassed,
+        ))?);
         let source = self.source_variants_at_loci(&keys)?;
         let current =
             self.effective_variants_at_loci(&stored.track.head_state_id, &bypassed, &keys)?;
@@ -2414,25 +2515,11 @@ impl Project {
                 };
                 let before: Vec<_> = source.iter().filter(at_locus).cloned().collect();
                 let after: Vec<_> = current.iter().filter(at_locus).cloned().collect();
-                let signature = |variants: &[EffectiveVariant]| {
-                    variants
-                        .iter()
-                        .map(|v| {
-                            (
-                                v.key.stable_key(),
-                                v.haplotype1_alt,
-                                v.haplotype2_alt,
-                                v.unphased_alt,
-                                v.unphased_slot,
-                            )
-                        })
-                        .collect::<BTreeSet<_>>()
-                };
                 TrackComparisonLocus {
                     contig: key.contig,
                     position: key.position,
                     reference: key.reference,
-                    changed: signature(&before) != signature(&after),
+                    changed: comparison_signature(&before) != comparison_signature(&after),
                     source: before,
                     current: after,
                 }
@@ -2452,6 +2539,8 @@ impl Project {
             offset,
             limit,
             total_loci,
+            matching_loci: total_loci,
+            changed_loci: None,
             has_more: offset.saturating_add(u64::from(limit)) < total_loci,
             rows,
         })
@@ -3877,6 +3966,16 @@ impl Project {
         Ok(())
     }
 
+    pub fn cache_put_many(&self, results: &[EvaluationResult]) -> Result<()> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        for result in results {
+            tx.execute("INSERT OR REPLACE INTO evaluations(cache_key, payload, created_at) VALUES (?1, ?2, ?3)", params![result.cache_key, serde_json::to_string(result)?, result.evaluated_at.to_rfc3339()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn write_evidence_sidecar(
         &self,
         state_id: &str,
@@ -4287,6 +4386,23 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn comparison_signature(
+    variants: &[EffectiveVariant],
+) -> BTreeSet<(String, bool, bool, bool, Option<u8>)> {
+    variants
+        .iter()
+        .map(|v| {
+            (
+                v.key.stable_key(),
+                v.haplotype1_alt,
+                v.haplotype2_alt,
+                v.unphased_alt,
+                v.unphased_slot,
+            )
+        })
+        .collect()
 }
 
 fn observed_effective_variant(root: &RootVariant) -> EffectiveVariant {
@@ -5826,6 +5942,154 @@ mod tests {
         assert_eq!(next.rows[0].position, 201);
         assert!(!next.has_more);
         assert_eq!(first.revision, next.revision);
+    }
+
+    #[test]
+    fn prediction_comparison_report_round_trips_and_rejects_changed_inputs() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let root = observed_variant("1", 100);
+        insert_root_variants(&project, &[root.clone()]);
+        let mut key = root.key.clone();
+        key.alternate = "T".into();
+        let edit = project
+            .apply_edit_to_track(
+                &track.id,
+                Haplotype::One,
+                EditKind::SetAllele {
+                    key,
+                    source_key: Some(root.key),
+                    unphased_slot: None,
+                },
+                None,
+            )
+            .unwrap();
+        let id = Uuid::new_v4().to_string();
+        let ids = vec![crate::CONSEQUENCE_DEVICE_ID.to_owned()];
+        let revision = project.track_comparison_revision(&track.id).unwrap();
+        let report = crate::prediction_comparison::run(
+            &project,
+            &crate::EvaluationService::new(),
+            &track.id,
+            &id,
+            &revision,
+            &ids,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(report.total, 1);
+        assert_eq!(report.counts.get("missing"), Some(&1));
+        let now = Utc::now();
+        project
+            .save_background_job(&BackgroundJob {
+                id: id.clone(),
+                operation: "trackPredictionComparison".into(),
+                device_id: crate::CONSEQUENCE_DEVICE_ID.into(),
+                track_id: track.id.clone(),
+                status: BackgroundJobStatus::Completed,
+                progress: 100,
+                stage: "completed".into(),
+                message: "done".into(),
+                worker_threads: 1,
+                request: serde_json::json!({}),
+                result: Some(serde_json::to_value(report).unwrap()),
+                error: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .unwrap();
+        let reopened = Project::open(project.root()).unwrap();
+        let page =
+            crate::prediction_comparison::page(&reopened, &id, &ids, Some("missing"), 0).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.rows.len(), 1);
+        assert!(!page.stale);
+        assert_eq!(page.rows[0].evidence.len(), 2);
+        project
+            .persist_terminal_device_run(&project.background_job(&id).unwrap())
+            .unwrap();
+        assert_eq!(project.delete_finished_background_jobs().unwrap(), 1);
+        assert_eq!(
+            crate::prediction_comparison::page(&reopened, &id, &ids, None, 0)
+                .unwrap()
+                .total,
+            1
+        );
+        assert!(
+            crate::prediction_comparison::page(&reopened, &id, &[], None, 0)
+                .unwrap()
+                .stale
+        );
+        project
+            .toggle_track_edit_bypass(&track.id, &edit.edit_id.unwrap(), true)
+            .unwrap();
+        assert!(
+            crate::prediction_comparison::page(&reopened, &id, &ids, None, 0)
+                .unwrap()
+                .stale
+        );
+        let cancelled_id = Uuid::new_v4().to_string();
+        assert!(crate::prediction_comparison::run(
+            &project,
+            &crate::EvaluationService::new(),
+            &track.id,
+            &cancelled_id,
+            &revision,
+            &ids,
+            |_, _| Err(DgwError::Tool("cancelled".into()))
+        )
+        .is_err());
+        assert!(
+            !crate::prediction_comparison::report_path(&project, &cancelled_id)
+                .unwrap()
+                .exists()
+        );
+    }
+
+    #[test]
+    fn changed_comparison_index_finds_changes_beyond_the_first_page_and_rejects_stale_state() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let roots: Vec<_> = (1..=250)
+            .map(|position| observed_variant("1", position))
+            .collect();
+        insert_root_variants(&project, &roots);
+        let state = project
+            .apply_edit_to_track(
+                &track.id,
+                Haplotype::One,
+                EditKind::RestoreReference {
+                    source_key: roots[249].key.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        let index = project.build_track_comparison_index(&track.id).unwrap();
+        assert_eq!(index.total_loci, 250);
+        assert_eq!(index.changed_keys.len(), 1);
+        let page = project.changed_comparison_page(&index, 0, 200).unwrap();
+        assert_eq!(page.changed_loci, Some(1));
+        assert_eq!(page.matching_loci, 1);
+        assert_eq!(page.rows[0].position, 250);
+        assert!(!page.has_more);
+        assert!(project
+            .changed_comparison_page(&index, 200, 200)
+            .unwrap()
+            .rows
+            .is_empty());
+        project
+            .toggle_track_edit_bypass(&track.id, &state.edit_id.unwrap(), true)
+            .unwrap();
+        assert!(project.changed_comparison_page(&index, 0, 200).is_err());
+        let rebuilt = project.build_track_comparison_index(&track.id).unwrap();
+        assert!(rebuilt.changed_keys.is_empty());
+        assert_eq!(
+            project
+                .changed_comparison_page(&rebuilt, 0, 200)
+                .unwrap()
+                .changed_loci,
+            Some(0)
+        );
     }
 
     #[test]

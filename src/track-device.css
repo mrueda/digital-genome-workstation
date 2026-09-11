@@ -28,7 +28,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(300px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 220px));
+  grid-template-rows: minmax(0, 1fr) 7px minmax(0, min(45%, var(--dgw-device-rack-height, 220px)));
 }
 
 .dgw-workspace-main.hide-device-rack {
@@ -36,7 +36,7 @@
 }
 
 .dgw-workspace-main.allele-detail-open:not(.hide-device-rack) {
-  grid-template-rows: minmax(300px, 1fr) 7px minmax(160px, var(--dgw-device-rack-height, 220px));
+  grid-template-rows: minmax(0, 1fr) 7px minmax(0, min(45%, var(--dgw-device-rack-height, 220px)));
 }
 
 .dgw-track-device-workspace button,
@@ -1650,20 +1650,30 @@ button.allele-roll-cell:hover {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 20px;
 }
 
 .dgw-device-chain {
   position: relative;
   min-width: 0;
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: row;
   align-items: flex-start;
   gap: 12px;
   padding: 11px;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  scrollbar-color: auto;
+  scrollbar-gutter: stable;
   background: var(--theme-canvas);
 }
+
+/* The separate bottom scrollbar remains visible even with OS overlay scrollbars. */
+.dgw-device-chain::-webkit-scrollbar { display: none; }
 
 .dgw-device-chain > section {
   position: relative;
@@ -1671,7 +1681,26 @@ button.allele-roll-cell:hover {
   max-height: 100%;
   overflow: auto;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--tdw-muted) var(--theme-surface-low);
 }
+
+.dgw-device-scrollbar { position: relative; height: 20px; margin: 0 8px; background: var(--theme-surface-low); border: 1px solid var(--tdw-line); border-radius: 5px; touch-action: none; cursor: pointer; }
+.dgw-device-scrollbar-thumb { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; background: var(--tdw-muted); cursor: grab; }
+.dgw-device-scrollbar-thumb:active { cursor: grabbing; }
+.dgw-device-scrollbar:focus-visible { outline: 2px solid var(--tdw-accent); }
+
+.dgw-device-chain .dgw-device-header, .dgw-device-chain .dgw-compact-device-header { flex-wrap: nowrap; gap: 3px; }
+.dgw-device-local-actions { display: contents; }
+.dgw-device-chain header > .dgw-device-identity { order: 0; flex: 1; }
+.dgw-device-reset { order: 1; }
+.dgw-device-chain header > .dgw-bypass { order: 2; }
+.dgw-device-more { order: 3; }
+.dgw-device-local-actions button, .dgw-device-chain header > .dgw-bypass { flex: 0 0 26px; width: 26px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 3px; border: 0; border-radius: 4px; color: var(--tdw-muted); background: transparent; cursor: pointer; }
+.dgw-device-local-actions button:hover:not(:disabled), .dgw-device-chain header > .dgw-bypass:hover:not(:disabled) { color: var(--theme-text); background: var(--theme-surface-hover); }
+.dgw-device-chain header > .dgw-bypass[aria-pressed="true"] { color: var(--tdw-accent); }
+.dgw-device-local-actions button svg, .dgw-device-chain header > .dgw-bypass svg { width: 15px; height: 15px; }
+.dgw-device-local-actions button:disabled { opacity: .45; cursor: default; }
 
 .dgw-device-chain > .dgw-randomizer { flex-basis: 300px; }
 .dgw-device-chain > .dgw-optimizer { flex-basis: 390px; }

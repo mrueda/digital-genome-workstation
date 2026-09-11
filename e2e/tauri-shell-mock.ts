@@ -242,7 +242,43 @@ export async function installTauriShellMock(page: Page) {
     let failNextSessionSave = false;
     let largeComparison = false;
     let failComparison = false;
+    let predictionJob: JsonObject | undefined;
+    let stalePrediction = false;
     async function command(commandName: string, args: JsonObject = {}) {
+      if (commandName === "test_stale_prediction") { stalePrediction = true; return null; }
+      if (commandName === "user_setup_info") return { platform: "linux", version: "0.1.0", suggestedParent: "/synthetic/user/apps" };
+      if (commandName === "install_for_user") {
+        if (args.parent === "/existing" && !args.replaceExisting) throw new Error("Enable Replace existing installation to update it.");
+        if (args.parent === "/unwritable") throw Error("Cannot write to this folder; choose one you own");
+        return `${args.parent}/DGW-0.1.0/DGW.AppImage`;
+      }
+      if (commandName === "launch_user_install") {
+        if (localStorage.getItem("test-launch-failure")) throw new Error("DGW closed during startup. Details: setup-launch.log");
+        return null;
+      }
+      if (commandName === "start_prediction_comparison_job") {
+        stalePrediction = false;
+        predictionJob = { id: "prediction-test-job", operation: "trackPredictionComparison", deviceId: "org.dgw.builtin.variant-consequences", trackId: args.trackId, status: "queued", progress: 0, message: "Queued", stage: "queued", workerThreads: args.workerThreads, request: { deviceIds: args.deviceIds }, result: undefined, createdAt: now, updatedAt: now };
+        return predictionJob;
+      }
+      if (commandName === "background_job" && args.jobId === predictionJob?.id) {
+        predictionJob = { ...predictionJob, status: "completed", progress: 100, message: "Prediction comparison ready", result: { revision: "fixture", deviceIds: [], counts: { different: 1, same: 1, missing: 1, referenceRestoration: 1 }, total: 4 } };
+        return predictionJob;
+      }
+      if (commandName === "cancel_background_job" && args.jobId === predictionJob?.id) {
+        predictionJob = { ...predictionJob, status: "cancelled", message: "Comparison cancelled" }; return predictionJob;
+      }
+      if (commandName === "prediction_comparison_page") {
+        const outcomes = ["different", "same", "missing", "referenceRestoration"];
+        const rows = outcomes.map((outcome, i) => {
+          const source = sourceVariants[i]; const current = { ...source, key: { ...source.key, alternate: ["A", "C", "G", "T"].find(base => base !== source.key.reference && base !== source.key.alternate)! } };
+          const stable = (key: typeof source.key) => [key.assembly, key.contig, key.position, key.reference, key.alternate].join("|");
+          const evidence = { source: "Variant Consequences", status: "found", records: [{ featureId: "TEST_TRANSCRIPT", effect: "stop_gained", impact: "HIGH" }] };
+          const currentEvidence = outcome === "different" ? { ...evidence, records: [{ featureId: "TEST_TRANSCRIPT", effect: "missense", impact: "MODERATE" }] } : outcome === "missing" ? { ...evidence, status: "unavailable", records: [] } : evidence;
+          return { outcome, locus: { contig: source.key.contig, position: source.key.position, reference: source.key.reference, source: [source], current: outcome === "referenceRestoration" ? [] : [current], changed: true }, evidence: { [stable(source.key)]: evidence, [stable(current.key)]: currentEvidence } };
+        }).filter(row => !args.outcome || row.outcome === args.outcome);
+        return { stale: stalePrediction, total: stalePrediction ? 0 : rows.length, rows: stalePrediction ? [] : rows.slice(Number(args.offset), Number(args.offset) + 200) };
+      }
       if (commandName === "test_fail_next_comparison") { failComparison = true; return null; }
       if (commandName === "test_large_comparison") { largeComparison = true; return null; }
       if (commandName === "track_comparison_page") {
@@ -250,18 +286,20 @@ export async function installTauriShellMock(page: Page) {
         const offset = Number(args.offset);
         const limit = Math.min(200, Number(args.limit ?? 200));
         const sources = largeComparison ? Array.from({ length: 205 }, (_, index) => ({ ...sourceVariants[0], key: { ...sourceVariants[0].key, contig: index < 200 ? "7" : "17", position: 1000 + index } })) : sourceVariants;
-        return { trackId: String(args.trackId), revision: "comparison-fixture-v1", offset, limit, totalLoci: sources.length,
-          hasMore: offset + limit < sources.length,
-          rows: sources.slice(offset, offset + limit).map((source, index) => ({
+        const rows = sources.map((source, index) => ({
             contig: source.key.contig, position: source.key.position, reference: source.key.reference,
-            source: [source], current: offset + index === 204 ? [] : [source], changed: offset + index === 204
-          })) };
+            source: [source], current: index === 204 ? [] : [source], changed: index === 204
+          }));
+        const matches = args.changedOnly ? rows.filter(row => row.changed) : rows;
+        return { trackId: String(args.trackId), revision: "comparison-fixture-v1", offset, limit, totalLoci: sources.length,
+          matchingLoci: matches.length, changedLoci: args.changedOnly ? rows.filter(row => row.changed).length : undefined,
+          hasMore: offset + limit < matches.length, rows: matches.slice(offset, offset + limit) };
       }
       if (commandName === "test_fail_next_session_save") { failNextSessionSave = true; return null; }
       if (commandName === "plugin:dialog|open") return "/synthetic/DGW-Allele-Editing-Demo.dgw";
       if (commandName === "test_enable_mutable_edits") { mutableEdits = true; return null; }
       if (commandName === "plugin:webview|set_webview_zoom") return null;
-      if (commandName === "suggested_development_bundles") return [bundle, hg38Bundle];
+      if (commandName === "suggested_development_bundles") return localStorage.getItem("test-no-resources") ? [] : [bundle, hg38Bundle];
       if (commandName === "resource_inventory") return {
         directory: "/synthetic/resources", platform: "linux-aarch64", issues: [],
         releases: [], installed: []
@@ -332,7 +370,7 @@ export async function installTauriShellMock(page: Page) {
         return now;
       }
       if (commandName === "device_catalog") return deviceCatalog;
-      if (commandName === "list_background_jobs") return [];
+      if (commandName === "list_background_jobs") return predictionJob ? [predictionJob] : [];
       if (commandName === "variant_contigs") return [
         { contig: "7", total: 7, minPosition: positions[0], maxPosition: positions.at(-1) },
         { contig: "17", total: 3, minPosition: 7_674_220, maxPosition: 7_674_310 }

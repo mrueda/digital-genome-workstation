@@ -31,6 +31,8 @@ import type {
   VariantDensity,
   VariantPage,
   TrackComparisonPage,
+  PredictionComparisonReport,
+  PredictionComparisonPage,
   VariantSelection,
   SelectionResolution,
   TrackEvidenceProfileResult,
@@ -47,7 +49,7 @@ export interface ResourceInventory {
   directory: string;
   platform: string;
   issues: string[];
-  releases: Array<{ id: string; name: string; version: string; assembly: string; platform: string; files: Array<{ bytes: number }> }>;
+  releases: Array<{ id: string; name: string; version: string; assembly: string; platform: string; files: Array<{ bytes: number; unpackedBytes?: number }> }>;
   installed: Array<{ bundle: ResourceBundle; descriptor: string; ready: boolean; message: string }>;
 }
 
@@ -117,8 +119,12 @@ export const api = {
     invoke<GenomeTrackLane[]>("track_deck", { projectPath, context }),
   variantPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
     invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
-  trackComparisonPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
-    invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, offset, limit }),
+  trackComparisonPage: (projectPath: string, trackId: string, offset = 0, limit = 200, changedOnly = false) =>
+    invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, offset, limit, changedOnly }),
+  startPredictionComparison: (projectPath: string, trackId: string, deviceIds: string[], workerThreads: number) =>
+    invoke<BackgroundJob<PredictionComparisonReport>>("start_prediction_comparison_job", { projectPath, trackId, deviceIds, workerThreads }),
+  predictionComparisonPage: (projectPath: string, jobId: string, deviceIds: string[], outcome: string | undefined, offset: number) =>
+    invoke<PredictionComparisonPage>("prediction_comparison_page", { projectPath, jobId, deviceIds, outcome, offset }),
   variantContigs: (projectPath: string) =>
     invoke<VariantContigSummary[]>("variant_contigs", { projectPath }),
   variantNavigationBins: (projectPath: string, contig: string, bins = 16, start?: number, end?: number) =>

@@ -7,7 +7,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Edit and compare genome variants." })).toBeVisible();
 });
 
-test("keeps the project purpose and primary starting actions visible", async ({ page }) => {
+test("keeps the project purpose and primary starting actions visible", async ({ page }, testInfo) => {
   await expect(page.getByText("Load one sample from a VCF and test allele changes on independent tracks without changing the source.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Open .dgw" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toBeVisible();
@@ -15,6 +15,9 @@ test("keeps the project purpose and primary starting actions visible", async ({ 
   await expect(page.getByRole("button", { name: "Open HG00103 exome example" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toBeInViewport();
   await expect(page.getByRole("button", { name: "Open genome workspace" })).toBeVisible();
+  const helperSizes = await page.locator(".setup-panel small").evaluateAll(elements => elements.map(el => getComputedStyle(el).fontSize));
+  expect(new Set(helperSizes).size).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("landing-typography.png") });
 });
 
 test("icon controls retain accessible names and tooltips", async ({ page }) => {
@@ -24,8 +27,64 @@ test("icon controls retain accessible names and tooltips", async ({ page }) => {
   await expect(duplicate).toHaveAttribute("title", "Duplicate track");
   await expect(duplicate.locator("svg")).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByRole("button", { name: "Zoom in", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reset selected", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove selected device", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reset Mutation Generator to defaults", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mutation Generator options", exact: true })).toBeVisible();
+});
+
+test("graphical user setup recovers from an unwritable destination", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 740, height: 640 });
+  await page.goto("/?setup");
+  await expect(page.getByRole("heading", { name: "Install DGW for your user" })).toBeVisible();
+  expect(await page.evaluate(() => document.body.scrollWidth)).toBeLessThanOrEqual(740);
+  await expect(page.getByRole("button", { name: "Choose installation folder" })).toBeInViewport();
+  const folder = page.getByLabel("Installation folder", { exact: true });
+  await expect(folder).toHaveValue("/synthetic/user/apps");
+  await folder.fill("/unwritable");
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("choose one you own");
+  await folder.fill("/synthetic/my apps");
+  await page.screenshot({ path: testInfo.outputPath("user-setup.png") });
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "DGW is installed" })).toBeVisible();
+  await expect(page.getByText("/synthetic/my apps/DGW-0.1.0/DGW.AppImage", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue to genome setup" })).toBeEnabled();
+});
+
+test("setup supports explicit replacement and remains open after a failed launch", async ({ page }) => {
+  await page.goto("/?setup");
+  await page.getByLabel("Installation folder", { exact: true }).fill("/existing");
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Replace existing installation");
+  await page.getByRole("checkbox", { name: "Replace existing installation and shortcut" }).check();
+  await page.getByRole("button", { name: "Install / Replace" }).click();
+  await page.evaluate(() => localStorage.setItem("test-launch-failure", "1"));
+  const launch = page.getByRole("button", { name: "Continue to genome setup" });
+  await launch.click();
+  await expect(page.getByRole("alert")).toContainText("setup-launch.log");
+  await expect(launch).toBeEnabled();
+  await page.evaluate(() => localStorage.removeItem("test-launch-failure"));
+  await launch.click();
+  await expect(page.getByRole("status")).toContainText("Close this installer once the DGW window appears");
+  await expect(page.getByRole("heading", { name: "DGW is installed" })).toBeVisible();
+});
+
+test("fresh installation explains required resources and routes examples back to setup", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("test-no-resources", "1"));
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Set up genome resources", exact: true })).toBeVisible();
+  await page.getByText("Other installation options", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Install downloaded packages" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Use existing resources" })).toBeVisible();
+  await page.getByRole("button", { name: "Set up later" }).click();
+  await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toContainText("Requires GRCh37 resources");
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await expect(page.getByRole("heading", { name: "Set up genome resources", exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    localStorage.removeItem("test-no-resources");
+    window.dispatchEvent(new Event("dgw-resources-changed"));
+  });
+  await page.getByRole("button", { name: "Continue to examples" }).click();
+  await expect(page.getByRole("button", { name: "Open GRCh37 example project" })).toContainText("Synthetic");
 });
 
 test("compact track toolbar leaves room for tracks", async ({ page }, testInfo) => {
@@ -33,11 +92,42 @@ test("compact track toolbar leaves room for tracks", async ({ page }, testInfo) 
   const heading = page.locator(".dgw-track-deck-header");
   await expect(heading.locator(".dgw-edit-target")).not.toBeEmpty();
   await expect(heading.locator("details")).not.toHaveAttribute("open", "");
+  await expect(heading.getByRole("button", { name: "Select all variants · all chromosomes", exact: true })).toBeVisible();
   const bounds = await heading.boundingBox();
   expect(bounds?.height).toBeLessThan(170);
   const tracks = await page.locator(".dgw-track-list").boundingBox();
   expect(tracks?.height).toBeGreaterThan(70);
   await page.screenshot({ path: testInfo.outputPath("compact-workspace.png") });
+});
+
+test("scrolls the device rack with a persistent draggable scrollbar and Shift-wheel", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const chain = page.locator(".dgw-device-chain");
+  await expect.poll(() => chain.evaluate(el => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
+  await expect(page.getByRole("button", { name: "Scroll devices right", exact: true })).toHaveCount(0);
+  const bar = page.getByRole("scrollbar", { name: "Scroll device rack" });
+  await expect(bar).toBeVisible();
+  const geometry = (await bar.boundingBox())!;
+  expect(geometry.y + geometry.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  const thumb = (await bar.locator("span").boundingBox())!;
+  const x = thumb.x + thumb.width / 2;
+  const y = thumb.y + thumb.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 100, y, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => chain.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+  await chain.evaluate(el => { el.scrollLeft = 0; });
+  await chain.locator("section").first().dispatchEvent("wheel", { deltaY: 200, shiftKey: true, bubbles: true, cancelable: true });
+  await expect.poll(() => chain.evaluate(el => el.scrollLeft)).toBe(200);
+  await chain.locator("section").first().dispatchEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true });
+  await expect.poll(() => chain.evaluate(el => el.scrollLeft)).toBe(200);
+  await chain.evaluate(el => { el.scrollLeft = 0; });
+  const device = chain.locator("section").first();
+  await expect.poll(() => device.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+  await device.hover();
+  await page.mouse.wheel(0, 1000);
+  await expect.poll(() => device.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
 });
 
 test("monitor separates impact, coverage and supporting detail", async ({ page }) => {
@@ -86,12 +176,17 @@ test("shows verified downloaded-package installation in resource settings", asyn
   const dialog = page.getByRole("dialog", { name: "User settings" });
   await dialog.getByRole("button", { name: "Resources", exact: true }).click();
   await expect(dialog.getByRole("heading", { name: "Genome resources" })).toBeVisible();
+  const optionalNote = dialog.getByText("COSMIC is optional and distributed separately.", { exact: false });
+  await expect(optionalNote).not.toBeVisible();
+  await dialog.getByText("Optional resources", { exact: true }).click();
+  await expect(optionalNote).toBeVisible();
+  await dialog.getByText("Other installation options", { exact: true }).click();
   await expect(dialog.getByRole("button", { name: "Install downloaded packages" })).toBeVisible();
   await expect(dialog).toContainText("one assembly data archive and the tool archive for this computer");
-  await expect(dialog).toContainText("Automatic download is not available in this build");
-  await expect(dialog.getByRole("button", { name: "Use existing resources" })).not.toBeVisible();
-  await dialog.getByText("Advanced", { exact: true }).click();
+  await expect(dialog).toContainText("Downloads are not available for this genome on this computer");
   await expect(dialog.getByRole("button", { name: "Use existing resources" })).toBeVisible();
+  await dialog.getByText("Advanced", { exact: true }).click();
+  await expect(dialog).toContainText("Relative paths are resolved from its folder");
 });
 
 test("installs a matching resource release and recovers from an installation error", async ({ page }) => {
@@ -121,14 +216,14 @@ test("installs a matching resource release and recovers from an installation err
   await page.getByRole("button", { name: "Settings" }).click();
   const dialog = page.getByRole("dialog", { name: "User settings" });
   await dialog.getByRole("button", { name: "Resources", exact: true }).click();
-  const install = dialog.getByRole("button", { name: "Install resources", exact: true });
+  const install = dialog.getByRole("button", { name: "Download and install", exact: true });
   await expect(install).toHaveCount(1);
   await expect(dialog).toContainText("1.1 GB");
   await install.click();
   await expect(dialog.getByRole("alert")).toContainText("Connection interrupted");
   await expect(install).toBeEnabled();
   await install.click();
-  await expect(dialog).toContainText("Ready · test-b37-linux-aarch64");
+  await expect(dialog).toContainText("GRCh37 is ready to use.");
   await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
@@ -148,7 +243,7 @@ test("opens the synthetic example into the complete genome workspace", async ({ 
   await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
   await expect(page.locator(".app-header strong")).toHaveText("DGW Allele Editing Demo");
   await expect(page.getByLabel("Track Monitor")).toBeVisible();
-  await expect(page.getByLabel("Mutation Generator")).toBeVisible();
+  await expect(page.getByLabel("Mutation Generator", { exact: true })).toBeVisible();
   await expect(page.locator(".application-menu-context")).toContainText("unsaved example");
 
   await page.getByText("File", { exact: true }).click();
@@ -202,14 +297,17 @@ test("resets changed Mutation Generator controls", async ({ page }) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
 
   const mutationGenerator = page.getByLabel("Mutation Generator");
-  await mutationGenerator.getByRole("button", { name: /Mutation Generator/ }).first().click();
   const seed = mutationGenerator.getByLabel("Seed");
   await seed.fill("9876");
   await expect(seed).toHaveValue("9876");
 
-  await page.getByRole("button", { name: "Reset selected" }).click();
+  await expect(page.getByRole("button", { name: "Reset selected", exact: true })).toHaveCount(0);
+  await mutationGenerator.getByRole("button", { name: "Reset Mutation Generator to defaults", exact: true }).click();
   await expect(seed).toHaveValue("42");
   await expect(page.getByText("Mutation Generator controls reset. Existing track edits were not changed.")).toBeVisible();
+  await mutationGenerator.getByRole("button", { name: "Mutation Generator options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Remove Mutation Generator from rack", exact: true }).click();
+  await expect(page.locator(".dgw-device-chain").getByLabel("Mutation Generator", { exact: true })).toHaveCount(0);
 });
 
 test("keeps the edited locus through replacement, undo, redo and reference restoration", async ({ page }, testInfo) => {
@@ -337,12 +435,48 @@ test("pages whole-track DNA comparison without rendering all loci", async ({ pag
   await expect(comparison.getByText(/201–205 of 205 loci/)).toBeVisible();
   await expect(comparison.getByRole("row")).toHaveCount(6);
   await page.screenshot({ path: testInfo.outputPath("whole-track-comparison.png") });
-  await comparison.getByLabel("Changed loci on this page").check();
+  await comparison.getByLabel("Changed loci across track").check();
   await expect(comparison.getByRole("row")).toHaveCount(2);
+  await expect(comparison).toContainText("1 changed across 205 imported loci");
   await expect(comparison).toContainText("No ALT at this locus");
-  await comparison.getByRole("button", { name: "Previous page", exact: true }).click();
-  await expect(comparison.getByText("No matching loci on this page.")).toBeVisible();
+  await expect(comparison.getByRole("button", { name: "Previous page", exact: true })).toBeDisabled();
+  await comparison.getByLabel("Changed loci across track").uncheck();
+  await expect(comparison.getByRole("row")).toHaveCount(201);
   await expect(comparison.getByRole("button", { name: "Next page", exact: true })).toBeEnabled();
+});
+
+test("opens the exact allele from whole-track comparison", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByRole("button", { name: "Compare source and candidate", exact: true }).click();
+  await page.getByRole("button", { name: "Whole track DNA", exact: true }).click();
+  await page.getByRole("button", { name: "Focus locus 7:140453148", exact: true }).click();
+  const editor = page.getByLabel("Selected allele editor");
+  await expect(editor).toBeVisible();
+  await expect(editor.locator(".locked-position")).toContainText("140,453,148");
+});
+
+test("runs a whole-track prediction job, filters saved results and marks stale input", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByRole("button", { name: "Compare source and candidate", exact: true }).click();
+  await page.getByRole("button", { name: "Whole track predictions", exact: true }).click();
+  const view = page.getByRole("region", { name: "Whole track prediction comparison" });
+  await view.getByRole("button", { name: "Compare track predictions", exact: true }).click();
+  await expect(view).toContainText("Prediction comparison ready");
+  await expect(view.getByRole("row")).toHaveCount(5);
+  await view.getByLabel("Prediction result filter").selectOption("different");
+  await expect(view.getByRole("row")).toHaveCount(2);
+  await view.getByRole("button", { name: "Evidence", exact: true }).click();
+  await expect(view.getByRole("region", { name: "source prediction evidence" })).toContainText("TEST_TRANSCRIPT");
+  await expect(view.getByRole("region", { name: "current prediction evidence" })).toContainText("TEST_TRANSCRIPT");
+  await page.screenshot({ path: testInfo.outputPath("whole-track-predictions.png") });
+  await page.evaluate(async () => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    await internals.invoke("test_stale_prediction");
+  });
+  await view.getByLabel("Prediction result filter").selectOption("same");
+  await expect(view.getByRole("alert")).toContainText("Results are outdated");
+  await expect(view.getByRole("region", { name: "source prediction evidence" })).toHaveCount(0);
 });
 
 test("makes every transcript evidence record accessible without changing the allele", async ({ page }) => {

@@ -4,6 +4,18 @@ Unit tests cover VCF inspection, annotated and unannotated inputs, deliberate IN
 
 ## Local real-stack acceptance test
 
+### Public-exome save/compare/export journey
+
+```bash
+make acceptance-exome
+```
+
+This creates a new disposable directory under `/tmp` and imports the public HG00103 exome using the configured GRCh37 resources. It duplicates the protected source, applies deterministic Uniform randomization as one compound layer, runs whole-track prediction comparison, saves a project copy and reopens it. Every saved comparison row is paged back. The exported VCF is read independently with `bcftools query`; every exact allele, ALT dosage, phase separator and copy/unknown-slot placement must match the saved track. The check also verifies export sidecars, overwrite protection, report invalidation after bypass, and the unchanged input VCF checksum.
+
+The September 11 run imported 19,598 exact alleles across 23 contigs. Randomization processed 19,002 ALT entries at 18,991 distinct loci, producing 26,779 copy edits. Comparison returned 4,852 different and 14,139 same prediction signatures. All 19,597 exported allele records matched the saved track; allele counts can decrease when edited copies converge on the same ALT. The run took 27.9 seconds on the development VM. These are software consistency checks, not biological validation or an installed-GUI performance measurement. The prediction coordinator uses real resources, while desktop button wiring is checked separately by the browser suite.
+
+For an installed-app check, see [Testing a Linux installation](../usage/test-installation.md).
+
 Run both assembly profiles with:
 
 ```bash

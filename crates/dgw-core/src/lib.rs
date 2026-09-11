@@ -6,6 +6,7 @@ pub mod model;
 pub mod morph;
 pub mod optimizer;
 pub mod optimizer_execution;
+pub mod prediction_comparison;
 pub mod profiling;
 pub mod project;
 pub mod randomizer;

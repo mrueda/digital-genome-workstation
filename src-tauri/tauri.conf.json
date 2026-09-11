@@ -25,7 +25,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "icon": ["icons/32x32.png", "icons/64x64.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE",
       "../fixtures/dgw-cluster.synthetic.vcf": "fixtures/dgw-cluster.synthetic.vcf",
       "../fixtures/dgw-cluster.grch38.synthetic.vcf": "fixtures/dgw-cluster.grch38.synthetic.vcf",
       "../fixtures/braf-v600e.synthetic.vcf": "fixtures/braf-v600e.synthetic.vcf",
@@ -33,8 +36,8 @@
       "../fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz.csi": "fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz.csi"
     },
     "shortDescription": "Edit genome variants without changing the source VCF",
-    "longDescription": "Desktop research software for editing phased human variants and evaluating predicted consequences on your computer.",
-    "category": "Science",
+    "longDescription": "Desktop research software for editing genome variants and comparing independently predicted allele consequences without changing the source VCF. Current resource profiles support human GRCh37 and GRCh38, including phased and unphased genotypes.",
+    "category": "Education",
     "copyright": "Copyright © 2026 Manuel Rueda",
     "license": "Apache-2.0"
   }

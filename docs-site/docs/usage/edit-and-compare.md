@@ -18,9 +18,23 @@ Choose **Evidence** for source/current results from active devices, or **Go to a
 
 Select **Whole track DNA** to page across all imported loci, including other contigs. Each page contains at most 200 loci; all ALTs sharing a contig, position and REF stay together. Source and current columns show reconstructed allele/copy state. Edit IDs and history length do not determine whether DNA changed, and consolidation does not erase the comparison.
 
-**Changed loci on this page** filters only the loaded page. Counts are also page-specific, not a whole-track changed-locus total. **Focus region** returns to the genomic workspace at that locus. Read errors offer Retry; a detected revision change between pages returns to the first page. Pages use database contig ordering.
+**Changed loci across track** finds changes across all imported loci and reports their total, then pages through those matches. The first request builds an in-memory locus index; subsequent pages reuse it until the track changes. The desktop keeps one such index, replacing it when another project, track or revision is compared. Turning the filter off returns to all imported loci and page-specific change counts.
 
-This view compares DNA at imported coordinates; it does not enumerate unreported reference positions or independently introduced alleles outside those loci. “No ALT at this locus” describes the reconstructed state there, not a benign classification. Unphased genotype slots remain unassigned to parental chromosome copies. Whole-track prediction filtering is not implemented: use the focused view for prediction pairs or Track Profiler for aggregate evidence.
+**Open allele** opens the editor when a locus has one current ALT. For multiple ALTs or no remaining ALT, **Focus region** opens the genomic view without choosing an allele for you. Read errors offer Retry; a detected revision change between pages returns to the first page. Pages use database contig ordering.
+
+This view compares DNA at imported coordinates; it does not enumerate unreported reference positions or independently introduced alleles outside those loci. “No ALT at this locus” describes the reconstructed state there, not a benign classification. Unphased genotype slots remain unassigned to parental chromosome copies.
+
+### Whole-track predictions
+
+Choose **Whole track predictions**, then **Compare track predictions**. Variant Consequences must be enabled. This runs a background comparison of all changed imported loci across the selected track, not just the visible region. Progress and cancellation are available while it runs; cancellation is checked between stages rather than interrupting a predictor process immediately.
+
+DGW reuses cached exact-allele predictions and sends uncached source/current alleles to the existing consequence engine as a batch. Results are saved inside the project and displayed in pages of at most 200 loci. Filter by **Different predictions**, **Same predictions**, **Missing evidence**, or **REF restorations**. **Evidence** shows the saved source/current records; **Go to locus** returns to the editor.
+
+The comparison uses transcript, consequence and impact tuples for each ALT copy. Two changes can have the same impact category but different consequences. Conversely, equal tuples do not establish equivalent biological effects. Missing or incomplete predictions are not classified as unchanged. A reduction in ALT-copy count is listed under REF restorations, including mixed loci that also contain a replacement ALT; it is not a benign classification. Interactions between alleles are not modeled. ClinVar and other Evidence devices remain available in the editor but do not determine these categories.
+
+Changing the track, enabled Evidence devices or registered resource fingerprints makes the report outdated; rerun the comparison. Reopening the view restores its latest comparison from the recent Jobs history. Clearing finished jobs removes that automatic entry, although the saved artifact and immutable run record remain in the project. A report-history browser is not yet available.
+
+The backend currently reconstructs changed loci and holds their evidence in memory while generating the saved report. Paged display avoids rendering every result, but does not establish million-variant memory readiness.
 
 ## Persistent edit blocks
 

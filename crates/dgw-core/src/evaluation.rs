@@ -143,6 +143,72 @@ impl Default for EvaluationService {
 }
 
 impl EvaluationService {
+    /// Preserve detailed exact-allele records, batching all cache misses through
+    /// the existing consequence engine rather than invoking it once per allele.
+    pub fn comparison_consequences(
+        &self,
+        project: &Project,
+        variants: &[VariantKey],
+    ) -> Result<BTreeMap<VariantKey, EvidenceResult>> {
+        let bundle = &project.manifest().resource_bundle;
+        let fingerprint = device_resource_fingerprint(
+            bundle,
+            &project.manifest().resource_bundle_fingerprint,
+            CONSEQUENCE_DEVICE_ID,
+        )?;
+        let manifest = built_in_device_manifest(CONSEQUENCE_DEVICE_ID).unwrap();
+        let mut results = BTreeMap::new();
+        let mut missing = Vec::new();
+        for variant in variants {
+            let key = device_evaluation_cache_key(
+                variant,
+                CONSEQUENCE_DEVICE_ID,
+                &manifest.version,
+                &fingerprint,
+            );
+            if let Some(cached) = project.cache_get(&key)? {
+                if cached.variant == *variant && is_durable_evidence(&cached.consequence) {
+                    results.insert(variant.clone(), cached.consequence);
+                    continue;
+                }
+            }
+            missing.push((variant.clone(), key));
+        }
+        if !missing.is_empty() {
+            let keys: Vec<_> = missing.iter().map(|(key, _)| key.clone()).collect();
+            let fresh = match consequence_resource_unavailable(bundle) {
+                Some(message) => vec![
+                    EvidenceResult {
+                        source: "Variant Consequences".into(),
+                        status: EvidenceStatus::ResourceUnavailable,
+                        records: vec![],
+                        message: Some(message)
+                    };
+                    keys.len()
+                ],
+                None => self.annotate_consequences(bundle, &keys)?,
+            };
+            if fresh.len() != missing.len() {
+                return Err(DgwError::Tool("consequence batch length mismatch".into()));
+            }
+            let mut cache = Vec::new();
+            for ((variant, key), evidence) in missing.into_iter().zip(fresh) {
+                if is_durable_evidence(&evidence) {
+                    cache.push(device_cache_envelope(
+                        &project.manifest().resource_bundle_fingerprint,
+                        &variant,
+                        key,
+                        CONSEQUENCE_DEVICE_ID,
+                        evidence.clone(),
+                    ));
+                }
+                results.insert(variant, evidence);
+            }
+            project.cache_put_many(&cache)?;
+        }
+        Ok(results)
+    }
+
     pub fn new() -> Self {
         Self {
             consequence_lock: Mutex::new(()),

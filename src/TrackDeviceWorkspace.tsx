@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Trash2, Plus, RotateCcw, Power, ZoomIn, ZoomOut, LocateFixed } from "lucide-react";
+import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Trash2, Plus, RotateCcw, Power, ZoomIn, ZoomOut, LocateFixed, Ellipsis } from "lucide-react";
 import { focusViewport, panViewport, viewportSpan, zoomViewport } from "./genomeViewport";
 import { scoringInputState } from "./scoringInputs";
 import type { FocusContext, MorphOrdering, TrackMorphPreviewResult, VariantDensity } from "./types";
@@ -997,6 +997,7 @@ function deviceLightState(status: RackDeviceStatus, bypassed = false) {
 
 function CompactDeviceCard({
   device,
+  actions,
   selected,
   busy,
   onSelect,
@@ -1004,6 +1005,7 @@ function CompactDeviceCard({
   onRun
 }: {
   device: RackDeviceView;
+  actions?: ReactNode;
   selected: boolean;
   busy: boolean;
   onSelect?: () => void;
@@ -1020,6 +1022,7 @@ function CompactDeviceCard({
       aria-label={`${device.name} device`}
     >
       <header className="dgw-compact-device-header">
+        {actions}
         <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
           <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
           <span>
@@ -1079,6 +1082,7 @@ function CompactDeviceCard({
 
 function OptimizerDeviceCard({
   track,
+  actions,
   device,
   objectives,
   weightControls,
@@ -1092,6 +1096,7 @@ function OptimizerDeviceCard({
   onConsolidate
 }: {
   track: GenomeTrackModel;
+  actions?: ReactNode;
   device: GenomeOptimizerDevice;
   objectives: OptimizerObjective[];
   weightControls: OptimizerWeightControl[];
@@ -1138,6 +1143,7 @@ function OptimizerDeviceCard({
   return (
     <section className={`dgw-optimizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label={device.name ?? "Genome Optimizer"} data-context-help="genome-optimizer">
       <header className="dgw-device-header">
+        {actions}
         <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
           <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
           <span><small>analyze</small><b>{device.name ?? "Genome Optimizer"}</b></span>
@@ -1378,6 +1384,7 @@ function OptimizerDeviceCard({
 
 function RandomizerDeviceCard({
   device,
+  actions,
   selectedCount,
   interactiveMaterializationLimit,
   selected,
@@ -1389,6 +1396,7 @@ function RandomizerDeviceCard({
   onBypass
 }: {
   device: AlleleRandomizerDevice;
+  actions?: ReactNode;
   selectedCount: number;
   interactiveMaterializationLimit: number;
   selected: boolean;
@@ -1408,6 +1416,7 @@ function RandomizerDeviceCard({
   const update = (patch: Partial<AlleleRandomizerSettings>) => onChange({ ...device.settings, ...patch });
   return <section className={`dgw-randomizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label="Mutation Generator">
     <header className="dgw-device-header">
+      {actions}
       <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
         <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
@@ -1505,6 +1514,7 @@ function RandomizerDeviceCard({
 
 function GenomeMorphDeviceCard({
   track,
+  actions,
   targets,
   device,
   selected,
@@ -1518,6 +1528,7 @@ function GenomeMorphDeviceCard({
   track: GenomeTrackModel;
   targets: GenomeTrackModel[];
   device: GenomeMorphDevice;
+  actions?: ReactNode;
   selected: boolean;
   busy: boolean;
   onSelect?: () => void;
@@ -1532,6 +1543,7 @@ function GenomeMorphDeviceCard({
   const update = (patch: Partial<GenomeMorphSettings>) => onChange({ ...device.settings, ...patch });
   return <section className={`dgw-randomizer dgw-morph${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label="Genome Morph">
     <header className="dgw-device-header">
+      {actions}
       <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
         <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
@@ -1987,6 +1999,41 @@ function DeviceRack({
   openBrowserRequest?: number;
 }) {
   const [deviceBrowserOpen, setDeviceBrowserOpen] = useState(false);
+  const [deviceMenu, setDeviceMenu] = useState<ContextMenuState>();
+  const closeDeviceMenu = useCallback(() => {
+    setDeviceMenu(current => { current?.invoker?.focus(); return undefined; });
+  }, []);
+  useEffect(() => { setDeviceMenu(undefined); }, [track?.id, appliedDeviceIds.join("|")]);
+  const deviceChainRef = useRef<HTMLDivElement>(null);
+  const [rackScroll, setRackScroll] = useState({ left: 0, width: 1, total: 1 });
+  const rackDrag = useRef<{ x: number; left: number } | undefined>(undefined);
+  useEffect(() => {
+    const chain = deviceChainRef.current;
+    if (!chain) return;
+    const update = () => setRackScroll({ left: chain.scrollLeft, width: chain.clientWidth, total: chain.scrollWidth });
+    const observer = new ResizeObserver(update);
+    observer.observe(chain);
+    Array.from(chain.children).forEach(child => observer.observe(child));
+    chain.addEventListener("scroll", update);
+    update();
+    return () => { observer.disconnect(); chain.removeEventListener("scroll", update); };
+  }, [track?.id, appliedDeviceIds.join("|")]);
+  useEffect(() => {
+    const chain = deviceChainRef.current;
+    if (!chain) return;
+    const scroll = (event: globalThis.WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return;
+      const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+      if (!event.shiftKey && !horizontal) return;
+      if (chain.scrollWidth <= chain.clientWidth) return;
+      const delta = horizontal ? event.deltaX : event.deltaY;
+      const units = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? chain.clientWidth : 1;
+      event.preventDefault();
+      chain.scrollLeft += delta * units;
+    };
+    chain.addEventListener("wheel", scroll, { passive: false });
+    return () => chain.removeEventListener("wheel", scroll);
+  }, [track?.id]);
   useEffect(() => {
     if (openBrowserRequest) setDeviceBrowserOpen(true);
   }, [openBrowserRequest]);
@@ -2021,16 +2068,23 @@ function DeviceRack({
   })).filter((group) => group.items.length > 0);
   const selectedItem = rackItems.find((item) => item.device.id === selectedDeviceId) ?? rackItems[0];
   const selectedRackDeviceId = selectedItem?.device.id;
-  const selectedDeviceCanReset = selectedItem?.type === "optimizer" || selectedItem?.type === "randomizer" || selectedItem?.type === "morph";
-  const selectedDeviceRunning = selectedItem?.device.status === "running";
 
   function openDeviceBrowser() {
     setDeviceBrowserOpen(true);
   }
 
   function renderRackItem(item: RackItem) {
+    const name = item.device.name ?? "Genome Optimizer";
+    const actions = <div className="dgw-device-local-actions">
+      {item.type !== "compact" && <button type="button" className="dgw-device-reset" aria-label={`Reset ${name} to defaults`} title="Reset to defaults. Applied edits stay unchanged." disabled={busy || item.device.status === "running" || !onResetDevice} onClick={() => onResetDevice?.(item.device.id)}><RotateCcw aria-hidden="true" /></button>}
+      <button type="button" className="dgw-device-more" aria-label={`${name} options`} aria-haspopup="menu" aria-expanded={deviceMenu?.label === `${name} options`} title="Device options" disabled={busy || item.device.status === "running"} onClick={event => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        setDeviceMenu({ x: bounds.right - CONTEXT_MENU_WIDTH, y: bounds.bottom + 4, label: `${name} options`, invoker: event.currentTarget, items: [{ id: "remove", label: `Remove ${name} from rack`, danger: true, disabled: !onRemoveDevice, action: () => onRemoveDevice?.(item.device.id) }] });
+      }}><Ellipsis aria-hidden="true" /></button>
+    </div>;
     return item.type === "optimizer" ? (
       <OptimizerDeviceCard
+        actions={actions}
         key={item.device.id}
         track={selectedRackTrack}
         device={item.device}
@@ -2047,6 +2101,7 @@ function DeviceRack({
       />
     ) : item.type === "randomizer" ? (
       <RandomizerDeviceCard
+        actions={actions}
         key={item.device.id}
         device={item.device}
         selectedCount={selectedAlleleCount}
@@ -2061,6 +2116,7 @@ function DeviceRack({
       />
     ) : item.type === "morph" ? (
       <GenomeMorphDeviceCard
+        actions={actions}
         key={item.device.id}
         track={selectedRackTrack}
         targets={tracks.filter((candidate) => candidate.id !== selectedRackTrack.id)}
@@ -2075,6 +2131,7 @@ function DeviceRack({
       />
     ) : (
       <CompactDeviceCard
+        actions={actions}
         key={item.device.id}
         device={item.device}
         selected={selectedRackDeviceId === item.device.id}
@@ -2090,32 +2147,51 @@ function DeviceRack({
 
   return (
     <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}`} data-context-help="device-rack">
+      {deviceMenu && <ContextMenu menu={deviceMenu} onClose={closeDeviceMenu} />}
       <div className="dgw-device-rack-title">
         <div><span>Device rack</span><small title={rackTemplateName}>{track.name}</small></div>
         <div className="dgw-device-rack-actions">
           <button type="button" onClick={openDeviceBrowser} disabled={busy}><Plus aria-hidden="true" /> Add device</button>
-          <button
-            type="button"
-            onClick={() => selectedItem && onResetDevice?.(selectedItem.device.id)}
-            disabled={busy || selectedDeviceRunning || !selectedDeviceCanReset || !onResetDevice}
-            title={!selectedDeviceCanReset ? "The selected device has no adjustable state" : "Restore factory controls and discard the current uncommitted result"}
-            aria-label="Reset selected"
-          ><RotateCcw aria-hidden="true" /></button>
-          <button
-            type="button"
-            onClick={() => selectedItem && onRemoveDevice?.(selectedItem.device.id)}
-            disabled={busy || !selectedItem || !onRemoveDevice}
-            title="Remove selected device"
-            aria-label="Remove selected device"
-          ><Trash2 aria-hidden="true" /></button>
         </div>
       </div>
 
       <div className="dgw-device-rack-body">
-          <div className="dgw-device-chain" aria-label={`Applied devices for ${track.name}`}>
+          <div id="dgw-applied-device-chain" ref={deviceChainRef} className="dgw-device-chain" tabIndex={0} aria-label={`Applied devices for ${track.name}`}>
             {rackItems.length > 0 ? rackItems.map(renderRackItem) : <button type="button" className="dgw-empty-device-chain" onClick={openDeviceBrowser}>
               <b>No devices applied</b><small>Add a device to this Genome Track</small>
             </button>}
+          </div>
+          <div className="dgw-device-scrollbar" role="scrollbar" aria-label="Scroll device rack" aria-orientation="horizontal" aria-controls="dgw-applied-device-chain" aria-valuemin={0} aria-valuemax={Math.max(0, rackScroll.total - rackScroll.width)} aria-valuenow={Math.round(rackScroll.left)} tabIndex={0}
+            onPointerDown={event => {
+              if (event.button !== 0) return;
+              const chain = deviceChainRef.current;
+              if (!chain) return;
+              event.preventDefault();
+              event.currentTarget.focus();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              if (!(event.target as HTMLElement).classList.contains("dgw-device-scrollbar-thumb")) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                chain.scrollLeft = (event.clientX - rect.left) / rect.width * chain.scrollWidth - chain.clientWidth / 2;
+              }
+              rackDrag.current = { x: event.clientX, left: chain.scrollLeft };
+            }}
+            onPointerMove={event => {
+              const chain = deviceChainRef.current;
+              if (!chain || !rackDrag.current || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              chain.scrollLeft = rackDrag.current.left + (event.clientX - rackDrag.current.x) * chain.scrollWidth / event.currentTarget.clientWidth;
+            }}
+            onLostPointerCapture={() => { rackDrag.current = undefined; }}
+            onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+            onKeyDown={event => {
+              const chain = deviceChainRef.current;
+              if (!chain) return;
+              const delta = event.key === "ArrowRight" ? 60 : event.key === "ArrowLeft" ? -60 : event.key === "PageDown" ? chain.clientWidth : event.key === "PageUp" ? -chain.clientWidth : undefined;
+              if (delta !== undefined || event.key === "Home" || event.key === "End") {
+                event.preventDefault();
+                chain.scrollLeft = event.key === "Home" ? 0 : event.key === "End" ? chain.scrollWidth : chain.scrollLeft + (delta ?? 0);
+              }
+            }}>
+            <span className="dgw-device-scrollbar-thumb" style={{ left: `${100 * rackScroll.left / rackScroll.total}%`, width: `${100 * rackScroll.width / rackScroll.total}%` }} />
           </div>
           {deviceBrowserOpen && <section className="dgw-device-browser" aria-label="Device Browser">
             <header><div><span>Device Browser</span><small>Available devices · adding one does not change an objective automatically</small></div><button type="button" onClick={() => setDeviceBrowserOpen(false)}>Close</button></header>
@@ -2446,7 +2522,7 @@ export function TrackDeviceWorkspace({
                 onClick={() => onSelectAllAlleles?.(selectedTrackId)}
                 disabled={busy || !onSelectAllAlleles}
                 title="Select every VCF allele in this track across all chromosomes (Ctrl/Command+A)"
-              >{allAllelesSelected ? "All selected ✓" : "Select all in track"}</button>
+              >{allAllelesSelected ? "All selected · all chromosomes ✓" : "Select all variants · all chromosomes"}</button>
               <button type="button" onClick={onClearAlleleSelection} disabled={busy || !onClearAlleleSelection || semanticSelectedAlleleCount === 0}>Clear</button>
             </span>
             <span className="dgw-height-controls" aria-label="Track height controls">

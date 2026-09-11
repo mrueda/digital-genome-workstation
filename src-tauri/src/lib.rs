@@ -1,5 +1,7 @@
 mod resource_archive;
 mod resources;
+#[cfg(target_os = "linux")]
+mod user_setup;
 use dgw_core::evaluation::normalize_variant;
 use dgw_core::{
     built_in_device_manifest, built_in_device_manifests, inspect_vcf, plan_optimizer_with_evidence,
@@ -28,6 +30,7 @@ struct AppState {
     compute_pool: Arc<LocalComputePool>,
     job_lock: Arc<Mutex<()>>,
     cancelled_jobs: Arc<Mutex<BTreeSet<String>>>,
+    comparison_index: Arc<Mutex<Option<(PathBuf, dgw_core::TrackComparisonIndex)>>>,
 }
 
 fn error_text(error: impl std::fmt::Display) -> String {
@@ -769,14 +772,37 @@ fn variant_page(
 
 #[tauri::command]
 async fn track_comparison_page(
+    state: tauri::State<'_, AppState>,
     project_path: PathBuf,
     track_id: String,
     offset: u64,
     limit: Option<u32>,
+    changed_only: Option<bool>,
 ) -> Result<TrackComparisonPage, String> {
+    let index_cache = Arc::clone(&state.comparison_index);
     tauri::async_runtime::spawn_blocking(move || {
-        Project::open(project_path)
+        Project::open(&project_path)
             .and_then(|project| {
+                if changed_only.unwrap_or(false) {
+                    let revision = project.track_comparison_revision(&track_id)?;
+                    let path = std::fs::canonicalize(&project_path)?;
+                    let mut cache = index_cache.lock().map_err(|_| {
+                        dgw_core::DgwError::Project("comparison cache unavailable".into())
+                    })?;
+                    let valid = cache.as_ref().is_some_and(|(cached_path, index)| {
+                        cached_path == &path
+                            && index.track_id == track_id
+                            && index.revision == revision
+                    });
+                    if !valid {
+                        *cache = Some((path, project.build_track_comparison_index(&track_id)?));
+                    }
+                    return project.changed_comparison_page(
+                        &cache.as_ref().unwrap().1,
+                        offset,
+                        limit.unwrap_or(dgw_core::VARIANT_PAGE_SIZE),
+                    );
+                }
                 project.track_comparison_page(
                     &track_id,
                     offset,
@@ -1679,6 +1705,134 @@ fn cancel_background_job(
 }
 
 #[tauri::command]
+fn start_prediction_comparison_job(
+    state: tauri::State<'_, AppState>,
+    project_path: PathBuf,
+    track_id: String,
+    device_ids: Vec<String>,
+    worker_threads: Option<u16>,
+) -> Result<BackgroundJob, String> {
+    let mut ids = dgw_core::normalized_track_profile_devices(&device_ids);
+    ids.sort();
+    if !ids.iter().any(|id| id == CONSEQUENCE_DEVICE_ID) {
+        return Err("Activate Variant Consequences to compare predictions".into());
+    }
+    let project = Project::open(project_path).map_err(error_text)?;
+    let revision = project
+        .track_comparison_revision(&track_id)
+        .map_err(error_text)?;
+    let track = project.track(&track_id).map_err(error_text)?;
+    let now = chrono::Utc::now();
+    let mut job = BackgroundJob {
+        id: Uuid::new_v4().to_string(),
+        operation: "trackPredictionComparison".into(),
+        device_id: CONSEQUENCE_DEVICE_ID.into(),
+        track_id: track_id.clone(),
+        status: BackgroundJobStatus::Queued,
+        progress: 0,
+        stage: "queued".into(),
+        message: "Waiting for the background compute slot".into(),
+        worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
+        request: serde_json::json!({"stateId": track.head_state_id, "revision": revision, "deviceIds": ids}),
+        result: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    project.save_background_job(&job).map_err(error_text)?;
+    let returned = job.clone();
+    let service = Arc::clone(&state.evaluation);
+    let pool = Arc::clone(&state.compute_pool);
+    let lock = Arc::clone(&state.job_lock);
+    let cancelled = Arc::clone(&state.cancelled_jobs);
+    tauri::async_runtime::spawn_blocking(move || {
+        let job_id = job.id.clone();
+        let threads = job.worker_threads;
+        let outcome = (|| -> Result<_, String> {
+            let _guard = lock.lock().map_err(error_text)?;
+            pool.run(threads, || {
+                dgw_core::prediction_comparison::run(
+                    &project,
+                    &service,
+                    &track_id,
+                    &job_id,
+                    &revision,
+                    &ids,
+                    |percent, message| {
+                        if job_was_cancelled(&cancelled, &job_id) {
+                            return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
+                        }
+                        update_job(
+                            &project,
+                            &mut job,
+                            BackgroundJobStatus::Running,
+                            percent,
+                            "comparison",
+                            message,
+                        )
+                        .map_err(dgw_core::DgwError::Tool)
+                    },
+                )
+                .map_err(error_text)
+            })
+        })();
+        match outcome {
+            Ok(report) => {
+                job.result = serde_json::to_value(report).ok();
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    BackgroundJobStatus::Completed,
+                    100,
+                    "completed",
+                    "Prediction comparison ready",
+                );
+            }
+            Err(error) => {
+                let is_cancelled = error.contains("__cancelled__");
+                job.error = (!is_cancelled).then_some(error.clone());
+                let _ = update_job(
+                    &project,
+                    &mut job,
+                    if is_cancelled {
+                        BackgroundJobStatus::Cancelled
+                    } else {
+                        BackgroundJobStatus::Failed
+                    },
+                    100,
+                    "finished",
+                    if is_cancelled {
+                        "Comparison cancelled".into()
+                    } else {
+                        error
+                    },
+                );
+            }
+        }
+    });
+    Ok(returned)
+}
+
+#[tauri::command]
+async fn prediction_comparison_page(
+    project_path: PathBuf,
+    job_id: String,
+    device_ids: Vec<String>,
+    outcome: Option<String>,
+    offset: u64,
+) -> Result<dgw_core::prediction_comparison::PredictionPage, String> {
+    let mut ids = dgw_core::normalized_track_profile_devices(&device_ids);
+    ids.sort();
+    tauri::async_runtime::spawn_blocking(move || {
+        let project = Project::open(project_path).map_err(error_text)?;
+        dgw_core::prediction_comparison::page(&project, &job_id, &ids, outcome.as_deref(), offset)
+            .map_err(error_text)
+    })
+    .await
+    .map_err(error_text)?
+}
+
+#[tauri::command]
 fn start_track_evidence_profile_job(
     state: tauri::State<'_, AppState>,
     project_path: PathBuf,
@@ -2105,20 +2259,24 @@ fn suggested_development_bundles(app: tauri::AppHandle) -> Result<Vec<ResourceBu
     let mut bundles = resources::registered_bundles(&app)?;
     let mut assemblies = BTreeSet::new();
     bundles.retain(|bundle| assemblies.insert(bundle.assembly.clone()));
-    let development: Vec<ResourceBundle> = [
-        include_str!("../../config/local-hs37d5.development.json"),
-        include_str!("../../config/local-hg38.development.json"),
-    ]
-    .into_iter()
-    .map(|contents| serde_json::from_str(contents).map_err(error_text))
-    .collect::<Result<_, _>>()?;
-    for bundle in development {
-        if bundle.reference_path.is_file()
-            && !bundles
-                .iter()
-                .any(|registered| registered.assembly == bundle.assembly)
-        {
-            bundles.push(bundle);
+    // Installed builds must use registered resources, never development-machine paths.
+    #[cfg(debug_assertions)]
+    {
+        let development: Vec<ResourceBundle> = [
+            include_str!("../../config/local-hs37d5.development.json"),
+            include_str!("../../config/local-hg38.development.json"),
+        ]
+        .into_iter()
+        .map(|contents| serde_json::from_str(contents).map_err(error_text))
+        .collect::<Result<_, _>>()?;
+        for bundle in development {
+            if bundle.reference_path.is_file()
+                && !bundles
+                    .iter()
+                    .any(|registered| registered.assembly == bundle.assembly)
+            {
+                bundles.push(bundle);
+            }
         }
     }
     Ok(bundles)
@@ -2126,6 +2284,11 @@ fn suggested_development_bundles(app: tauri::AppHandle) -> Result<Vec<ResourceBu
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    if let Some(source) = user_setup::source() {
+        user_setup::run(source);
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(resources::ResourceInstaller(Mutex::new(())))
@@ -2134,6 +2297,7 @@ pub fn run() {
             compute_pool: Arc::new(LocalComputePool::new()),
             job_lock: Arc::new(Mutex::new(())),
             cancelled_jobs: Arc::new(Mutex::new(BTreeSet::new())),
+            comparison_index: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             resources::resource_inventory,
@@ -2179,6 +2343,8 @@ pub fn run() {
             delete_finished_background_jobs,
             cancel_background_job,
             start_track_evidence_profile_job,
+            start_prediction_comparison_job,
+            prediction_comparison_page,
             run_randomizer,
             apply_compound_mutation_layer,
             run_optimizer,

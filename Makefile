@@ -14,6 +14,12 @@ smoke-braf: acceptance-grch37
 
 acceptance-all: acceptance-local acceptance-devices
 
+.PHONY: acceptance-exome
+acceptance-exome:
+	@set -e; \
+	acceptance_root=$$(mktemp -d /tmp/dgw-exome-journey.XXXXXX); \
+	cargo run -p dgw-core --release --example exome_journey -- fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz SRR1596639 "$$acceptance_root/run" config/local-hs37d5.development.json
+
 acceptance-local: acceptance-grch37 acceptance-grch38
 
 acceptance-devices: acceptance-devices-grch37 acceptance-devices-grch38

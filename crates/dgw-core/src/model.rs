@@ -410,8 +410,19 @@ pub struct TrackComparisonPage {
     pub offset: u64,
     pub limit: u32,
     pub total_loci: u64,
+    pub matching_loci: u64,
+    pub changed_loci: Option<u64>,
     pub has_more: bool,
     pub rows: Vec<TrackComparisonLocus>,
+}
+
+/// Runtime index: only changed locus keys are retained, not genome payloads.
+#[derive(Debug, Clone)]
+pub struct TrackComparisonIndex {
+    pub track_id: String,
+    pub revision: String,
+    pub total_loci: u64,
+    pub changed_keys: Vec<VariantKey>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -6,8 +6,11 @@ import { refreshedAlleleFocus } from "./alleleFocus";
 import { savedAllele } from "./alleleComparison";
 import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { WholeTrackComparison } from "./WholeTrackComparison";
+import { TrackPredictionComparison } from "./TrackPredictionComparison";
+import type { TrackComparisonLocus } from "./types";
 import { comparisonRows } from "./comparisonRows";
 import { EvidenceCard } from "./EvidenceCard";
+import { ResourcesPanel } from "./ResourcesPanel";
 import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId } from "./ApplicationChrome";
 import {
   TrackDeviceWorkspace,
@@ -498,6 +501,10 @@ async function createBundledExampleProject(
 }
 
 function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTemplateId; onOpened: (path: string, snapshot: ProjectSnapshot, created: boolean, unsavedExample?: boolean) => void }) {
+  const [resourcesChecked, setResourcesChecked] = useState(false);
+  const [resourceSetup, setResourceSetup] = useState(false);
+  const [resourceSetupBusy, setResourceSetupBusy] = useState(false);
+  const checkedResources = useRef(false);
   const [bundles, setBundles] = useState<ResourceBundle[]>([]);
   const [bundle, setBundle] = useState<ResourceBundle>();
   const [bundleText, setBundleText] = useState("");
@@ -528,6 +535,9 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         setBundles(values);
         setBundle(value);
         setBundleText(value ? JSON.stringify(value, null, 2) : "");
+        if (!checkedResources.current && !values.length) setResourceSetup(true);
+        checkedResources.current = true;
+        setResourcesChecked(true);
         setStatus(value ? "Choose a reference profile, then select a VCF." : "Open Settings → Resources to install or register genome resources.");
       })
       .catch((error) => setStatus(`Could not load resources: ${messageOf(error)}`)); };
@@ -620,6 +630,10 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
 
   async function loadExample(exampleId: ExampleProjectId) {
     const assembly = exampleId === "alleleEditingHg38" ? "hg38" : "b37";
+    if (!bundles.some((candidate) => candidate.assembly === assembly)) {
+      setResourceSetup(true);
+      return;
+    }
     setBusy(true);
     setProcessSteps([]);
     const assemblyLabel = assembly === "hg38" ? "GRCh38" : "GRCh37";
@@ -701,6 +715,17 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
     }
   }
 
+  if (resourceSetup) return <main className="resource-setup-page">
+    <header><p className="eyebrow">DGW setup · Step 2 of 2</p><h1>Set up genome resources</h1>
+      <p>The application is installed. To open an example or import a VCF, install the reference genome, supporting data and tools for its assembly.</p>
+      <p>Choose GRCh37 or GRCh38. Resources can be stored separately from DGW, including on another drive.</p>
+    </header>
+    <ResourcesPanel onBusyChange={setResourceSetupBusy} />
+    <footer><button className="button primary" disabled={resourceSetupBusy} onClick={() => setResourceSetup(false)}>{bundles.length ? "Continue to examples" : "Set up later"}</button>
+      {!bundles.length && <small>Examples and VCF import need resources. You can return to setup from the start page.</small>}
+    </footer>
+  </main>;
+
   return (
     <main className="onboarding-shell">
       <section className="brand-panel">
@@ -727,16 +752,20 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         </div>
 
         <section className="example-projects" aria-label="Example projects">
+          {resourcesChecked && <div className="resource-setup-notice">
+            <p>{bundles.length ? "Need another reference assembly?" : "Genome resources are required before opening examples or importing a VCF."}</p>
+            <button type="button" className="button secondary" disabled={busy} onClick={() => setResourceSetup(true)}>Set up genome resources</button>
+          </div>}
           <header><b>Open an example</b><small>Start with a fresh, unsaved copy</small></header>
           <div>
             <button type="button" aria-label="Open GRCh37 example project" onClick={() => { void loadExample("alleleEditingB37"); }} disabled={busy}>
-              <b>Allele Editing</b><span>GRCh37</span><small>Synthetic · 3 prepared tracks</small>
+              <b>Allele Editing</b><span>GRCh37</span><small>{bundles.some(item => item.assembly === "b37") ? "Synthetic · 3 prepared tracks" : "Requires GRCh37 resources · Set up"}</small>
             </button>
             <button type="button" aria-label="Open GRCh38 example project" onClick={() => { void loadExample("alleleEditingHg38"); }} disabled={busy}>
-              <b>Allele Editing</b><span>GRCh38</span><small>Synthetic · 3 prepared tracks</small>
+              <b>Allele Editing</b><span>GRCh38</span><small>{bundles.some(item => item.assembly === "hg38") ? "Synthetic · 3 prepared tracks" : "Requires GRCh38 resources · Set up"}</small>
             </button>
             <button type="button" aria-label="Open HG00103 exome example" onClick={() => { void loadExample("hg00103Wes"); }} disabled={busy}>
-              <b>HG00103 exome</b><span>GRCh37</span><small>1000 Genomes WES · 19.6K alleles</small>
+              <b>HG00103 exome</b><span>GRCh37</span><small>{bundles.some(item => item.assembly === "b37") ? "1000 Genomes WES · 19.6K alleles" : "Requires GRCh37 resources · Set up"}</small>
             </button>
           </div>
         </section>
@@ -1384,6 +1413,7 @@ function Workstation({
   const [detailMode, setDetailMode] = useState<"devices" | "allele">("devices");
   const [showComparison, setShowComparison] = useState(false);
   const [wholeTrackComparison, setWholeTrackComparison] = useState(false);
+  const [showPredictionComparison, setShowPredictionComparison] = useState(false);
   const [transportKind, setTransportKind] = useState<TransportTargetKind>("variants");
   const [transportLoop, setTransportLoop] = useState(false);
   const [transportState, setTransportState] = useState<TransportState>("idle");
@@ -2661,7 +2691,7 @@ function Workstation({
     const selection: VariantSelection = { kind: "allTrack", trackId, exclusions: [] };
     const total = navigationVariantTotal || snapshot.variants.length;
     setSymbolicSelection({ selection, total });
-    setAlleleSelection(ids, "Select all variants in track", true, true);
+    setAlleleSelection(ids, "Select all variants · all chromosomes", true, true);
     setSelectedEditId(undefined);
     setDetailMode("devices");
     setSelectedDeviceId(DEVICE_IDS.randomizer);
@@ -4040,6 +4070,16 @@ function Workstation({
   }
 
   const selectedEvidenceKey = selected ? selectionEvidenceKey(selected.key) : "";
+  function focusComparisonLocus(row: TrackComparisonLocus) {
+    setShowComparison(false);
+    setSelected(undefined); setSelectedEditId(undefined); setDetailMode("devices");
+    void refresh({ contig: row.contig, start: Math.max(1, row.position - 40), end: row.position + Math.max(40, row.reference.length) }).then(refreshed => {
+      if (!refreshed?.view) return;
+      const target = row.current.length === 1 ? refreshed.view.variants.find(variant => sameVariant(variant.key, row.current[0].key)) : undefined;
+      setSelected(target); setSelectedEditId(target?.editIds[0]);
+      if (target) { setAlleleSelection([alleleId(target)], "Inspect comparison result"); setDetailMode("allele"); }
+    });
+  }
   const selectedOperation = trackDeck.find(lane => lane.track.id === activeTrack.id)?.edits
     .find(edit => edit.id === selectedEditId && !activeTrack.bypassedEditIds.includes(edit.id));
   const selectedSavedAllele = savedAllele(selected, focus?.variants ?? [], selectedOperation);
@@ -4726,16 +4766,16 @@ function Workstation({
         <div className="track-workspace-shell" data-context-help="tracks">
           {!showComparison && <div className="comparison-entry"><button type="button" onClick={() => { interruptTransportForUser(); setShowComparison(true); }} disabled={busy}>Compare source and candidate</button><span>See what changed in this region</span></div>}
           {showComparison && <div className="comparison-actions" role="group" aria-label="Comparison scope">
-            <button aria-pressed={!wholeTrackComparison} onClick={() => setWholeTrackComparison(false)}>Focused region</button>
-            <button aria-pressed={wholeTrackComparison} onClick={() => setWholeTrackComparison(true)}>Whole track DNA</button>
+            <button aria-pressed={!wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(false); setShowPredictionComparison(false); }}>Focused region</button>
+            <button aria-pressed={wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(true); setShowPredictionComparison(false); }}>Whole track DNA</button>
+            <button aria-pressed={showPredictionComparison} onClick={() => setShowPredictionComparison(true)}>Whole track predictions</button>
           </div>}
-          {showComparison && wholeTrackComparison ? <WholeTrackComparison projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
+          {showComparison && showPredictionComparison ? <TrackPredictionComparison key={`${projectPath}:${activeTrack.id}`} projectPath={projectPath} trackId={activeTrack.id}
+            revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} deviceIds={activeAnalyzerDeviceIds}
+            workerThreads={settings.workerThreads === "auto" ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1) : settings.workerThreads}
+            onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : showComparison && wholeTrackComparison ? <WholeTrackComparison projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
             revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
-            onBack={() => setShowComparison(false)} onFocus={row => {
-              setShowComparison(false);
-              setSelected(undefined); setSelectedEditId(undefined); setDetailMode("devices");
-              void refresh({ contig: row.contig, start: Math.max(1, row.position - 40), end: row.position + Math.max(40, row.reference.length) });
-            }} /> : showComparison ? <ComparisonWorkspace
+            onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : showComparison ? <ComparisonWorkspace
             rows={comparisonRows(focusedSourceVariants ?? [], trackDeck.find(lane => lane.track.id === activeTrack.id))}
             trackName={activeTrack.name} scope={`${context.contig}:${context.start.toLocaleString()}–${context.end.toLocaleString()}`}
             revision={`${activeTrack.id}:${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}:${context.contig}:${context.start}:${context.end}:${activeAnalyzerSignature}`}
