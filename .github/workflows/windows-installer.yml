@@ -1,0 +1,77 @@
+name: Build Windows test installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nsis:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: cargo test -p dgw-desktop --lib
+      - name: Verify the Windows tool package through DGW
+        shell: pwsh
+        run: |
+          $catalog = Get-Content config/resource-catalog.json | ConvertFrom-Json
+          $manifest = Get-Content config/resource-artifacts.json | ConvertFrom-Json
+          $artifact = @($manifest.artifacts | Where-Object platform -eq 'windows-x86_64')
+          if ($artifact.Count -ne 1) { throw 'Expected one pinned Windows tool package' }
+          $name = Split-Path $artifact[0].file -Leaf
+          $archive = Join-Path $env:RUNNER_TEMP $name
+          Invoke-WebRequest "$($catalog.downloadBaseUrl)/$name" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $artifact[0].sha256) {
+            throw 'Windows tool archive checksum mismatch'
+          }
+          $env:DGW_TEST_TOOL_ARCHIVE = $archive
+          cargo test -p dgw-desktop native_package_archive -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'DGW Windows tool installation test failed' }
+      - run: npm run tauri build -- --bundles nsis
+      - name: Install and launch the packaged application
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one Windows installer' }
+          $download = Join-Path $installers[0].DirectoryName 'dgw-windows-x86_64-setup.exe'
+          Move-Item $installers[0].FullName $download
+          $destination = Join-Path $env:LOCALAPPDATA 'DGW-install-test'
+          $setup = Start-Process -FilePath $download -ArgumentList @('/S', "/D=$destination") -PassThru
+          if (-not $setup.WaitForExit(120000)) { $setup.Kill(); throw 'Installer timed out' }
+          if ($setup.ExitCode -ne 0) { throw "Installer failed: $($setup.ExitCode)" }
+          $binary = Join-Path $destination 'dgw-desktop.exe'
+          if (-not (Test-Path $binary)) { throw 'Installed application is missing' }
+          $app = Start-Process -FilePath $binary -PassThru
+          try {
+            $windowFound = $false
+            for ($attempt = 0; $attempt -lt 30; $attempt++) {
+              Start-Sleep -Seconds 1
+              $app.Refresh()
+              if ($app.HasExited) { throw "Installed DGW exited: $($app.ExitCode)" }
+              if ($app.MainWindowHandle -ne 0) { $windowFound = $true; break }
+            }
+            if (-not $windowFound) { throw 'Installed DGW did not create a window' }
+            Write-Output "Installed DGW window: $($app.MainWindowTitle)"
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id }
+          }
+          $hash = (Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $download -Leaf)" | Set-Content "$download.sha256" -Encoding ascii
+          # A runner launch is not a clean-machine or standard-user validation.
+          Get-AuthenticodeSignature $download | Format-List Status, StatusMessage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dgw-windows-x86_64-test
+          path: |
+            target/release/bundle/nsis/dgw-windows-x86_64-setup.exe
+            target/release/bundle/nsis/*.sha256
+          if-no-files-found: error
+          retention-days: 7
