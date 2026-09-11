@@ -7,6 +7,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Use',
       items: [
+        {type: 'doc', id: 'usage/installation', label: 'Install DGW'},
         {type: 'doc', id: 'usage/quickstart', label: 'Quick Start'},
         {type: 'doc', id: 'usage/input-vcf', label: 'Choose a VCF & Sample'},
         {type: 'doc', id: 'usage/focused-workspace', label: 'Focused Track Workspace'},
@@ -47,6 +48,7 @@ const sidebars: SidebarsConfig = {
           label: 'Development',
           items: [
             {type: 'doc', id: 'technical-details/developer-guide', label: 'Developer Guide'},
+            {type: 'doc', id: 'usage/test-installation', label: 'Installer Validation'},
             {type: 'doc', id: 'technical-details/testing', label: 'Testing'},
           ],
         },

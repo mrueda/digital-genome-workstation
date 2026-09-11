@@ -1,28 +1,12 @@
 # Quick Start
 
-## 1. Install development prerequisites
+## 1. Install DGW
 
-DGW currently runs from source. Install Rust 1.86+ and Node.js 20+. On Ubuntu/Debian, Tauri also needs:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev
-```
-
-Install application dependencies and verify both layers:
-
-```bash
-npm install
-npm run build
-npm test
-cargo test -p dgw-core
-```
+Follow [Install DGW](installation.md) to download and install a release build for Linux, macOS or Windows. Release builds do not require development tools. Source builds are covered in the [Developer Guide](../technical-details/developer-guide.md).
 
 ## 2. Start the desktop app
 
-```bash
-npm run tauri dev
-```
+Open **Digital Genome Workstation** from your Linux applications menu or Windows Start menu, or **DGW** from Applications on macOS. If this is your first launch, complete genome setup below.
 
 Choose **GRCh37 (b37/hs37d5)** or **GRCh38 (hg38)** before selecting a VCF. Assembly cannot be inferred from a `chr` prefix and DGW does not perform liftover.
 
@@ -38,14 +22,9 @@ The track arrangement always remains visible. Selecting a track shows its device
 
 ## 3. Configure genome resources
 
-Your sample VCF and DGW's supporting resources are separate. Import the VCF when creating a project. Install the matching resources once under **Settings → Resources → Install downloaded packages** by choosing:
+Your sample VCF and supporting resources are separate. In **Set up genome resources**, choose **GRCh37** or **GRCh38**, choose a storage folder, then click **Download and install**. DGW automatically selects matching tools for your computer and verifies the downloaded files before registering them. When ready, choose **Continue to examples**.
 
-- one b37 or hg38 data archive; and
-- the DGW tool archive for your operating system and processor.
-
-The data archive supplies the reference FASTA, ClinVar, gene index and transcript model. The platform archive supplies `bcftools`, `bgzip` and `tabix`; Java is not required. DGW checks the published archive identities, checksums and every extracted file before registering the bundle. It then appears as a resource choice on the project setup page.
-
-During private development the archives are distributed separately and the automatic download list is disabled. The repository's `config/local-*.development.json` profiles remain available for this development machine; they contain local paths and are not portable packages. Once public release URLs are enabled, the same Resources page will download and install the pair instead of asking the user to locate the files.
+You can add another assembly later under **Settings → Resources**. Downloads include the reference FASTA, ClinVar, gene index, transcript model and required tools; Java is not required. Offline installation and existing resource bundles are available under **Other installation options**. See [installation instructions](installation.md#install-genome-resources) for details.
 
 ## 4. Try the biological demonstration
 

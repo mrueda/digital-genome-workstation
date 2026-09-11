@@ -21,14 +21,9 @@ DGW is research software, not a diagnostic tool. Its scores describe independent
 
 ## Get started
 
-DGW currently runs from source. Install Rust 1.86+, Node.js 20+ and the platform prerequisites described in the [Quick Start](docs-site/docs/usage/quickstart.md), then run:
+See [Install DGW](docs-site/docs/usage/installation.md) for Linux, macOS and Windows release-installation instructions and current availability. Application installers are still being tested privately; they have not yet been published to a release. Release users do not need development tools.
 
-```bash
-npm install
-npm run tauri dev
-```
-
-Install the matching genome data and platform tools through **Settings → Resources**; packages are maintained in [dgw-data](https://github.com/mrueda/dgw-data). See the [resource setup instructions](docs-site/docs/usage/quickstart.md#3-configure-genome-resources) for details.
+On first launch, choose a genome and storage folder, then **Download and install** its resources. DGW selects the platform tools automatically. Developers building from source should use the [Developer Guide](docs-site/docs/technical-details/developer-guide.md).
 
 Choose **Open an example** on the landing page to explore a prepared project before importing your own VCF.
 

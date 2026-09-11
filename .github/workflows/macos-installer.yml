@@ -32,16 +32,23 @@ jobs:
       - name: Inspect app bundle and name the test download
         shell: bash
         run: |
-          test -d target/release/bundle/macos/DGW.app
-          test -f target/release/bundle/macos/DGW.app/Contents/MacOS/dgw-desktop
-          file target/release/bundle/macos/DGW.app/Contents/MacOS/dgw-desktop
-          plutil -lint target/release/bundle/macos/DGW.app/Contents/Info.plist
           shopt -s nullglob
           images=(target/release/bundle/dmg/*.dmg)
           test "${#images[@]}" -eq 1
           image="target/release/bundle/dmg/dgw-macos-${{ inputs.architecture }}.dmg"
           mv "${images[0]}" "$image"
           hdiutil verify "$image"
+          # Tauri removes the intermediate .app after creating the DMG.
+          # Inspect the actual downloadable image instead.
+          mount_dir="$(mktemp -d)"
+          hdiutil attach "$image" -readonly -nobrowse -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          plist="$mount_dir/DGW.app/Contents/Info.plist"
+          plutil -lint "$plist"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "$plist")"
+          test -f "$mount_dir/DGW.app/Contents/MacOS/$executable"
+          file "$mount_dir/DGW.app/Contents/MacOS/$executable"
+          test "$(lipo -archs "$mount_dir/DGW.app/Contents/MacOS/$executable")" = "${{ inputs.architecture == 'intel' && 'x86_64' || 'arm64' }}"
           cd target/release/bundle/dmg
           shasum -a 256 "dgw-macos-${{ inputs.architecture }}.dmg" > "dgw-macos-${{ inputs.architecture }}.dmg.sha256"
       - uses: actions/upload-artifact@v4
