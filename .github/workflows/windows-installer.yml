@@ -18,7 +18,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: cargo test -p dgw-desktop --lib
+      - run: cargo test --release -p dgw-desktop --lib
       - name: Verify the Windows tool package through DGW
         shell: pwsh
         run: |
@@ -33,7 +33,7 @@ jobs:
             throw 'Windows tool archive checksum mismatch'
           }
           $env:DGW_TEST_TOOL_ARCHIVE = $archive
-          cargo test -p dgw-desktop native_package_archive -- --ignored --nocapture
+          cargo test --release -p dgw-desktop native_package_archive -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'DGW Windows tool installation test failed' }
       - run: npm run tauri build -- --bundles nsis
       - name: Install and launch the packaged application

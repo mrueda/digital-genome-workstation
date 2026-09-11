@@ -21,7 +21,7 @@ DGW is research software, not a diagnostic tool. Its scores describe independent
 
 ## Get started
 
-See [Install DGW](docs-site/docs/usage/installation.md) for Linux, macOS and Windows release-installation instructions and current availability. Application installers are still being tested privately; they have not yet been published to a release. Release users do not need development tools.
+See [Install DGW](docs-site/docs/usage/installation.md) for Linux, macOS and Windows release-installation instructions and current availability. Application installers are being tested through private prereleases; access to the repository is required. Release users do not need development tools.
 
 On first launch, choose a genome and storage folder, then **Download and install** its resources. DGW selects the platform tools automatically. Developers building from source should use the [Developer Guide](docs-site/docs/technical-details/developer-guide.md).
 

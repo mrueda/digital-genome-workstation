@@ -1,6 +1,6 @@
 # Testing a desktop installation
 
-Installers are experimental. Linux ARM64 has been built and its setup window checked on an isolated display. macOS and Windows packaging is configured but has not yet been tested on those platforms.
+Installers are experimental. Linux ARM64 installation and launch have been checked on an isolated display. The user confirmed that the replacement ad-hoc-signed Apple Silicon build opens successfully on a Mac. Windows build and installation checks are in progress; a real-user test is still required.
 
 ## Graphical installation
 

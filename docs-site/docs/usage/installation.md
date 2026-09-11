@@ -6,7 +6,7 @@ Install the application first, then download genome resources inside DGW. You do
 
 Open [DGW releases](https://github.com/mrueda/digital-genome-workstation/releases), select a release, and expand **Assets**. Download the installer for your operating system and processor—not GitHub's automatically generated **Source code** archives.
 
-DGW is currently being tested privately. Sign in with a GitHub account that has access to the application repository. Installers have not yet been published to a release; until they are, invited testers receive build artifacts separately. A development prerelease may contain only some platforms. If your installer is absent, it is not available yet.
+DGW is currently being tested privately. Sign in with a GitHub account that has access to the application repository and open the latest prerelease. A development prerelease may contain only some platforms. If your installer is absent, it is not available yet.
 
 | Computer | Download |
 | --- | --- |
@@ -16,7 +16,7 @@ DGW is currently being tested privately. Sign in with a GitHub account that has 
 | Mac, Intel | `dgw-macos-intel.dmg` |
 | Windows, Intel/AMD 64-bit | Windows `…-setup.exe` |
 
-Test filenames may include an additional build suffix. Read the release notes for the matching version, validation status and known issues. Linux ARM64 has been exercised locally; macOS builds are being tested and Windows installation has not yet been validated. A built installer is not the same as a tested installation.
+Test filenames may include an additional build suffix. Read the release notes for the matching version, validation status and known issues. Linux ARM64 installation and Apple Silicon Mac launch have been tested. Windows validation is in progress. A built installer is not the same as a tested installation.
 
 ## Linux
 
@@ -47,7 +47,7 @@ If you cannot write to the shared Applications folder, use an Applications folde
 
 To replace a build, quit DGW and replace **DGW.app** through Finder. Projects and genome data remain outside the app bundle.
 
-Test builds are not yet Developer ID signed and notarized. macOS may block them; report the exact message. Do not disable Gatekeeper or other security protections. This remains a release-readiness check.
+Current Mac test builds have a verified ad-hoc signature, but are not Developer ID signed or notarized. After attempting to open DGW, macOS may offer **Open Anyway** under **System Settings → Privacy & Security**. Only approve the DGW test app you intentionally downloaded. macOS may request administrator authentication to authorize this security exception; DGW itself does not request elevated privileges. If the app is reported as damaged, stop and report the message. Do not disable Gatekeeper or remove quarantine flags. See [Apple's guidance](https://support.apple.com/en-us/102445).
 
 ## Windows
 

@@ -402,27 +402,31 @@ mod tests {
     }
     fn valid_archive(path: &Path) -> String {
         let file_hash = hex::encode(Sha256::digest(b"executable"));
+        let tool_paths: Vec<String> = ["bcftools", "bgzip", "tabix"]
+            .iter()
+            .map(|tool| format!("bin/{tool}{}", std::env::consts::EXE_SUFFIX))
+            .collect();
         let manifest = serde_json::json!({"schemaVersion":1,"id":"dgw-tools-test",
             "platform":platform_id(),"files":[
-                {"path":"bin/bcftools","sha256":file_hash,"bytes":10},
-                {"path":"bin/bgzip","sha256":file_hash,"bytes":10},
-                {"path":"bin/tabix","sha256":file_hash,"bytes":10}]});
+                {"path":tool_paths[0],"sha256":file_hash,"bytes":10},
+                {"path":tool_paths[1],"sha256":file_hash,"bytes":10},
+                {"path":tool_paths[2],"sha256":file_hash,"bytes":10}]});
         let manifest = serde_json::to_vec(&manifest).unwrap();
         archive(
             path,
             &[
                 (
-                    "dgw-tools-test/bin/bcftools",
+                    &format!("dgw-tools-test/{}", tool_paths[0]),
                     b"executable",
                     tar::EntryType::Regular,
                 ),
                 (
-                    "dgw-tools-test/bin/bgzip",
+                    &format!("dgw-tools-test/{}", tool_paths[1]),
                     b"executable",
                     tar::EntryType::Regular,
                 ),
                 (
-                    "dgw-tools-test/bin/tabix",
+                    &format!("dgw-tools-test/{}", tool_paths[2]),
                     b"executable",
                     tar::EntryType::Regular,
                 ),
@@ -456,7 +460,10 @@ mod tests {
             Some(&checksum),
         )
         .unwrap();
-        fs::write(root.path().join("dgw-tools-test/bin/bcftools"), b"modified").unwrap();
+        let binary = root.path().join(format!(
+            "dgw-tools-test/bin/bcftools{}", std::env::consts::EXE_SUFFIX
+        ));
+        fs::write(&binary, b"modified").unwrap();
         assert!(install(
             &source,
             root.path(),
@@ -466,7 +473,7 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            fs::read(root.path().join("dgw-tools-test/bin/bcftools")).unwrap(),
+            fs::read(&binary).unwrap(),
             b"modified"
         );
     }
