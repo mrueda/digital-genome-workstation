@@ -7,6 +7,7 @@ import {
 } from "./userSettings";
 import { api } from "./api";
 import { ResourcesPanel } from "./ResourcesPanel";
+import { UpdateDialog } from "./UpdateDialog";
 import type { BackgroundJob, ProjectResourceHealth, ResourceBundle, ResourceHealthStatus } from "./types";
 
 function closeMenu(event: React.MouseEvent<HTMLElement>) {
@@ -79,6 +80,7 @@ export function ApplicationMenu({
 }) {
   const navRef = useRef<HTMLElement>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
   const [resourceHealth, setResourceHealth] = useState<ProjectResourceHealth>();
   const [resourceHealthError, setResourceHealthError] = useState<string>();
   const [resourceHealthLoading, setResourceHealthLoading] = useState(false);
@@ -267,10 +269,12 @@ export function ApplicationMenu({
         <summary>Help</summary>
         <div className="application-menu-popover">
           <button type="button" onClick={(event) => { closeMenu(event); setAboutOpen(true); }}>About DGW</button>
+          <button type="button" onClick={(event) => { closeMenu(event); setUpdatesOpen(true); }}>Check for updates</button>
         </div>
       </details>
       <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${saveStatus === "error" ? saveMessage ?? "Save failed" : projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
     </nav>
+    {updatesOpen && <UpdateDialog onClose={() => setUpdatesOpen(false)} />}
     {aboutOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}>
       <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
         <header><div><p className="eyebrow">Digital Genome Workstation</p><h2 id="about-title">DGW 0.1.0</h2></div><button type="button" className="dialog-close" onClick={() => setAboutOpen(false)} aria-label="Close">×</button></header>

@@ -32,7 +32,7 @@ On first launch, if no resources are registered, DGW opens **Step 2: Set up geno
 6. Duplicate a track, make an edit, compare it, save the project and close the application.
 7. Reopen the installed application and saved project. Confirm the track and edit remain, then export a VCF to a new destination.
 
-Automatic downloads use the public `mrueda/dgw-data` resource release and pinned checksums; no GitHub login is needed. Older installer builds may still have downloads disabled and need an updated application build. Database files retain their own licenses. See [resource configuration](quickstart.md#3-configure-genome-resources).
+Automatic downloads use the public `mrueda/dgw-data` resource release and pinned checksums; no GitHub login is needed. Older installer builds may still have downloads disabled and need an updated application build. Database files retain their own licenses. See [resource configuration](installation.md#install-genome-resources).
 
 Record the OS/version, CPU architecture, DGW version, resource archive names and any failing step. Building a package or opening its setup window alone is not a completed installation test.
 

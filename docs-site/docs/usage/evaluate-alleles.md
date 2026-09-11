@@ -1,12 +1,34 @@
 # Evaluate Alleles
 
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
 Evaluation always targets one exact normalized allele selected from an edit block or observed call. It does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
+
+## Which result answers your question?
+
+| Result | Question it answers | What it does not establish |
+| --- | --- | --- |
+| Variant Consequences | What transcript effect is predicted for this exact allele? | Its clinical significance or the joint effect of nearby edits. |
+| ClinVar | Does this exact allele have a record in the configured snapshot? | That an absent record means benign. |
+| COSMIC, optional | Is this exact allele in the supplied local snapshot? | Disease probability for this sample. |
+| Track Monitor | How do the track's independent-allele signals compare with its source? | A combined biological effect or whole-genome risk. |
+
+:::tip[Start with one allele]
+Click a variant mark or edit block, then read the Evidence Inspector. Use the Track Monitor for the aggregate view; changing which record is displayed in the Inspector does not change the track score.
+:::
+
+## Run the applied evidence devices
 
 In the Device Browser, Variant Consequences, ClinVar, and COSMIC are all **Evidence** devices: they report annotations, predictions, classifications, or observations for one allele. DGW Starter applies them to a new track's Rack by default, between Mutation Generator and Genome Optimizer. Their code is separate from the configured models and database snapshots in the resource pack.
 
 With DGW Starter, the selected track's Rack initially shows the complete seven-device workflow, including the read-only Variant Map after Genome Optimizer. A missing optional resource leaves its Evidence card unavailable and inert; the other cards, visualization, and genome editing continue to work. Selecting an allele automatically runs the applied, non-bypassed Evidence cards after a short debounce. Stable cached results appear first and DGW requests only missing device results. **Refresh active Evidence devices** and each card's manual action remain available. Bypassing an Evidence card hides and excludes its result for that track without changing any allele or edit block. Applied-chain and card-bypass choices persist in the `.dgw` workstation session.
 
 ## Consequence layer
+
+<figure>
+  <img src={useBaseUrl('/img/dgw-evidence-inspector.png')} alt="Evidence Inspector with transcript predictions and explicit no-exact-match database results" width="360" loading="lazy" />
+  <figcaption>Current interface with controlled test responses, not a biological validation result. Predictions and database matches are shown separately.</figcaption>
+</figure>
 
 DGW sends each request as a VCF batch to the registered `bcftools csq --local-csq` engine. It reports effect, impact, gene, transcript, strand, amino-acid change, DNA change, bcftools version, and Ensembl annotation release. A no-feature result is shown explicitly rather than treated as missing database evidence.
 

@@ -296,6 +296,13 @@ export async function installTauriShellMock(page: Page) {
           hasMore: offset + limit < matches.length, rows: matches.slice(offset, offset + limit) };
       }
       if (commandName === "test_fail_next_session_save") { failNextSessionSave = true; return null; }
+      if (commandName === "check_app_updates") {
+        const state = localStorage.getItem("test-update-state");
+        if (state === "error") throw new Error("Could not reach GitHub. Check your connection and try again.");
+        return { currentVersion: "0.1.0", status: state ?? "unavailable", latestVersion: state === "available" ? "0.2.0" : undefined,
+          message: state === "available" ? "DGW 0.2.0 is available." : "No public stable release is available to check. The repository may be private or contain only prereleases." };
+      }
+      if (commandName === "open_app_releases") { localStorage.setItem("test-releases-opened", "1"); return null; }
       if (commandName === "plugin:dialog|open") return "/synthetic/DGW-Allele-Editing-Demo.dgw";
       if (commandName === "test_enable_mutable_edits") { mutableEdits = true; return null; }
       if (commandName === "plugin:webview|set_webview_zoom") return null;

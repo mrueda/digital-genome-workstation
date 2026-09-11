@@ -31,11 +31,15 @@ test("capture documentation interface set", async ({ page }) => {
 
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
-  await expect(page.getByLabel("Mutation Generator")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Mutation Generator", exact: true })).toBeVisible();
   await expect(page.locator(".app-header strong")).toHaveText("DGW Allele Editing Demo");
   await expect(page.getByText(/Background profile completed for 1 mutation/)).toBeVisible();
   await page.screenshot({
     path: `${imageDirectory}/dgw-workspace.png`,
+    animations: "disabled"
+  });
+  await page.locator(".evidence-inspector-content").screenshot({
+    path: `${imageDirectory}/dgw-evidence-inspector.png`,
     animations: "disabled"
   });
 

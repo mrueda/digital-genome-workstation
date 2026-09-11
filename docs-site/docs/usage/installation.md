@@ -58,6 +58,12 @@ Current Mac test builds have a verified ad-hoc signature, but are not Developer 
 
 The installer is configured for the current user rather than a machine-wide installation. Windows testing must still confirm WebView2 availability, signing and first-launch behavior. If Windows blocks an unsigned test build or unexpectedly requests administrator access, stop and report the message; do not disable security protections.
 
+## Check for application updates
+
+Choose **Help → Check for updates**. DGW compares its installed version with the latest public stable release. **Open GitHub releases** opens your browser so you can choose and install the package for your computer. It does not download or install an update automatically, and no project or genome data is sent.
+
+While the repository is private—or only prereleases exist—the check cannot confirm the latest version. Open releases in your browser and sign in instead. Replaced test installers with the same application version are not detected. Genome resource versions are separate and remain recorded in your projects.
+
 ## Install genome resources
 
 On first launch, DGW opens **Set up genome resources**:

@@ -1,5 +1,6 @@
 mod resource_archive;
 mod resources;
+mod updates;
 #[cfg(target_os = "linux")]
 mod user_setup;
 use dgw_core::evaluation::normalize_variant;
@@ -2300,6 +2301,8 @@ pub fn run() {
             comparison_index: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
+            updates::check_app_updates,
+            updates::open_app_releases,
             resources::resource_inventory,
             resources::set_resource_directory,
             resources::register_resource_bundle,

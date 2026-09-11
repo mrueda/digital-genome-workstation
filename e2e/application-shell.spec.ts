@@ -7,6 +7,25 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Edit and compare genome variants." })).toBeVisible();
 });
 
+test("update check handles private releases, retries and opens the release page", async ({ page }) => {
+  await page.getByText("Help", { exact: true }).click();
+  await page.getByRole("button", { name: "Check for updates", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Check for updates" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("status")).toContainText("repository may be private");
+  await page.evaluate(() => localStorage.setItem("test-update-state", "error"));
+  await dialog.getByRole("button", { name: "Check again" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Could not reach GitHub");
+  await page.evaluate(() => localStorage.setItem("test-update-state", "available"));
+  await dialog.getByRole("button", { name: "Check again" }).click();
+  await expect(dialog.getByRole("status")).toContainText("0.2.0 is available");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Open GitHub releases" }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("test-releases-opened"))).toBe("1");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
 test("keeps the project purpose and primary starting actions visible", async ({ page }, testInfo) => {
   await expect(page.getByText("Load one sample from a VCF and test allele changes on independent tracks without changing the source.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Open .dgw" })).toBeVisible();

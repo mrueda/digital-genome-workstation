@@ -4,6 +4,19 @@ DGW centers the interface on the biological question currently being edited. The
 
 ## Navigate
 
+| You want to… | Control |
+| --- | --- |
+| Review alleles one by one | Genome Transport: Previous/Next or Play. |
+| Zoom around the pointer | Ctrl/Command + wheel, or the + / − controls. |
+| Move left or right | Shift + wheel, a horizontal trackpad gesture, or the navigator. |
+| Return to the selected allele | **Fit allele**, or **0**. |
+| Select the current interval | **Select visible**. |
+| Select across every chromosome | **Select all variants · all chromosomes**, or Ctrl/Command+A. |
+
+:::note[Selection is not the visible window]
+Zooming into one region does not make a whole-track selection local. Read the selected-position count before running a device. Selection refers to VCF alleles, not every FASTA base.
+:::
+
 The left navigator groups source alleles by contig. Expand a chromosome to see only its occupied genomic bins. A broad bin unfolds into narrower occupied bins; choosing a leaf of at most 50 kb loads that bounded region into the tracks. Alleles from the focused interval appear nested beneath the active leaf and can be opened directly. The tree queries compact counts and bins rather than loading the complete VCF into the interface. You can also enter an exact project contig/start/end interval. Typical edit work uses tens to hundreds of bases.
 
 The **Genome Transport** bar reviews the current selection, active gene, or visible interval. Choose Variants or Active edits, then use Previous/Next for manual stepping or Play to advance after active Evidence devices finish for each exact allele. Starting Play reveals the Evidence panel. The Transport readout shows the current ordinal position and whether the named Evidence devices are evaluating, reviewing, paused, or ready. Pause keeps the current position; Stop returns to the position where review began; Loop repeats the frozen review scope. Transport navigates only—it never creates mutations, consolidates a track, or controls background jobs.
@@ -21,8 +34,8 @@ For mouse-only DAW-style selection, drag across empty space in the active track 
 ## Read the sequence rows
 
 - **Track lane** shows the selected complete genome scenario and its persistent edit blocks over the current coordinates.
-- **Selected change** shows the reference allele beside the allele produced by the selected edit block. It identifies an SNV, insertion, deletion, or substitution and shows the imported or newly calculated consequence when one is available.
-- **REF** is fetched from the registered BGZF hs37d5 reference through its FAI/GZI indexes.
+- **Selected change** shows the reference allele beside the allele produced by the selected edit block. It identifies an SNV, insertion, deletion, or substitution and shows a calculated consequence when available; imported INFO annotations are ignored.
+- **REF** is fetched from the registered assembly's BGZF reference through its FAI/GZI indexes.
 - **Chromosome copy A** applies the selected track's active first-haplotype calls and edits when phase is known.
 - **Chromosome copy B** applies the corresponding second-haplotype calls and edits.
 
