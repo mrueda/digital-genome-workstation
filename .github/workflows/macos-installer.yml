@@ -45,6 +45,10 @@ jobs:
           trap 'hdiutil detach "$mount_dir"' EXIT
           plist="$mount_dir/DGW.app/Contents/Info.plist"
           plutil -lint "$plist"
+          # Validate the complete app, not just the disk-image checksum.
+          # Ad-hoc signing provides integrity, not Developer ID trust/notarization.
+          codesign --display --verbose=4 "$mount_dir/DGW.app"
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/DGW.app"
           executable="$(plutil -extract CFBundleExecutable raw -o - "$plist")"
           test -f "$mount_dir/DGW.app/Contents/MacOS/$executable"
           file "$mount_dir/DGW.app/Contents/MacOS/$executable"

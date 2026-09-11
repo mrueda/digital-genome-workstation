@@ -14,7 +14,7 @@ The installed application does not require Node.js, Cargo, a development server 
 
 The manual `installers.yml` workflow builds platform artifacts without publishing them. This is build infrastructure, not evidence that every platform has passed installation tests.
 
-For a macOS-only test build, use **Build macOS test installer**, select Apple Silicon or Intel, and download its workflow artifact. It contains the DMG and SHA-256 checksum. The workflow checks the app bundle and disk-image integrity; it does not validate a Finder launch on a clean Mac. No Developer ID signing/notarization credentials are configured for these test builds.
+For a macOS-only test build, use **Build macOS test installer**, select Apple Silicon or Intel, and download its workflow artifact. It contains the DMG and SHA-256 checksum. Test builds use an ad-hoc signature. The workflow verifies the complete app signature inside the disk image as well as disk-image integrity; it does not validate a Finder launch on a clean Mac. Ad-hoc signing does not establish an Apple-verified developer identity or provide notarization. macOS approval is still required for downloaded test builds. No Developer ID signing/notarization credentials are configured. A “damaged” warning should be investigated, not bypassed by disabling Gatekeeper or removing quarantine flags.
 
 For a genuine first-install test, use a fresh VM snapshot or a separate Linux user with no previous DGW settings. Installing on your usual account may reuse registered resources and previous projects. Do not delete your working settings or projects to simulate a clean install.
 
