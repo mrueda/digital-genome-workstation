@@ -140,7 +140,7 @@ The following fields do not currently change the Saturation score:
 - ClinVar classifications, except for the fixed exclusion described above;
 - INFO annotations from the imported VCF.
 
-ClinVar, and COSMIC remain available as evidence. Absence from these databases never reduces the score.
+ClinVar and COSMIC remain available as evidence. Absence from these databases never reduces the score.
 
 ## Consequences of the current model
 

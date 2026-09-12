@@ -16,7 +16,7 @@ DGW is currently being tested privately. Sign in with a GitHub account that has 
 | Mac, Intel | `dgw-macos-intel.dmg` |
 | Windows, Intel/AMD 64-bit | Windows `…-setup.exe` |
 
-Test filenames may include an additional build suffix. Read the release notes for the matching version, validation status and known issues. Linux ARM64 installation and Apple Silicon Mac launch have been tested. Windows validation is in progress. A built installer is not the same as a tested installation.
+Test filenames may include an additional build suffix. Read the release notes for the matching version, validation status and known issues. Linux ARM64 installation and Apple Silicon Mac launch have been tested. The Windows x86_64 workflow has installed and launched DGW on a Windows runner; a real Windows 10/11 test is still pending. A built installer is not the same as a tested installation.
 
 ## Linux
 
@@ -56,7 +56,7 @@ Current Mac test builds have a verified ad-hoc signature, but are not Developer 
 3. Finish setup and open **Digital Genome Workstation** from the Start menu.
 4. Continue with genome resources when prompted.
 
-The installer is configured for the current user rather than a machine-wide installation. Windows testing must still confirm WebView2 availability, signing and first-launch behavior. If Windows blocks an unsigned test build or unexpectedly requests administrator access, stop and report the message; do not disable security protections.
+The installer is configured for the current user rather than a machine-wide installation. Automated testing has installed it into the runner user's local application data and observed the DGW window. The test build remains unsigned; real-machine testing must still cover standard-user installation, SmartScreen, first launch, and a machine without a preinstalled WebView2 runtime. If Windows blocks an unsigned test build or unexpectedly requests administrator access, stop and report the message; do not disable security protections.
 
 ## Check for application updates
 

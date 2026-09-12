@@ -53,7 +53,7 @@ For the exact fields, transcript rule, numerical mapping, and formulas, see [Sco
 
 ## Optimizer scores are not live evidence
 
-The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Variant Consequences for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provide context and never reduce the score through absence.
+The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Variant Consequences for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provides context and never reduces the score through absence.
 
 REF is the registered reference allele, not a benign or healthy classification. Likewise, Minimize and Maximize mean lower or higher values of the displayed proxy score only.
 

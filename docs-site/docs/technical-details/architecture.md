@@ -78,7 +78,7 @@ The implemented **Genome Optimizer** remains experimental. It accepts a mode, fo
 - maximize emits `SetAllele` only to reintroduce an exact original-source allele absent from the current track and only when its additive score delta is positive.
 - saturation enumerates the three non-REF bases at each selected canonical SNV, obtains host-evaluated evidence, requires a comparable predicted impact for every candidate, and emits `SetAllele` for the winning ALT.
 
-Conservative does not read predicted consequences, ClinVar, imported INFO, or another Evidence-device output. Saturation uses live `bcftools csq` impact to rank complete three-ALT comparisons. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a score fader. COSMIC, and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
+Conservative does not read predicted consequences, ClinVar, imported INFO, or another Evidence-device output. Saturation uses live `bcftools csq` impact to rank complete three-ALT comparisons. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a score fader. COSMIC and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
 
 Candidates are sorted by score improvement and stable allele/copy tie breakers. Conservative mode truncates copy-level proposals to `maxEdits`; Saturation interprets the same protocol bound as a position-group limit and emits every active copy operation for each accepted position. Unsafe overlaps, ambiguous source replacements, and zero-benefit choices become explicit exclusions. Accepted proposals pass through the normal track edit validator and become ordinary visible edit blocks.
 
@@ -88,7 +88,7 @@ No device API may imply continuous allele mixing. Controls change model paramete
 
 Track records, edit operations, per-edit bypass state, consolidation baseline, private baseline exclusions, background jobs, and compact mutation layers persist as structured SQLite records. A separate versioned workstation-session record restores focus, selection, track/device presentation, applied-device order and bypass state, built-in device controls/results, and interface Undo/Redo stacks. This makes reopening a project operationally continuous without mixing mutable interface state into the immutable biological edit graph.
 
-The workstation session is not a substitute for formal scientific provenance. Interactive edits retain validated operations and a short note, while persistent background jobs retain their structured request and aggregate result. Exact reconstruction of every historical interactive optimizer comparison—including its complete score components, exclusions, and uncertainty—still requires a dedicated immutable run record in a later schema addition.
+The workstation session is not a substitute for scientific provenance. Interactive edits retain validated operations and a short note. Completed, failed, and cancelled device invocations also enter a write-once run ledger with their declared selection and parameters, input fingerprint, resource identity, aggregate result, output edit or layer IDs, status, and limitation. Bulk records omit candidate-by-candidate rows and intermediate evaluation payloads, so reproducing those details requires rerunning the recorded request with the pinned resources.
 
 ## Engine boundary
 

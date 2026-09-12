@@ -19,7 +19,7 @@ const guideLinks = [
   {
     label: 'Interpret',
     title: 'Use analysis and evidence devices',
-    text: 'Inspect live transcript consequences and exact ClinVar, and COSMIC matches, with resource versions recorded.',
+    text: 'Inspect live transcript consequences and exact ClinVar and COSMIC matches, with resource versions recorded.',
     to: '/docs/usage/evaluate-alleles',
   },
   {

@@ -461,7 +461,8 @@ mod tests {
         )
         .unwrap();
         let binary = root.path().join(format!(
-            "dgw-tools-test/bin/bcftools{}", std::env::consts::EXE_SUFFIX
+            "dgw-tools-test/bin/bcftools{}",
+            std::env::consts::EXE_SUFFIX
         ));
         fs::write(&binary, b"modified").unwrap();
         assert!(install(
@@ -472,10 +473,7 @@ mod tests {
             Some(&checksum)
         )
         .is_err());
-        assert_eq!(
-            fs::read(&binary).unwrap(),
-            b"modified"
-        );
+        assert_eq!(fs::read(&binary).unwrap(), b"modified");
     }
     #[test]
     fn rejects_links_wrong_roots_duplicates_and_size_overruns() {

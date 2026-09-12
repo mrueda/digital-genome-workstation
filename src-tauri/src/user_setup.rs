@@ -186,11 +186,17 @@ fn install_with_replace(
     let stage = tempfile::tempdir_in(&parent).map_err(|e| e.to_string())?;
     if destination.symlink_metadata().is_ok() {
         if !replace {
-            return Err("DGW is already installed here. Enable Replace existing installation to update it.".into());
+            return Err(
+                "DGW is already installed here. Enable Replace existing installation to update it."
+                    .into(),
+            );
         }
         let known = fs::read(destination.join(".dgw-installed.json"))
-            .ok().and_then(|bytes| serde_json::from_slice::<PathBuf>(&bytes).ok());
-        if destination.is_symlink() || !known.is_some_and(|path| path.parent() == Some(destination.as_path())) {
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<PathBuf>(&bytes).ok());
+        if destination.is_symlink()
+            || !known.is_some_and(|path| path.parent() == Some(destination.as_path()))
+        {
             return Err("This folder is not a recognized DGW installation. Choose another folder; its files have not been changed.".into());
         }
     }
@@ -258,21 +264,34 @@ fn install_with_replace(
     )
     .map_err(|e| e.to_string())?;
     // Keep recoverable copies; never delete the previous installation or shortcut.
-    let backup = if replace && (destination.exists() || (!mac && launcher.symlink_metadata().is_ok())) {
-        let folder = tempfile::Builder::new().prefix("dgw-backup-").tempdir_in(&parent)
-            .map_err(|e| e.to_string())?.keep();
+    let backup = if replace
+        && (destination.exists() || (!mac && launcher.symlink_metadata().is_ok()))
+    {
+        let folder = tempfile::Builder::new()
+            .prefix("dgw-backup-")
+            .tempdir_in(&parent)
+            .map_err(|e| e.to_string())?
+            .keep();
         if !mac && launcher.symlink_metadata().is_ok() {
             if !launcher.is_file() || launcher.is_symlink() {
-                return Err("The existing shortcut is not a regular file; it has not been changed.".into());
+                return Err(
+                    "The existing shortcut is not a regular file; it has not been changed.".into(),
+                );
             }
-            fs::copy(&launcher, folder.join("launcher.desktop.backup")).map_err(|e| e.to_string())?;
+            fs::copy(&launcher, folder.join("launcher.desktop.backup"))
+                .map_err(|e| e.to_string())?;
         }
         if destination.exists() {
             fs::rename(&destination, folder.join("application")).map_err(|e| e.to_string())?;
         }
-        progress(&format!("Previous installation saved in {}", folder.display()));
+        progress(&format!(
+            "Previous installation saved in {}",
+            folder.display()
+        ));
         Some(folder)
-    } else { None };
+    } else {
+        None
+    };
     // Reserve the final directory atomically. Only our own empty reservation is used.
     fs::create_dir(&destination).map_err(|e| format!("Cannot create installation folder: {e}"))?;
     if let Err(error) = fs::rename(stage.path(), &destination) {
@@ -296,7 +315,8 @@ fn install_with_replace(
             if replace {
                 file.persist(&launcher).map_err(|e| e.to_string())?;
             } else {
-                file.persist_noclobber(&launcher).map_err(|e| e.to_string())?;
+                file.persist_noclobber(&launcher)
+                    .map_err(|e| e.to_string())?;
             }
             Ok::<_, String>(())
         })();
@@ -326,9 +346,15 @@ pub async fn install_for_user(
         .map_err(|e| e.to_string())?
         .join("applications");
     let installed = tauri::async_runtime::spawn_blocking(move || {
-        install_with_replace(&source, &parent, &applications, replace_existing, |message| {
-            let _ = on_progress.send(message.to_owned());
-        })
+        install_with_replace(
+            &source,
+            &parent,
+            &applications,
+            replace_existing,
+            |message| {
+                let _ = on_progress.send(message.to_owned());
+            },
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -358,21 +384,33 @@ pub async fn launch_user_install(
             cmd
         } else {
             let mut cmd = Command::new(&path);
-            cmd.arg("--dgw-run").env_remove("APPIMAGE").env_remove("APPDIR");
+            cmd.arg("--dgw-run")
+                .env_remove("APPIMAGE")
+                .env_remove("APPDIR");
             cmd
         };
-        let mut child = command.stdin(std::process::Stdio::null())
-            .stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log)
-            .spawn().map_err(|e| format!("DGW could not start: {e}"))?;
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log)
+            .spawn()
+            .map_err(|e| format!("DGW could not start: {e}"))?;
         for _ in 0..30 {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                if cfg!(target_os = "macos") && status.success() { return Ok(()); }
-                return Err(format!("DGW closed during startup ({status}). Details: {}", log_path.display()));
+                if cfg!(target_os = "macos") && status.success() {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "DGW closed during startup ({status}). Details: {}",
+                    log_path.display()
+                ));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         Ok(())
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub fn run(source: PathBuf) {
@@ -438,17 +476,37 @@ mod tests {
         fs::write(&source, b"new").unwrap();
         install_with_replace(&source, &parent, &menu, true, |_| {}).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"new");
-        let backup = fs::read_dir(&parent).unwrap().flatten().find(|entry| entry.file_name().to_string_lossy().starts_with("dgw-backup-")).unwrap().path();
-        assert_eq!(fs::read(backup.join("application/DGW.AppImage")).unwrap(), b"old");
+        let backup = fs::read_dir(&parent)
+            .unwrap()
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("dgw-backup-")
+            })
+            .unwrap()
+            .path();
+        assert_eq!(
+            fs::read(backup.join("application/DGW.AppImage")).unwrap(),
+            b"old"
+        );
         assert!(backup.join("launcher.desktop.backup").is_file());
         let other = tmp.path().join("another install");
         install_with_replace(&source, &other, &menu, true, |_| {}).unwrap();
-        assert!(fs::read_to_string(menu.join("org.mrueda.dgw-0.1.0.desktop")).unwrap().contains("another install"));
+        assert!(
+            fs::read_to_string(menu.join("org.mrueda.dgw-0.1.0.desktop"))
+                .unwrap()
+                .contains("another install")
+        );
         let unknown = tmp.path().join("unknown");
         fs::create_dir_all(unknown.join("DGW-0.1.0")).unwrap();
         fs::write(unknown.join("DGW-0.1.0/important"), b"keep").unwrap();
         assert!(install_with_replace(&source, &unknown, &menu, true, |_| {}).is_err());
-        assert_eq!(fs::read(unknown.join("DGW-0.1.0/important")).unwrap(), b"keep");
+        assert_eq!(
+            fs::read(unknown.join("DGW-0.1.0/important")).unwrap(),
+            b"keep"
+        );
     }
     #[test]
     #[cfg(target_os = "linux")]

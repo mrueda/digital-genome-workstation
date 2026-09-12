@@ -54,7 +54,7 @@ Editing responses contain proposals, never project commands or paths. Analysis a
 
 A **device package** supplies behavior: for example, invoking a consequence engine, planning bounded allele edits, or interpreting an indexed evidence row.
 
-A **resource pack** supplies compatible data and tool resources: reference assembly files, an Ensembl GFF3 release, or versioned ClinVar, and COSMIC snapshots. It includes identity, release, checksums, assembly/contig contract, paths or installation references, and license information. A resource pack is not executable device code.
+A **resource pack** supplies compatible data and tool resources: reference assembly files, an Ensembl GFF3 release, or versioned ClinVar and COSMIC snapshots. It includes identity, release, checksums, assembly/contig contract, paths or installation references, and license information. A resource pack is not executable device code.
 
 The current `ResourceBundle` is the first local resource-pack contract. It keeps code and large/licensed biological data outside `.dgw` projects while pinning a fingerprint in each project and evaluation cache entry.
 
@@ -66,7 +66,7 @@ The built-in implementations already establish much of the contract shape:
 
 - the Mutation Generator, Genome Morph, and Genome Optimizer are non-mutating core planners; the Tauri host validates and applies returned proposals through normal track operations;
 - Variant Consequences batches structured exact-allele requests through `bcftools csq --local-csq` and returns parsed consequence fields;
-- ClinVar, and COSMIC adapters return structured exact-match evidence states; and
+- ClinVar and COSMIC adapters return structured exact-match evidence states; and
 - Variant Map reads bounded focused-track marks and session Track Monitor results without changing the track or an objective; and
 - the resource bundle identifies and fingerprints their local resources.
 
