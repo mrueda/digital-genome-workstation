@@ -1,0 +1,26 @@
+[
+  {
+    "gene": "BRCA2",
+    "positions": 4,
+    "randomized_score_range": "3.33\u20133.33",
+    "randomized_mean": 3.33,
+    "minimized_score": 3.33,
+    "changed_positions_range": "0\u20130",
+    "unique_randomized": 8,
+    "unique_minimized": 8,
+    "mean_pairwise_before": 1.756,
+    "mean_pairwise_after": 1.756
+  },
+  {
+    "gene": "TTN",
+    "positions": 52,
+    "randomized_score_range": "40.43\u201342.11",
+    "randomized_mean": 41.271,
+    "minimized_score": 34.69,
+    "changed_positions_range": "11\u201314",
+    "unique_randomized": 10,
+    "unique_minimized": 10,
+    "mean_pairwise_before": 26.067,
+    "mean_pairwise_after": 20.178
+  }
+]

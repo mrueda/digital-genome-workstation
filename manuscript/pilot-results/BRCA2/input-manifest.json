@@ -1,0 +1,133 @@
+{
+  "gene": {
+    "biotype": "protein_coding",
+    "contig": "13",
+    "end": 32973805,
+    "geneId": "ENSG00000139618",
+    "start": 32889611,
+    "strand": "+",
+    "symbol": "BRCA2"
+  },
+  "manifest": {
+    "assembly": "b37",
+    "createdAt": "2026-09-12T12:12:25.156678158Z",
+    "name": "BRCA2 convergence pilot",
+    "projectId": "106e5f6b-c331-469a-b544-1aaee18a320b",
+    "resourceBundle": {
+      "assembly": "b37",
+      "bcftoolsPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bcftools",
+      "bcftoolsVersion": "1.24",
+      "bgzipPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bgzip",
+      "bundleFingerprint": null,
+      "clinvar": {
+        "contigStyle": "no_chr_prefix",
+        "fingerprint": null,
+        "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi",
+        "licenseLabel": "NCBI ClinVar terms and disclaimer",
+        "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz",
+        "release": "ClinVar 20250312"
+      },
+      "consequenceAnnotation": {
+        "assembly": "GRCh37",
+        "contigStyle": "no_chr_prefix",
+        "fingerprint": {
+          "modifiedUnix": null,
+          "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz",
+          "sha256": "133dea44279767ede793578219c77b21985fde2cab835fa3492934548125824b",
+          "size": 37903989
+        },
+        "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+        "path": "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz",
+        "release": "Ensembl 87",
+        "sourceUrl": "https://ftp.ensembl.org/pub/grch37/release-87/gff3/homo_sapiens/Homo_sapiens.GRCh37.87.gff3.gz"
+      },
+      "contigStyle": "no_chr_prefix",
+      "cosmic": {
+        "contigStyle": "no_chr_prefix",
+        "fingerprint": null,
+        "indexPath": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz.tbi",
+        "licenseLabel": "user-supplied; not redistributed",
+        "path": "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/CosmicCodingMuts.normal.hg19.vcf.gz",
+        "release": "COSMIC local snapshot"
+      },
+      "geneAnnotation": {
+        "assembly": "GRCh37",
+        "contigStyle": "no_chr_prefix",
+        "fingerprint": {
+          "modifiedUnix": null,
+          "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz",
+          "sha256": "56bc520f5e9cbc14ab4d03b472355b572818729fa422b905ba62d58291590058",
+          "size": 42400095
+        },
+        "indexPath": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Ensembl.GRCh37.87.genes.sqlite",
+        "licenseLabel": "Ensembl data; unrestricted project-generated data, third-party terms may apply",
+        "path": "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz",
+        "release": "Ensembl 87",
+        "sourceUrl": "https://ftp.ensembl.org/pub/grch37/release-87/gtf/homo_sapiens/Homo_sapiens.GRCh37.87.gtf.gz"
+      },
+      "id": "local-hs37d5-hg19",
+      "referenceFaiPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.fai",
+      "referenceGziPath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.gzi",
+      "referencePath": "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz",
+      "schemaVersion": 1,
+      "tabixPath": "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/tabix"
+    },
+    "resourceBundleFingerprint": "8f28886b7f3e584167f955380314c6d11cded5a7dd5170a03846295fea41d633",
+    "rootStateId": "d2ac135367d39ba49f75528aa0fb72091990831bfd566abaf3b1ccd8501423f2",
+    "schemaVersion": 1,
+    "selectedSample": "SRR1596639",
+    "selectedVcfPath": "artifacts/root.selected.vcf.gz",
+    "sourceVcf": {
+      "modifiedUnix": 1789215145,
+      "path": "/tmp/dgw-brca2-pilot-20260912/input.vcf",
+      "sha256": "1032fb0e0babb452f01a37a254b0372a3f2f055d47bff61c06f8563dbb8b619c",
+      "size": 4994
+    }
+  },
+  "morphAmounts": [
+    0,
+    25,
+    50,
+    75,
+    100
+  ],
+  "morphSeed": 20260912,
+  "originalInput": "/media/mrueda/2TBS/CNAG/Project_DGW/digital-genome-workstation/fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz",
+  "originalSha256": "4a70aec74eca0b21265e2be1b330356bc17337d8d73be78b3095fa4f2d0ad97a",
+  "randomizerSeeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "tracks": [
+    {
+      "archived": false,
+      "baseStateId": "d2ac135367d39ba49f75528aa0fb72091990831bfd566abaf3b1ccd8501423f2",
+      "bypassedEditIds": [],
+      "createdAt": "2026-09-12T12:12:25.156678158Z",
+      "headStateId": "d2ac135367d39ba49f75528aa0fb72091990831bfd566abaf3b1ccd8501423f2",
+      "id": "6bb59f97976133d48d85e194d609a1b9045cc33c6430fde53dd03e531f1c3a2e",
+      "name": "Source genome",
+      "readOnly": true,
+      "updatedAt": "2026-09-12T12:12:25.156678158Z"
+    },
+    {
+      "archived": false,
+      "baseStateId": "d2ac135367d39ba49f75528aa0fb72091990831bfd566abaf3b1ccd8501423f2",
+      "bypassedEditIds": [],
+      "createdAt": "2026-09-12T12:12:25.156678158Z",
+      "headStateId": "d2ac135367d39ba49f75528aa0fb72091990831bfd566abaf3b1ccd8501423f2",
+      "id": "502629b2b26d2d4cb461bda1a0af8c13caf7344d75b5d092bc256f2096930704",
+      "name": "Working track",
+      "readOnly": false,
+      "updatedAt": "2026-09-12T12:12:25.156678158Z"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz": {
+    "sha256": "e9157e19a95e01dfc47080b5b6aa559c861de90b9934c2ea7c49cd5ec49e0285",
+    "bytes": 892326179
+  },
+  "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.fai": {
+    "sha256": "1eab7540d4b62ef0b43b50581d027be37c1ee57da9e9cb75957e750641c8630c",
+    "bytes": 2813
+  },
+  "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz.gzi": {
+    "sha256": "b45062b549b0dbc0038613b1823c90dc09e8686f780f23a4d6d2b2b95c44d6e9",
+    "bytes": 778744
+  },
+  "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bcftools": {
+    "sha256": "7d2eccc1c09c430fc8ac872bb3075967d41730b65a0452dcc03ef452566a518e",
+    "bytes": 9550712
+  },
+  "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bgzip": {
+    "sha256": "e8fda2291fd35e4457507cc2692abfa8a6b1de7ad8b7e43a93a69837f7ef66bf",
+    "bytes": 3687896
+  },
+  "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/tabix": {
+    "sha256": "2260528429237a6de0d25595d5bbe82d8994130906af2663bbacaec7e37fe7d9",
+    "bytes": 4427232
+  },
+  "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz": {
+    "sha256": "3b5be56b39012627618d44163a599f6dbb95cf0956e97cc833dc39a35ba29454",
+    "bytes": 149483112
+  },
+  "/media/mrueda/2TBS/Databases/snpeff/v5.0/hg19/clinvar_20250312.vcf.gz.tbi": {
+    "sha256": "a8db1c19fb0b21de0b6740064b50a0fd2e5ca247397b52d54941bbc5a9cee0ee",
+    "bytes": 553957
+  },
+  "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz": {
+    "sha256": "133dea44279767ede793578219c77b21985fde2cab835fa3492934548125824b",
+    "bytes": 37903989
+  },
+  "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Homo_sapiens.GRCh37.87.gtf.gz": {
+    "sha256": "56bc520f5e9cbc14ab4d03b472355b572818729fa422b905ba62d58291590058",
+    "bytes": 42400095
+  },
+  "/media/mrueda/2TBS/Databases/ensembl/GRCh37/Ensembl.GRCh37.87.genes.sqlite": {
+    "sha256": "8286d41d9316fcb5ebde3f63a8e139db7ab75e7c809609ca0ba86314399743dc",
+    "bytes": 10743808
+  }
+}

@@ -1,0 +1,100 @@
+[
+  {
+    "position": 179440029,
+    "from": "T",
+    "to": "A",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|21042S>21042R|179440029G>T,missense|TTN|ENST00000460472|protein_coding|-|14545S>14545R|179440029G>T,missense|TTN|ENST00000589042|protein_coding|-|23610S>23610R|179440029G>T,missense|TTN|ENST00000591111|protein_coding|-|21969S>21969R|179440029G>T,missense|TTN|ENST00000342175|protein_coding|-|14737S>14737R|179440029G>T,missense|TTN|ENST00000359218|protein_coding|-|14670S>14670R|179440029G>T",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|21042S|179440029G>A,synonymous|TTN|ENST00000460472|protein_coding|-|14545S|179440029G>A,synonymous|TTN|ENST00000589042|protein_coding|-|23610S|179440029G>A,synonymous|TTN|ENST00000591111|protein_coding|-|21969S|179440029G>A,synonymous|TTN|ENST00000342175|protein_coding|-|14737S|179440029G>A,synonymous|TTN|ENST00000359218|protein_coding|-|14670S|179440029G>A"
+  },
+  {
+    "position": 179454394,
+    "from": "C",
+    "to": "G",
+    "randomizedConsequences": "stop_gained|TTN|ENST00000342992|protein_coding|-|18118Y>18118*|179454394A>C,stop_gained|TTN|ENST00000460472|protein_coding|-|11621Y>11621*|179454394A>C,stop_gained|TTN|ENST00000589042|protein_coding|-|20686Y>20686*|179454394A>C,stop_gained|TTN|ENST00000591111|protein_coding|-|19045Y>19045*|179454394A>C,stop_gained|TTN|ENST00000342175|protein_coding|-|11813Y>11813*|179454394A>C,stop_gained|TTN|ENST00000359218|protein_coding|-|11746Y>11746*|179454394A>C",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|18118Y|179454394A>G,synonymous|TTN|ENST00000460472|protein_coding|-|11621Y|179454394A>G,synonymous|TTN|ENST00000589042|protein_coding|-|20686Y|179454394A>G,synonymous|TTN|ENST00000591111|protein_coding|-|19045Y|179454394A>G,synonymous|TTN|ENST00000342175|protein_coding|-|11813Y|179454394A>G,synonymous|TTN|ENST00000359218|protein_coding|-|11746Y|179454394A>G"
+  },
+  {
+    "position": 179462494,
+    "from": "T",
+    "to": "G",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|16537H>16537Q|179462494A>T,missense|TTN|ENST00000460472|protein_coding|-|10040H>10040Q|179462494A>T,missense|TTN|ENST00000589042|protein_coding|-|19105H>19105Q|179462494A>T,missense|TTN|ENST00000591111|protein_coding|-|17464H>17464Q|179462494A>T,missense|TTN|ENST00000342175|protein_coding|-|10232H>10232Q|179462494A>T,missense|TTN|ENST00000359218|protein_coding|-|10165H>10165Q|179462494A>T",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|16537H|179462494A>G,synonymous|TTN|ENST00000460472|protein_coding|-|10040H|179462494A>G,synonymous|TTN|ENST00000589042|protein_coding|-|19105H|179462494A>G,synonymous|TTN|ENST00000591111|protein_coding|-|17464H|179462494A>G,synonymous|TTN|ENST00000342175|protein_coding|-|10232H|179462494A>G,synonymous|TTN|ENST00000359218|protein_coding|-|10165H|179462494A>G"
+  },
+  {
+    "position": 179543217,
+    "from": "G",
+    "to": "T",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|10034E>10034D|179543217C>G,missense|TTN|ENST00000589042|protein_coding|-|11278E>11278D|179543217C>G,missense|TTN|ENST00000591111|protein_coding|-|10961E>10961D|179543217C>G,missense|TTN|ENST00000414766|protein_coding|-|702E>702D|179543217C>G",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|10034E|179543217C>T,synonymous|TTN|ENST00000589042|protein_coding|-|11278E|179543217C>T,synonymous|TTN|ENST00000591111|protein_coding|-|10961E|179543217C>T,synonymous|TTN|ENST00000414766|protein_coding|-|702E|179543217C>T"
+  },
+  {
+    "position": 179554305,
+    "from": "A",
+    "to": "G",
+    "randomizedConsequences": "stop_gained|TTN|ENST00000342992|protein_coding|-|9378G>9378*|179554305C>A,stop_gained|TTN|ENST00000589042|protein_coding|-|10622G>10622*|179554305C>A,stop_gained|TTN|ENST00000591111|protein_coding|-|10305G>10305*|179554305C>A,stop_gained|TTN|ENST00000414766|protein_coding|-|500G>500*|179554305C>A",
+    "minimizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|9378G>9378R|179554305C>G,missense|TTN|ENST00000589042|protein_coding|-|10622G>10622R|179554305C>G,missense|TTN|ENST00000591111|protein_coding|-|10305G>10305R|179554305C>G,missense|TTN|ENST00000414766|protein_coding|-|500G>500R|179554305C>G"
+  },
+  {
+    "position": 179579212,
+    "from": "G",
+    "to": "C",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|7519E>7519D|179579212T>G,missense|TTN|ENST00000589042|protein_coding|-|8763E>8763D|179579212T>G,missense|TTN|ENST00000591111|protein_coding|-|8446E>8446D|179579212T>G",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|7519E|179579212T>C,synonymous|TTN|ENST00000589042|protein_coding|-|8763E|179579212T>C,synonymous|TTN|ENST00000591111|protein_coding|-|8446E|179579212T>C"
+  },
+  {
+    "position": 179585266,
+    "from": "A",
+    "to": "T",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|6497Q>6497H|179585266C>A,missense|TTN|ENST00000589042|protein_coding|-|7741Q>7741H|179585266C>A,missense|TTN|ENST00000591111|protein_coding|-|7424Q>7424H|179585266C>A",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|6497Q|179585266C>T,synonymous|TTN|ENST00000589042|protein_coding|-|7741Q|179585266C>T,synonymous|TTN|ENST00000591111|protein_coding|-|7424Q|179585266C>T"
+  },
+  {
+    "position": 179598228,
+    "from": "C",
+    "to": "G",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|4020I>4020M|179598228A>C,missense|TTN|ENST00000589042|protein_coding|-|5264I>5264M|179598228A>C,missense|TTN|ENST00000591111|protein_coding|-|4947I>4947M|179598228A>C",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|4020I|179598228A>G,synonymous|TTN|ENST00000589042|protein_coding|-|5264I|179598228A>G,synonymous|TTN|ENST00000591111|protein_coding|-|4947I|179598228A>G"
+  },
+  {
+    "position": 179614952,
+    "from": "C",
+    "to": "G",
+    "randomizedConsequences": "missense|TTN|ENST00000360870|protein_coding|-|4059L>4059V|179614952A>C",
+    "minimizedConsequences": "synonymous|TTN|ENST00000360870|protein_coding|-|4059L|179614952A>G"
+  },
+  {
+    "position": 179615931,
+    "from": "A",
+    "to": "T",
+    "randomizedConsequences": "missense|TTN|ENST00000360870|protein_coding|-|3732L>3732F|179615931C>A",
+    "minimizedConsequences": "synonymous|TTN|ENST00000360870|protein_coding|-|3732L|179615931C>T"
+  },
+  {
+    "position": 179629363,
+    "from": "G",
+    "to": "C",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|3293E>3293D|179629363T>G,missense|TTN|ENST00000460472|protein_coding|-|3247E>3247D|179629363T>G,missense|TTN|ENST00000589042|protein_coding|-|3293E>3293D|179629363T>G,missense|TTN|ENST00000591111|protein_coding|-|3293E>3293D|179629363T>G,missense|TTN|ENST00000342175|protein_coding|-|3247E>3247D|179629363T>G,missense|TTN|ENST00000359218|protein_coding|-|3247E>3247D|179629363T>G,missense|TTN|ENST00000360870|protein_coding|-|3293E>3293D|179629363T>G",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|3293E|179629363T>C,synonymous|TTN|ENST00000460472|protein_coding|-|3247E|179629363T>C,synonymous|TTN|ENST00000589042|protein_coding|-|3293E|179629363T>C,synonymous|TTN|ENST00000591111|protein_coding|-|3293E|179629363T>C,synonymous|TTN|ENST00000342175|protein_coding|-|3247E|179629363T>C,synonymous|TTN|ENST00000359218|protein_coding|-|3247E|179629363T>C,synonymous|TTN|ENST00000360870|protein_coding|-|3293E|179629363T>C"
+  },
+  {
+    "position": 179644035,
+    "from": "C",
+    "to": "A",
+    "randomizedConsequences": "stop_gained|TTN|ENST00000342992|protein_coding|-|1295S>1295*|179644035G>C,stop_gained|TTN|ENST00000460472|protein_coding|-|1249S>1249*|179644035G>C,stop_gained|TTN|ENST00000589042|protein_coding|-|1295S>1295*|179644035G>C,stop_gained|TTN|ENST00000591111|protein_coding|-|1295S>1295*|179644035G>C,stop_gained|TTN|ENST00000342175|protein_coding|-|1249S>1249*|179644035G>C,stop_gained|TTN|ENST00000359218|protein_coding|-|1249S>1249*|179644035G>C,stop_gained|TTN|ENST00000360870|protein_coding|-|1295S>1295*|179644035G>C",
+    "minimizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|1295S>1295L|179644035G>A,missense|TTN|ENST00000460472|protein_coding|-|1249S>1249L|179644035G>A,missense|TTN|ENST00000589042|protein_coding|-|1295S>1295L|179644035G>A,missense|TTN|ENST00000591111|protein_coding|-|1295S>1295L|179644035G>A,missense|TTN|ENST00000342175|protein_coding|-|1249S>1249L|179644035G>A,missense|TTN|ENST00000359218|protein_coding|-|1249S>1249L|179644035G>A,missense|TTN|ENST00000360870|protein_coding|-|1295S>1295L|179644035G>A"
+  },
+  {
+    "position": 179644855,
+    "from": "A",
+    "to": "C",
+    "randomizedConsequences": "stop_gained|TTN|ENST00000342992|protein_coding|-|1201K>1201*|179644855T>A,stop_gained|TTN|ENST00000460472|protein_coding|-|1155K>1155*|179644855T>A,stop_gained|TTN|ENST00000589042|protein_coding|-|1201K>1201*|179644855T>A,stop_gained|TTN|ENST00000591111|protein_coding|-|1201K>1201*|179644855T>A,stop_gained|TTN|ENST00000342175|protein_coding|-|1155K>1155*|179644855T>A,stop_gained|TTN|ENST00000359218|protein_coding|-|1155K>1155*|179644855T>A,stop_gained|TTN|ENST00000360870|protein_coding|-|1201K>1201*|179644855T>A",
+    "minimizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|1201K>1201E|179644855T>C,missense|TTN|ENST00000460472|protein_coding|-|1155K>1155E|179644855T>C,missense|TTN|ENST00000589042|protein_coding|-|1201K>1201E|179644855T>C,missense|TTN|ENST00000591111|protein_coding|-|1201K>1201E|179644855T>C,missense|TTN|ENST00000342175|protein_coding|-|1155K>1155E|179644855T>C,missense|TTN|ENST00000359218|protein_coding|-|1155K>1155E|179644855T>C,missense|TTN|ENST00000360870|protein_coding|-|1201K>1201E|179644855T>C"
+  },
+  {
+    "position": 179650701,
+    "from": "G",
+    "to": "T",
+    "randomizedConsequences": "missense|TTN|ENST00000342992|protein_coding|-|748E>748D|179650701C>G,missense|TTN|ENST00000460472|protein_coding|-|702E>702D|179650701C>G,missense|TTN|ENST00000589042|protein_coding|-|748E>748D|179650701C>G,missense|TTN|ENST00000591111|protein_coding|-|748E>748D|179650701C>G,missense|TTN|ENST00000342175|protein_coding|-|702E>702D|179650701C>G,missense|TTN|ENST00000359218|protein_coding|-|702E>702D|179650701C>G,missense|TTN|ENST00000360870|protein_coding|-|748E>748D|179650701C>G",
+    "minimizedConsequences": "synonymous|TTN|ENST00000342992|protein_coding|-|748E|179650701C>T,synonymous|TTN|ENST00000460472|protein_coding|-|702E|179650701C>T,synonymous|TTN|ENST00000589042|protein_coding|-|748E|179650701C>T,synonymous|TTN|ENST00000591111|protein_coding|-|748E|179650701C>T,synonymous|TTN|ENST00000342175|protein_coding|-|702E|179650701C>T,synonymous|TTN|ENST00000359218|protein_coding|-|702E|179650701C>T,synonymous|TTN|ENST00000360870|protein_coding|-|748E|179650701C>T"
+  }
+]

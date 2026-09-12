@@ -1,0 +1,15 @@
+[
+  "/media/mrueda/2TBS/NGSutils/dgw/bcftools/1.24/bin/bcftools",
+  "csq",
+  "--local-csq",
+  "--ncsq",
+  "64",
+  "--fasta-ref",
+  "/media/mrueda/2TBS/Databases/genomes/hs37d5.fa.gz",
+  "--gff-annot",
+  "/media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz",
+  "-Ov",
+  "-o",
+  "/media/mrueda/2TBS/CNAG/Project_DGW/digital-genome-workstation/manuscript/pilot-results/TTN/substitution-comparison/annotated.vcf",
+  "/media/mrueda/2TBS/CNAG/Project_DGW/digital-genome-workstation/manuscript/pilot-results/TTN/substitution-comparison/candidate-alleles.vcf"
+]

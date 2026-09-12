@@ -1,0 +1,20 @@
+{
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "morphSeed": 20260912,
+  "workerThreads": 2,
+  "binarySha256": "427cc4718f66a95862bf50f2846da186cf4e2587b610e5a6682f54e7814bc08f",
+  "platform": "Linux-6.8.0-139-generic-aarch64-with-glibc2.39",
+  "python": "3.12.3",
+  "gitCommit": "db7a1af0cc269024683d6108ca7c8719870dad8b"
+}

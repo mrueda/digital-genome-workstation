@@ -1,0 +1,6 @@
+Parsing /media/mrueda/2TBS/Databases/dgw/consequence/ensembl/GRCh37/87/Homo_sapiens.GRCh37.87.gff3.gz ...
+Warning: Ignoring GFF feature with unknown phase .. 1	havana	exon	11869	12227	.	+	.	Parent=transcript:ENST00000456328;Name=ENSE00002234944;constitutive=0;ensembl_end_phase=-1;ensembl_phase=-1;exon_id=ENSE00002234944;rank=1;version=1
+Note: truncated transcript ENST00000419249 with incomplete CDS (this is very common)
+Indexed 196501 transcripts, 1195764 exons, 724218 CDSs, 280277 UTRs
+Warning: 1492568 warnings were suppressed, increase verbosity to see them all
+Calling...

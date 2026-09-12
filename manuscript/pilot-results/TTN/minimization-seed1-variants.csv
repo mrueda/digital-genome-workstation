@@ -1,0 +1,15 @@
+position_1based,reference,randomized_alt,minimized_alt,randomized_consequence,minimized_consequence
+179440029,G,T,A,missense,synonymous
+179454394,A,C,G,stop-gained,synonymous
+179462494,A,T,G,missense,synonymous
+179543217,C,G,T,missense,synonymous
+179554305,C,A,G,stop-gained,missense
+179579212,T,G,C,missense,synonymous
+179585266,C,A,T,missense,synonymous
+179598228,A,C,G,missense,synonymous
+179614952,A,C,G,missense,synonymous
+179615931,C,A,T,missense,synonymous
+179629363,T,G,C,missense,synonymous
+179644035,G,C,A,stop-gained,missense
+179644855,T,A,C,stop-gained,missense
+179650701,C,G,T,missense,synonymous
