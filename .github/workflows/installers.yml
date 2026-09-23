@@ -1,8 +1,16 @@
 name: Build test installers
 
-# Explicit test builds only. No publishing on push and no GitHub releases.
+# Explicit test builds only; optionally publish a disposable prerelease.
 on:
   workflow_dispatch:
+    inputs:
+      publish_prerelease:
+        description: Publish installers as a test prerelease
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 jobs:
   installer:
@@ -17,12 +25,18 @@ jobs:
             name: linux-aarch64
             bundle: appimage
           - os: macos-15
-            name: macos-aarch64
+            name: macos-apple-silicon
+            arch: arm64
+            bundle: dmg
+          - os: macos-15-intel
+            name: macos-intel
+            arch: x86_64
             bundle: dmg
           - os: windows-2022
             name: windows-x86_64
             bundle: nsis
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -43,13 +57,82 @@ jobs:
         run: |
           python3 scripts/test_linux_setup_launcher.py
           python3 scripts/package-portable.py "target/release/bundle/appimage/Digital Genome Workstation.AppDir" "target/release/bundle/appimage/dgw-setup-${{ matrix.name }}.tar.gz"
+      - name: Verify macOS image and executable architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(target/release/bundle/dmg/*.dmg)
+          test "${#images[@]}" -eq 1
+          image="target/release/bundle/dmg/dgw-${{ matrix.name }}.dmg"
+          mv "${images[0]}" "$image"
+          hdiutil verify "$image"
+          mount_dir="$(mktemp -d)"
+          hdiutil attach "$image" -readonly -nobrowse -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+          plist="$mount_dir/DGW.app/Contents/Info.plist"
+          plutil -lint "$plist"
+          codesign --verify --deep --strict --verbose=2 "$mount_dir/DGW.app"
+          executable="$(plutil -extract CFBundleExecutable raw -o - "$plist")"
+          test "$(lipo -archs "$mount_dir/DGW.app/Contents/MacOS/$executable")" = "${{ matrix.arch }}"
+      - name: Collect installer and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          case '${{ runner.os }}' in
+            Linux) cp "target/release/bundle/appimage/dgw-setup-${{ matrix.name }}.tar.gz" release-assets/ ;;
+            macOS) cp "target/release/bundle/dmg/dgw-${{ matrix.name }}.dmg" release-assets/ ;;
+            Windows)
+              shopt -s nullglob
+              installers=(target/release/bundle/nsis/*-setup.exe)
+              test "${#installers[@]}" -eq 1
+              cp "${installers[0]}" release-assets/dgw-windows-x86_64-setup.exe
+              ;;
+          esac
+          cd release-assets
+          for installer in *; do
+            if command -v sha256sum >/dev/null; then
+              sha256sum "$installer" > "$installer.sha256"
+            else
+              shasum -a 256 "$installer" > "$installer.sha256"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: dgw-test-${{ matrix.name }}
-          path: |
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/appimage/*.tar.gz*
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/nsis/*-setup.exe
+          path: release-assets/*
           if-no-files-found: error
           retention-days: 7
+
+  prerelease:
+    needs: installer
+    if: inputs.publish_prerelease
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dgw-test-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish test installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_SHA: ${{ github.sha }}
+          RELEASE_TAG: installers-test-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          shopt -s nullglob
+          assets=(*)
+          test "${#assets[@]}" -eq 10
+          sha256sum --check ./*.sha256
+          gh release create "$RELEASE_TAG" "${assets[@]}" \
+            --target "$BUILD_SHA" --prerelease --latest=false \
+            --title "DGW installation test — $RELEASE_TAG" \
+            --notes "Test installers for Linux x86_64/ARM64, macOS Intel/Apple Silicon and Windows x86_64, with SHA-256 checksums. Not a stable release. macOS is not Apple-notarized; Windows installers are unsigned. Resource packs are installed separately. Successful builds do not establish clean-machine compatibility. This prerelease may be deleted after testing."
