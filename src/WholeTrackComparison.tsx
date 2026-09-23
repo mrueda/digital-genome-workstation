@@ -34,8 +34,8 @@ export function WholeTrackComparison({ projectPath, trackId, trackName, revision
   const page = ready?.page;
   const rows = page?.rows ?? [];
   return <section className="comparison-workspace" aria-label="Whole track DNA comparison">
-    <header><div><h2>Source → {trackName}</h2><p>DNA comparison across all imported loci</p></div><button className="button secondary" onClick={onBack}>Back to tracks</button></header>
-    <p className="muted">Reconstructed alleles and genotype placement, not edit-history counts. Missing ALT means no ALT at that imported locus in the current state—not evidence of a benign effect. Unphased slots are not parental chromosome assignments.</p>
+    <header><div><h2>Source → {trackName}</h2><p>DNA comparison across all imported loci</p></div><button className="button secondary" onClick={onBack}>Return to editing</button></header>
+    <details className="comparison-details"><summary>Comparison details</summary><p className="muted">Reconstructed alleles and genotype placement, not edit-history counts. Missing ALT means no ALT at that imported locus in the current state—not evidence of a benign effect. Unphased slots are not parental chromosome assignments.</p></details>
     <div className="comparison-actions">
       <button onClick={() => setOffset(Math.max(0, offset - 200))} disabled={!ready || offset === 0}>Previous page</button>
       <button onClick={() => setOffset(offset + 200)} disabled={!page?.hasMore}>Next page</button>

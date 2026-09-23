@@ -7,6 +7,57 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Edit and compare genome variants." })).toBeVisible();
 });
 
+test("menus support keyboard navigation, nested scale and platform shortcut labels", async ({ page }) => {
+  const nav = page.getByRole("navigation", { name: "Application menu" });
+  const file = nav.locator("summary").filter({ hasText: /^File$/ });
+  await file.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(nav.getByRole("button", { name: /New Project/ })).toBeFocused();
+  const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.platform));
+  await expect(nav.getByRole("button", { name: /Open Project/ }).locator("kbd")).toHaveText(mac ? "⌘ O" : "Ctrl O");
+  await page.keyboard.press("ArrowRight");
+  await expect(nav.locator("summary").filter({ hasText: /^Edit$/ })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(nav.locator("details[open]")).toHaveCount(0);
+  await nav.getByText("View", { exact: true }).click();
+  await expect(nav.getByRole("button", { name: "100%", exact: true })).not.toBeVisible();
+  await nav.locator("summary").filter({ hasText: "Interface scale" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(nav.getByRole("button", { name: "90%", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(nav.locator("summary").filter({ hasText: "Interface scale" })).toBeFocused();
+});
+
+test("Help opens documentation and an accessible shortcuts dialog", async ({ page }) => {
+  await page.getByText("Help", { exact: true }).click();
+  await page.getByRole("button", { name: "DGW documentation" }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("test-docs-opened"))).toBe("1");
+  await page.getByText("Help", { exact: true }).click();
+  await page.getByRole("button", { name: "Keyboard shortcuts…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("all chromosomes");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});
+
+test("chromosome navigator gives its width to the chromosome with controls on the right", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  for (const width of [1280, 1600]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const navigator = page.locator(".genome-overview-navigator");
+    const track = await navigator.locator(".genome-overview-track").boundingBox();
+    const controls = await navigator.locator(".genome-overview-controls").boundingBox();
+    const bounds = await navigator.boundingBox();
+    expect(track).not.toBeNull(); expect(controls).not.toBeNull(); expect(bounds).not.toBeNull();
+    expect(track!.width).toBeGreaterThan(controls!.width);
+    expect(controls!.x).toBeGreaterThanOrEqual(track!.x + track!.width);
+    expect(controls!.x + controls!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+    await expect(navigator.getByRole("button", { name: "Full chr", exact: true })).toBeVisible();
+    await expect(navigator.getByRole("button", { name: "Reset view", exact: true })).toBeVisible();
+  }
+});
+
 test("update check handles private releases, retries and opens the release page", async ({ page }) => {
   await page.getByText("Help", { exact: true }).click();
   await page.getByRole("button", { name: "Check for updates", exact: true }).click();
@@ -177,6 +228,38 @@ test("opens the template chooser from the File menu", async ({ page }) => {
 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+});
+
+test("application menus switch and dismiss like desktop menus", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const menu = page.getByRole("navigation", { name: "Application menu" });
+  const fileMenu = menu.locator(":scope > details").filter({ has: page.getByText("File", { exact: true }) });
+  const editMenu = menu.locator(":scope > details").filter({ has: page.getByText("Edit", { exact: true }) });
+
+  await fileMenu.locator(":scope > summary").click();
+  await expect(fileMenu).toHaveAttribute("open", "");
+  await editMenu.locator(":scope > summary").hover();
+  await expect(fileMenu).not.toHaveAttribute("open", "");
+  await expect(editMenu).toHaveAttribute("open", "");
+
+  await page.keyboard.press("Escape");
+  await expect(editMenu).not.toHaveAttribute("open", "");
+  await expect(editMenu.locator(":scope > summary")).toBeFocused();
+
+  await editMenu.locator(":scope > summary").click();
+  await menu.getByRole("button", { name: /Select all variants/ }).click();
+  await expect(menu.locator(":scope > details[open]")).toHaveCount(0);
+  await expect(page.locator(".dgw-selection-count")).toContainText("10alleles selected");
+
+  await menu.getByText("View", { exact: true }).click();
+  await menu.getByRole("button", { name: /Evidence panel/ }).click();
+  await expect(menu.locator(":scope > details[open]")).toHaveCount(0);
+
+  await menu.getByText("Track", { exact: true }).click();
+  await expect(menu.getByRole("button", { name: /Duplicate track/ })).toBeVisible();
+  await menu.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(menu.locator(":scope > details[open]")).toHaveCount(0);
+  await expect(page.getByRole("dialog", { name: "User settings" })).toBeVisible();
 });
 
 test("applies and persists appearance preferences", async ({ page }) => {
@@ -422,6 +505,13 @@ test("compares source and candidate predictions and navigates back to editing", 
   await expect(editor.locator(".locked-position")).toContainText("G→C");
   await page.getByRole("button", { name: "Compare source and candidate", exact: true }).click();
   const comparison = page.getByRole("region", { name: "Compare source and candidate", exact: true });
+  await expect(page.getByLabel("Genome tracks and device rack", { exact: true })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Visible genome interval" })).toBeVisible();
+  await expect(page.getByRole("separator", { name: "Resize tracks and Comparison" })).toBeVisible();
+  const trackBounds = await page.locator(".dgw-track-deck").boundingBox();
+  const compareBounds = await page.locator(".dgw-comparison-pane").boundingBox();
+  expect(compareBounds!.y).toBeGreaterThanOrEqual(trackBounds!.y + trackBounds!.height);
+  expect(trackBounds!.height).toBeGreaterThan(150);
   await expect(comparison.getByText(/loaded region only, not the whole track/)).toBeVisible();
   const row = comparison.getByRole("row").filter({ hasText: "7:140,453,112" });
   await expect(row.getByRole("cell").nth(1)).toHaveText("A");

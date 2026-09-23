@@ -16,6 +16,13 @@ function closeMenu(event: React.MouseEvent<HTMLElement>) {
 
 export type ProjectTemplateId = "standardEvidence" | "empty";
 export type ExampleProjectId = "alleleEditingB37" | "alleleEditingHg38" | "hg00103Wes";
+export type WorkspaceMenuCommand =
+  | "selectVisibleVariants"
+  | "selectAllVariants"
+  | "clearVariantSelection"
+  | "duplicateTrack"
+  | "consolidateTrack"
+  | "archiveTrack";
 
 export function ApplicationMenu({
   projectOpen,
@@ -28,6 +35,8 @@ export function ApplicationMenu({
   canRedo,
   undoLabel,
   redoLabel,
+  activeTrackName,
+  activeTrackReadOnly,
   onNewProject,
   onNewFromTemplate,
   onOpenProject,
@@ -41,6 +50,7 @@ export function ApplicationMenu({
   onSettingsChange,
   onUndo,
   onRedo,
+  onWorkspaceCommand,
   onAddDevice,
   onOpenJobs,
   onOpenSettings,
@@ -58,6 +68,8 @@ export function ApplicationMenu({
   canRedo: boolean;
   undoLabel?: string;
   redoLabel?: string;
+  activeTrackName?: string;
+  activeTrackReadOnly: boolean;
   onNewProject: () => void;
   onNewFromTemplate: () => void;
   onOpenProject: () => void;
@@ -71,6 +83,7 @@ export function ApplicationMenu({
   onSettingsChange: (settings: UserSettings) => void;
   onUndo: () => void;
   onRedo: () => void;
+  onWorkspaceCommand: (command: WorkspaceMenuCommand) => void;
   onAddDevice: () => void;
   onOpenJobs: () => void;
   onOpenSettings: () => void;
@@ -81,6 +94,9 @@ export function ApplicationMenu({
   const navRef = useRef<HTMLElement>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [updatesOpen, setUpdatesOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [helpError, setHelpError] = useState<string>();
+  const commandKey = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
   const [resourceHealth, setResourceHealth] = useState<ProjectResourceHealth>();
   const [resourceHealthError, setResourceHealthError] = useState<string>();
   const [resourceHealthLoading, setResourceHealthLoading] = useState(false);
@@ -142,6 +158,61 @@ export function ApplicationMenu({
               ? "Checking…"
               : "Registered";
 
+  function topLevelMenus() {
+    return Array.from(navRef.current?.children ?? []).filter(
+      (element): element is HTMLDetailsElement => element instanceof HTMLDetailsElement
+    );
+  }
+
+  function closeAllMenus() {
+    navRef.current?.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((details) => {
+      details.open = false;
+    });
+  }
+
+  function keepSingleMenuOpen(event: React.SyntheticEvent<HTMLDetailsElement>) {
+    if (!event.currentTarget.open) return;
+    topLevelMenus().forEach((details) => {
+      if (details !== event.currentTarget) details.open = false;
+    });
+  }
+
+  function switchOpenMenu(event: React.PointerEvent<HTMLDetailsElement>) {
+    if (event.pointerType === "touch") return;
+    const menus = topLevelMenus();
+    if (!menus.some((details) => details.open) || event.currentTarget.open) return;
+    menus.forEach((details) => { details.open = details === event.currentTarget; });
+  }
+
+  function navigateMenu(event: React.KeyboardEvent<HTMLElement>) {
+    const target = event.target as HTMLElement;
+    const menu = target.closest("details");
+    const top = topLevelMenus().find(item => item.contains(target));
+    if (!top || !menu) return;
+    const items = () => Array.from(menu.querySelectorAll<HTMLElement>("button:not(:disabled), summary"))
+      .filter(item => item !== menu.firstElementChild && item.getClientRects().length > 0);
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      menu.open = true;
+      const choices = items();
+      const index = choices.indexOf(target);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1
+        : event.key === "ArrowDown" ? (index + 1) % choices.length
+        : (index < 0 ? choices.length - 1 : (index - 1 + choices.length) % choices.length);
+      choices[next]?.focus();
+    } else if (event.key === "ArrowRight" && target.tagName === "SUMMARY" && menu !== top) {
+      event.preventDefault(); event.stopPropagation(); menu.open = true; items()[0]?.focus();
+    } else if ((event.key === "ArrowLeft" || event.key === "Escape") && menu !== top) {
+      event.preventDefault(); event.stopPropagation(); menu.open = false;
+      (menu.firstElementChild as HTMLElement).focus();
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault(); event.stopPropagation();
+      const menus = topLevelMenus();
+      const next = menus[(menus.indexOf(top) + (event.key === "ArrowRight" ? 1 : -1) + menus.length) % menus.length];
+      closeAllMenus(); next.open = true; (next.firstElementChild as HTMLElement).focus();
+    }
+  }
+
   useEffect(() => {
     if (!aboutOpen || !projectPath) {
       setResourceHealth(undefined);
@@ -168,17 +239,32 @@ export function ApplicationMenu({
   useEffect(() => {
     function closeMenus(event: PointerEvent) {
       if (!navRef.current?.contains(event.target as Node)) {
-        navRef.current?.querySelectorAll("details[open]").forEach((details) => details.removeAttribute("open"));
+        closeAllMenus();
       }
     }
+    function closeMenusWithKeyboard(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      const openMenu = topLevelMenus().find((details) => details.open);
+      if (!openMenu) return;
+      event.preventDefault();
+      closeAllMenus();
+      (openMenu.firstElementChild as HTMLElement | null)?.focus();
+    }
     window.addEventListener("pointerdown", closeMenus);
-    return () => window.removeEventListener("pointerdown", closeMenus);
+    window.addEventListener("keydown", closeMenusWithKeyboard);
+    window.addEventListener("blur", closeAllMenus);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenus);
+      window.removeEventListener("keydown", closeMenusWithKeyboard);
+      window.removeEventListener("blur", closeAllMenus);
+    };
   }, []);
 
   return <>
-    <nav className="application-menu" aria-label="Application menu" ref={navRef}>
+    <nav className="application-menu" aria-label="Application menu" ref={navRef} onKeyDown={navigateMenu}
+      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) closeAllMenus(); }}>
       <div className="application-menu-brand"><img src="/dgw-mark.svg" alt="" /><b>DGW</b></div>
-      <details>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>File</summary>
         <div className="application-menu-popover file-menu-popover">
           {projectOpen
@@ -188,7 +274,7 @@ export function ApplicationMenu({
             : <p>No project open</p>}
           <button type="button" onClick={(event) => { closeMenu(event); onNewProject(); }}><span>New Project…</span><small>Default setup</small></button>
           <button type="button" onClick={(event) => { closeMenu(event); onNewFromTemplate(); }}><span>New from Template…</span><small>Choose setup</small></button>
-          <button type="button" onClick={(event) => { closeMenu(event); onOpenProject(); }}><span>Open Project…</span><kbd>⌘ O</kbd></button>
+          <button type="button" onClick={(event) => { closeMenu(event); onOpenProject(); }}><span>Open Project…</span><kbd>{commandKey} O</kbd></button>
           <details className="file-menu-submenu">
             <summary><span>Open Example Project</span><small>›</small></summary>
             <div className="file-menu-submenu-options">
@@ -210,7 +296,7 @@ export function ApplicationMenu({
             </button>)}
           </>}
           <hr />
-          <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProject(); }}><span>{saveStatus === "saving" ? "Saving Project…" : projectNeedsSaveAs ? "Save Example as Project…" : "Save Project"}</span><kbd>⌘ S</kbd></button>
+          <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProject(); }}><span>{saveStatus === "saving" ? "Saving Project…" : projectNeedsSaveAs ? "Save Example as Project…" : "Save Project"}</span><kbd>{commandKey} S</kbd></button>
           <button type="button" disabled={!projectOpen || saveStatus === "saving"} onClick={(event) => { closeMenu(event); onSaveProjectCopy(); }}><span>Save a Copy…</span><small>Complete .dgw project</small></button>
           <hr />
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onExportTrackVcf(); }}><span>Export VCF…</span><small>Current genome track</small></button>
@@ -219,18 +305,29 @@ export function ApplicationMenu({
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onCloseProject(); }}>Close project</button>
         </div>
       </details>
-      <details>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>Edit</summary>
         <div className="application-menu-popover">
           <button type="button" disabled={!projectOpen || !canUndo} title={undoLabel} onClick={(event) => { closeMenu(event); onUndo(); }}>
-            <span>{undoLabel ? `Undo ${undoLabel}` : "Undo"}</span><kbd>⌘ Z</kbd>
+            <span>{undoLabel ? `Undo ${undoLabel}` : "Undo"}</span><kbd>{commandKey} Z</kbd>
           </button>
           <button type="button" disabled={!projectOpen || !canRedo} title={redoLabel} onClick={(event) => { closeMenu(event); onRedo(); }}>
-            <span>{redoLabel ? `Redo ${redoLabel}` : "Redo"}</span><kbd>⇧ ⌘ Z</kbd>
+            <span>{redoLabel ? `Redo ${redoLabel}` : "Redo"}</span><kbd>{commandKey} Shift Z</kbd>
+          </button>
+          <hr />
+          <p>Variant selection</p>
+          <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onWorkspaceCommand("selectVisibleVariants"); }}>
+            <span>Select visible variants</span><small>Focused region</small>
+          </button>
+          <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onWorkspaceCommand("selectAllVariants"); }}>
+            <span>Select all variants</span><small>All chromosomes</small>
+          </button>
+          <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onWorkspaceCommand("clearVariantSelection"); }}>
+            <span>Clear selection</span>
           </button>
         </div>
       </details>
-      <details>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>Create</summary>
         <div className="application-menu-popover">
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onAddDevice(); }}>
@@ -238,12 +335,29 @@ export function ApplicationMenu({
           </button>
         </div>
       </details>
-      <details>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
+        <summary>Track</summary>
+        <div className="application-menu-popover">
+          <p>{projectOpen ? activeTrackName ?? "Selected track" : "No track selected"}</p>
+          <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onWorkspaceCommand("duplicateTrack"); }}>
+            <span>Duplicate track</span><small>New candidate</small>
+          </button>
+          <hr />
+          <button type="button" disabled={!projectOpen || activeTrackReadOnly} onClick={(event) => { closeMenu(event); onWorkspaceCommand("consolidateTrack"); }}>
+            <span>Consolidate edits…</span><small>New baseline</small>
+          </button>
+          <button type="button" disabled={!projectOpen || activeTrackReadOnly} onClick={(event) => { closeMenu(event); onWorkspaceCommand("archiveTrack"); }}>
+            <span>Archive track…</span>
+          </button>
+        </div>
+      </details>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>View</summary>
         <div className="application-menu-popover view-menu">
-          <button type="button" className={settings.showVariantBrowser ? "is-selected" : ""} onClick={() => onSettingsChange({ ...settings, showVariantBrowser: !settings.showVariantBrowser })}>Variants panel</button>
-          <button type="button" className={settings.showEvidenceInspector ? "is-selected" : ""} onClick={() => onSettingsChange({ ...settings, showEvidenceInspector: !settings.showEvidenceInspector })}>Evidence panel</button>
-          <button type="button" className={settings.showEvidenceInspector && settings.showContextHelp ? "is-selected" : ""} onClick={() => {
+          <button type="button" aria-pressed={settings.showVariantBrowser} className={settings.showVariantBrowser ? "is-selected" : ""} onClick={(event) => { closeMenu(event); onSettingsChange({ ...settings, showVariantBrowser: !settings.showVariantBrowser }); }}>Variants panel</button>
+          <button type="button" aria-pressed={settings.showEvidenceInspector} className={settings.showEvidenceInspector ? "is-selected" : ""} onClick={(event) => { closeMenu(event); onSettingsChange({ ...settings, showEvidenceInspector: !settings.showEvidenceInspector }); }}>Evidence panel</button>
+          <button type="button" aria-pressed={settings.showEvidenceInspector && settings.showContextHelp} className={settings.showEvidenceInspector && settings.showContextHelp ? "is-selected" : ""} onClick={(event) => {
+            closeMenu(event);
             const visible = settings.showEvidenceInspector && settings.showContextHelp;
             onSettingsChange({
               ...settings,
@@ -251,29 +365,39 @@ export function ApplicationMenu({
               showContextHelp: !visible
             });
           }}>Context Help</button>
-          <button type="button" className={settings.showDeviceRack ? "is-selected" : ""} onClick={() => onSettingsChange({ ...settings, showDeviceRack: !settings.showDeviceRack })}>Device Rack</button>
-          <button type="button" className={settings.showTrackMonitor ? "is-selected" : ""} onClick={() => onSettingsChange({ ...settings, showTrackMonitor: !settings.showTrackMonitor })}>Track Monitor</button>
+          <button type="button" aria-pressed={settings.showDeviceRack} className={settings.showDeviceRack ? "is-selected" : ""} onClick={(event) => { closeMenu(event); onSettingsChange({ ...settings, showDeviceRack: !settings.showDeviceRack }); }}>Device Rack</button>
+          <button type="button" aria-pressed={settings.showTrackMonitor} className={settings.showTrackMonitor ? "is-selected" : ""} onClick={(event) => { closeMenu(event); onSettingsChange({ ...settings, showTrackMonitor: !settings.showTrackMonitor }); }}>Track Monitor</button>
           <hr />
-          <p>Interface scale</p>
+          <details className="file-menu-submenu">
+          <summary><span>Interface scale · {Math.round(settings.uiScale * 100)}%</span><small>›</small></summary>
+          <div className="file-menu-submenu-options">
           {UI_SCALES.map((scale) => <button
             type="button"
+            aria-pressed={settings.uiScale === scale}
             className={settings.uiScale === scale ? "is-selected" : ""}
-            onClick={() => onSettingsChange({ ...settings, uiScale: scale })}
+            onClick={(event) => { closeMenu(event); onSettingsChange({ ...settings, uiScale: scale }); }}
             key={scale}
           >{Math.round(scale * 100)}%</button>)}
+          </div>
+          </details>
         </div>
       </details>
-      <button type="button" className="application-menu-button" disabled={!projectOpen} onClick={onOpenJobs}>Jobs</button>
-      <button type="button" className="application-menu-button" onClick={onOpenSettings}>Settings</button>
-      <details>
+      <button type="button" className="application-menu-button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onOpenJobs(); }}>Jobs</button>
+      <button type="button" className="application-menu-button" onClick={(event) => { closeMenu(event); onOpenSettings(); }}>Settings</button>
+      <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>Help</summary>
         <div className="application-menu-popover">
+          <button type="button" onClick={event => { closeMenu(event); setHelpError(undefined); void api.openAppDocumentation().catch(error => setHelpError(String(error))); }}>DGW documentation ↗</button>
+          <button type="button" onClick={event => { closeMenu(event); setShortcutsOpen(true); }}>Keyboard shortcuts…</button>
+          <hr />
           <button type="button" onClick={(event) => { closeMenu(event); setAboutOpen(true); }}>About DGW</button>
           <button type="button" onClick={(event) => { closeMenu(event); setUpdatesOpen(true); }}>Check for updates</button>
         </div>
       </details>
       <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${saveStatus === "error" ? saveMessage ?? "Save failed" : projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
     </nav>
+    {helpError && <div role="alert" className="help-error">{helpError}<button onClick={() => setHelpError(undefined)}>Dismiss</button></div>}
+    {shortcutsOpen && <ShortcutsDialog commandKey={commandKey} onClose={() => setShortcutsOpen(false)} />}
     {updatesOpen && <UpdateDialog onClose={() => setUpdatesOpen(false)} />}
     {aboutOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAboutOpen(false); }}>
       <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
@@ -308,6 +432,19 @@ export function ApplicationMenu({
       </section>
     </div>}
   </>;
+}
+
+function ShortcutsDialog({ commandKey, onClose }: { commandKey: string; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} className="settings-dialog" aria-labelledby="shortcuts-title" onCancel={onClose}>
+    <header><h2 id="shortcuts-title">Keyboard shortcuts</h2><button className="dialog-close" onClick={onClose} aria-label="Close shortcuts">×</button></header>
+    <div className="shortcut-list">
+      {[[`${commandKey} O`, "Open project"], [`${commandKey} S`, "Save project"], [`${commandKey} Z`, "Undo"], [`${commandKey} Shift Z`, "Redo"], [`${commandKey} A`, "Select all variants · all chromosomes"], ["+ / −", "Zoom in / out"], ["Shift ← / →", "Pan genome view"], ["0", "Fit focused allele"], ["Space / Shift Space", "Start review / stop"], ["[ / ]", "Previous / next allele"], ["L", "Toggle review loop"]].map(([key, label]) => <div key={key}><span>{label}</span><kbd>{key}</kbd></div>)}
+    </div>
+    <p>Workspace shortcuts apply outside text fields. In menus, use arrow keys to navigate, Enter to choose and Escape to close.</p>
+    <footer><button className="button secondary" onClick={onClose}>Done</button></footer>
+  </dialog>;
 }
 
 export function JobsDialog({
@@ -483,7 +620,7 @@ export function SettingsDialog({
           </select>
         </label>
         <label>
-          <span>Interactive allele limit</span>
+          <span>Background processing threshold</span>
           <input
             type="number"
             min="100"
@@ -495,7 +632,7 @@ export function SettingsDialog({
               interactiveAlleleLimit: Math.max(100, Math.min(1_000, Number(event.target.value) || 1_000))
             })}
           />
-          <small>Larger selections run in the background and apply as one compact, reversible mutation layer.</small>
+          <small>Selections above this number of alleles run as background jobs and apply as one compact, reversible mutation layer. This does not limit import or selection size.</small>
         </label>
       </div>
 

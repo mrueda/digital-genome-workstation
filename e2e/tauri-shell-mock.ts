@@ -303,6 +303,7 @@ export async function installTauriShellMock(page: Page) {
           message: state === "available" ? "DGW 0.2.0 is available." : "No public stable release is available to check. The repository may be private or contain only prereleases." };
       }
       if (commandName === "open_app_releases") { localStorage.setItem("test-releases-opened", "1"); return null; }
+      if (commandName === "open_app_documentation") { localStorage.setItem("test-docs-opened", "1"); return null; }
       if (commandName === "plugin:dialog|open") return "/synthetic/DGW-Allele-Editing-Demo.dgw";
       if (commandName === "test_enable_mutable_edits") { mutableEdits = true; return null; }
       if (commandName === "plugin:webview|set_webview_zoom") return null;

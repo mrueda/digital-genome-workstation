@@ -311,6 +311,7 @@ export interface TrackDeviceWorkspaceProps {
   contigLength?: number;
   busy?: boolean;
   detailPanel?: ReactNode;
+  detailPanelLabel?: string;
   onViewportChange?: (region: FocusContext) => void;
   onSelectTrack: (trackId: string) => void;
   onDuplicateTrack: (trackId: string) => void;
@@ -2237,6 +2238,7 @@ export function TrackDeviceWorkspace({
   contigLength,
   busy = false,
   detailPanel,
+  detailPanelLabel = "Allele editor",
   onViewportChange,
   onSelectTrack,
   onDuplicateTrack,
@@ -2428,7 +2430,7 @@ export function TrackDeviceWorkspace({
     if (!onViewportChange) return;
     function handleKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, select, textarea, [contenteditable=true]")) return;
+      if (target?.closest("input, select, textarea, [contenteditable=true], nav, dialog, [role=dialog]")) return;
       const command = event.ctrlKey || event.metaKey;
       if (command && event.key.toLowerCase() === "z" && event.shiftKey && onRedoAction) {
         event.preventDefault();
@@ -2473,7 +2475,7 @@ export function TrackDeviceWorkspace({
     >
       <div
         ref={workspaceRef}
-        className={`dgw-workspace-main${showLowerPane ? "" : " hide-device-rack"}${detailPanel ? " allele-detail-open" : ""}`}
+        className={`dgw-workspace-main${showLowerPane ? "" : " hide-device-rack"}${detailPanel ? " allele-detail-open" : ""}${detailPanel && detailPanelLabel === "Comparison" ? " comparison-open" : ""}`}
       >
       <div className="dgw-track-deck" onWheel={handleTrackWheel}>
         <header className="dgw-track-deck-header">
@@ -2593,7 +2595,7 @@ export function TrackDeviceWorkspace({
       {showLowerPane && <div
         className={`dgw-lower-separator${resizingRack ? " is-resizing" : ""}`}
         role="separator"
-        aria-label={`Resize tracks and ${detailPanel ? "Allele editor" : "Device Rack"}`}
+        aria-label={`Resize tracks and ${detailPanel ? detailPanelLabel : "Device Rack"}`}
         aria-orientation="horizontal"
         aria-valuemin={MIN_RACK_HEIGHT}
         aria-valuenow={rackHeight}

@@ -100,6 +100,15 @@ pub async fn check_app_updates(app: tauri::AppHandle) -> Result<UpdateCheck, Str
 // Fixed destination: never execute a URL or command supplied by a release response.
 #[tauri::command]
 pub fn open_app_releases() -> Result<(), String> {
+    open_fixed_page(RELEASES)
+}
+
+#[tauri::command]
+pub fn open_app_documentation() -> Result<(), String> {
+    open_fixed_page("https://mrueda.github.io/digital-genome-workstation/docs/overview")
+}
+
+fn open_fixed_page(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut c = Command::new("rundll32.exe");
@@ -111,9 +120,9 @@ pub fn open_app_releases() -> Result<(), String> {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let mut command = Command::new("xdg-open");
     command
-        .arg(RELEASES)
+        .arg(url)
         .spawn()
-        .map_err(|_| format!("Could not open your browser. Visit {RELEASES}"))?;
+        .map_err(|_| format!("Could not open your browser. Visit {url}"))?;
     Ok(())
 }
 

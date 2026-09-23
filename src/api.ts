@@ -56,6 +56,7 @@ export interface ResourceInventory {
 export const api = {
   checkAppUpdates: () => invoke<{ currentVersion: string; latestVersion?: string; status: "available" | "current" | "unavailable"; message: string }>("check_app_updates"),
   openAppReleases: () => invoke<void>("open_app_releases"),
+  openAppDocumentation: () => invoke<void>("open_app_documentation"),
   resourceInventory: () => invoke<ResourceInventory>("resource_inventory"),
   setResourceDirectory: (path: string) => invoke<void>("set_resource_directory", { path }),
   registerResourceBundle: (path: string) => invoke<void>("register_resource_bundle", { path }),

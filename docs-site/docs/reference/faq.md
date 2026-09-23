@@ -1,5 +1,29 @@
 # Frequently Asked Questions
 
+## How does DGW differ from AlphaGenome Atlas?
+
+[AlphaGenome Atlas](https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/)
+provides precomputed predictions of variant effects, with tools for exploring and querying them.
+AlphaGenome is the underlying prediction model; Atlas makes its precomputed results accessible.
+
+DGW provides the **editing experiment**: load a sample VCF, duplicate tracks,
+make or generate reversible changes, compare alternatives and save or export the result.
+Mutation Generator, Genome Optimizer and Genome Morph operate on those track states.
+DGW does not introduce a new prediction model or claim better predictive accuracy.
+Its current consequence device uses bcftools csq; it does not use AlphaGenome or Atlas.
+
+The roles could complement each other. A future Evidence device could retrieve Atlas
+results through its [API](https://www.alphagenomedocs.com/api/atlas.html), or query
+suitable downloadable data where available and permitted. That would require matching
+assemblies and exact alleles, recording resource versions, handling missing results,
+and checking access terms. Remote queries would also need explicit user control over
+sending variant information outside the computer.
+
+Using those predictions in Genome Optimizer would require a separately defined and
+tested objective, not silently substituting them into the current impact-category score.
+Independent variant scores would still not establish the combined effect of several
+edits. **This is a possible future integration, not a supported device.**
+
 ## Why is DGW inspired by digital audio workstations?
 
 Music production has a mature way of working: try a change, compare alternatives,

@@ -2303,6 +2303,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             updates::check_app_updates,
             updates::open_app_releases,
+            updates::open_app_documentation,
             resources::resource_inventory,
             resources::set_resource_directory,
             resources::register_resource_bundle,

@@ -183,7 +183,6 @@ export function GenomeOverviewNavigator({
       <button type="button" className="text" onClick={onResetView} disabled={disabled || !onResetView} title="Restore the viewport that was active when the project opened">Reset view</button>
       <button type="button" className="text" onClick={onCenterVariant} disabled={disabled || !canCenterVariant || !onCenterVariant} title="Center the last selected ALT at the current zoom">Center ALT</button>
       <button type="button" onClick={() => zoom(1.6)} disabled={disabled} title="Zoom out">−</button>
-      <code>{region.start.toLocaleString()}–{region.end.toLocaleString()}</code>
       <button type="button" onClick={() => zoom(0.625)} disabled={disabled} title="Zoom in">+</button>
     </div>
   </div>;

@@ -11,7 +11,7 @@ import type { TrackComparisonLocus } from "./types";
 import { comparisonRows } from "./comparisonRows";
 import { EvidenceCard } from "./EvidenceCard";
 import { ResourcesPanel } from "./ResourcesPanel";
-import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId } from "./ApplicationChrome";
+import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId, type WorkspaceMenuCommand } from "./ApplicationChrome";
 import {
   TrackDeviceWorkspace,
   type AlleleRandomizerDevice,
@@ -194,6 +194,11 @@ type HistoryDirection = "undo" | "redo";
 interface HistoryRequest {
   id: number;
   direction: HistoryDirection;
+}
+
+interface WorkspaceMenuRequest {
+  id: number;
+  command: WorkspaceMenuCommand;
 }
 
 interface WorkstationHistoryState {
@@ -1338,6 +1343,7 @@ function Workstation({
   exportRequest,
   historyRequest,
   deviceBrowserRequest,
+  workspaceMenuRequest,
   initialAppliedDeviceIds = dgwStarterDeviceIds,
   onShowDeviceRack,
   onShowEvidencePanel,
@@ -1353,6 +1359,7 @@ function Workstation({
   exportRequest?: ExportRequest;
   historyRequest?: HistoryRequest;
   deviceBrowserRequest?: number;
+  workspaceMenuRequest?: WorkspaceMenuRequest;
   initialAppliedDeviceIds?: string[];
   onShowDeviceRack: () => void;
   onShowEvidencePanel: () => void;
@@ -1435,6 +1442,9 @@ function Workstation({
   const handledExportRequest = useRef(0);
   const handledHistoryRequest = useRef(0);
   const handledDeviceBrowserRequest = useRef(0);
+  // A newly mounted project must not replay the last command issued to the
+  // previous workspace. Only requests created after this mount are handled.
+  const handledWorkspaceMenuRequest = useRef(workspaceMenuRequest?.id ?? 0);
   const transportGeneration = useRef(0);
   const transportLoopRef = useRef(false);
   const transportStartRef = useRef<{ context: FocusContext; selected?: EffectiveVariant; selectedEditId?: string } | undefined>(undefined);
@@ -2255,6 +2265,31 @@ function Workstation({
       void redoLastAction();
     }
   }, [historyRequest]);
+
+  useEffect(() => {
+    if (!workspaceMenuRequest || workspaceMenuRequest.id === handledWorkspaceMenuRequest.current) return;
+    handledWorkspaceMenuRequest.current = workspaceMenuRequest.id;
+    switch (workspaceMenuRequest.command) {
+      case "selectVisibleVariants":
+        selectAllVisibleAlleles(activeTrack.id);
+        break;
+      case "selectAllVariants":
+        selectAllTrackAlleles(activeTrack.id);
+        break;
+      case "clearVariantSelection":
+        clearAlleleSelection();
+        break;
+      case "duplicateTrack":
+        void duplicateTrack(activeTrack.id);
+        break;
+      case "consolidateTrack":
+        if (!activeTrack.readOnly) void consolidateTrack(activeTrack.id);
+        break;
+      case "archiveTrack":
+        if (!activeTrack.readOnly) void deleteTrack(activeTrack.id);
+        break;
+    }
+  }, [workspaceMenuRequest]);
 
   async function refresh(
     nextContext = context,
@@ -4369,7 +4404,7 @@ function Workstation({
   useEffect(() => {
     function transportShortcut(event: KeyboardEvent) {
       const target = event.target;
-      if (target instanceof Element && target.closest("input, textarea, select, button, [contenteditable='true'], [role='dialog']")) return;
+      if (target instanceof Element && target.closest("input, textarea, select, button, nav, dialog, [contenteditable='true'], [role='dialog']")) return;
       if (event.code === "Space") {
         event.preventDefault();
         if (event.shiftKey) void stopTransport();
@@ -4575,7 +4610,7 @@ function Workstation({
             aria-current={leaf && containsFocus ? "location" : undefined}
             onClick={() => void activateNavigationBin(bin)}
           >
-            <span>{leaf ? "•" : expanded ? "▾" : "▸"} {bin.start.toLocaleString()}–{bin.end.toLocaleString()}</span>
+            <span className="variant-bin-range"><span>{leaf ? "•" : expanded ? "▾" : "▸"} {bin.start.toLocaleString()}–</span><span>{bin.end.toLocaleString()}</span></span>
             <small>{bin.total.toLocaleString()}</small>
           </button>
           {!leaf && expanded && <div className="variant-bin-children">
@@ -4764,29 +4799,12 @@ function Workstation({
         </section>}
 
         <div className="track-workspace-shell" data-context-help="tracks">
-          {!showComparison && <div className="comparison-entry"><button type="button" onClick={() => { interruptTransportForUser(); setShowComparison(true); }} disabled={busy}>Compare source and candidate</button><span>See what changed in this region</span></div>}
-          {showComparison && <div className="comparison-actions" role="group" aria-label="Comparison scope">
-            <button aria-pressed={!wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(false); setShowPredictionComparison(false); }}>Focused region</button>
-            <button aria-pressed={wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(true); setShowPredictionComparison(false); }}>Whole track DNA</button>
-            <button aria-pressed={showPredictionComparison} onClick={() => setShowPredictionComparison(true)}>Whole track predictions</button>
-          </div>}
-          {showComparison && showPredictionComparison ? <TrackPredictionComparison key={`${projectPath}:${activeTrack.id}`} projectPath={projectPath} trackId={activeTrack.id}
-            revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} deviceIds={activeAnalyzerDeviceIds}
-            workerThreads={settings.workerThreads === "auto" ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1) : settings.workerThreads}
-            onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : showComparison && wholeTrackComparison ? <WholeTrackComparison projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
-            revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
-            onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : showComparison ? <ComparisonWorkspace
-            rows={comparisonRows(focusedSourceVariants ?? [], trackDeck.find(lane => lane.track.id === activeTrack.id))}
-            trackName={activeTrack.name} scope={`${context.contig}:${context.start.toLocaleString()}–${context.end.toLocaleString()}`}
-            revision={`${activeTrack.id}:${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}:${context.contig}:${context.start}:${context.end}:${activeAnalyzerSignature}`}
-            deviceIds={activeAnalyzerDeviceIds} load={collectDeviceEvidence}
-            onBack={() => setShowComparison(false)}
-            onOpen={row => {
-              setShowComparison(false);
-              if (row.editId) void openTrackEdit(activeTrack.id, row.editId);
-              else if (row.current) void openTrackAllele(activeTrack.id, alleleId(row.current));
-            }}
-          /> : <TrackDeviceWorkspace
+          <div className="workspace-mode-bar" role="group" aria-label="Workspace mode">
+            <button type="button" aria-pressed={!showComparison} onClick={() => setShowComparison(false)}>Edit</button>
+            <button type="button" aria-label="Compare source and candidate" aria-pressed={showComparison} onClick={() => { interruptTransportForUser(); setShowComparison(true); }} disabled={busy}>Compare</button>
+            <span title={activeTrack.name}>{showComparison ? `Comparing: Source → ${activeTrack.name}` : activeTrack.readOnly ? `Source: ${activeTrack.name} · read-only` : `Editing: ${activeTrack.name}`}</span>
+          </div>
+          <TrackDeviceWorkspace
             region={context}
             tracks={trackModels}
             selectedTrackId={activeTrack.id}
@@ -4810,7 +4828,31 @@ function Workstation({
             selectedPosition={selected?.key.contig === context.contig ? selected.key.position : undefined}
             contigLength={focus?.context.contig === context.contig ? focus.contigLength : undefined}
             busy={busy}
-            detailPanel={detailMode === "allele" ? <AlleleEditorPane
+            detailPanelLabel={showComparison ? "Comparison" : "Allele editor"}
+            detailPanel={showComparison ? <div className="dgw-comparison-pane">
+              <div className="comparison-scope-bar" role="group" aria-label="Comparison scope">
+                <button aria-pressed={!wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(false); setShowPredictionComparison(false); }}>Focused region</button>
+                <button aria-pressed={wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(true); setShowPredictionComparison(false); }}>Whole track DNA</button>
+                <button aria-pressed={showPredictionComparison} onClick={() => setShowPredictionComparison(true)}>Whole track predictions</button>
+              </div>
+              {showPredictionComparison ? <TrackPredictionComparison key={`${projectPath}:${activeTrack.id}`} projectPath={projectPath} trackId={activeTrack.id}
+                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} deviceIds={activeAnalyzerDeviceIds}
+                workerThreads={settings.workerThreads === "auto" ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1) : settings.workerThreads}
+                onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : wholeTrackComparison ? <WholeTrackComparison key={activeTrack.id} projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
+                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
+                onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : <ComparisonWorkspace
+                rows={comparisonRows(focusedSourceVariants ?? [], trackDeck.find(lane => lane.track.id === activeTrack.id))}
+                trackName={activeTrack.name} scope={`${context.contig}:${context.start.toLocaleString()}–${context.end.toLocaleString()}`}
+                revision={`${activeTrack.id}:${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}:${context.contig}:${context.start}:${context.end}:${activeAnalyzerSignature}`}
+                deviceIds={activeAnalyzerDeviceIds} load={collectDeviceEvidence}
+                onBack={() => setShowComparison(false)}
+                onOpen={row => {
+                  setShowComparison(false);
+                  if (row.editId) void openTrackEdit(activeTrack.id, row.editId);
+                  else if (row.current) void openTrackAllele(activeTrack.id, alleleId(row.current));
+                }}
+              />}
+            </div> : detailMode === "allele" ? <AlleleEditorPane
               variant={selected}
               savedBase={selectedSavedAllele.base}
               restored={selectedSavedAllele.restored}
@@ -4868,7 +4910,7 @@ function Workstation({
             onRemoveDevice={removeRackDevice}
             onResetDevice={resetRackDevice}
             onAnalyzeTrack={(trackId) => { void analyzeTrack(trackId); }}
-          />}
+          />
         </div>
       </section>
 
@@ -4883,7 +4925,7 @@ function Workstation({
             <div className="selected-variant"><p>{selected.key.contig}:{selected.key.position.toLocaleString()}</p><h3>{selected.key.reference}<i>›</i>{selected.key.alternate}</h3><span>{selected.origin} · {variantPhaseLabel(selected)}</span></div>
             {!selectedSavedAllele.base || selectedSavedAllele.restored ? <p className="phase-notice">{selectedSavedAllele.restored ? "Reference is restored on the edited copy. " : "This ALT is not active in the current track view. "}Evidence below describes the selected ALT, not a reference call or an unsaved proposal.</p> : null}
             <p className="evaluation-scope">Active devices run automatically for this exact allele. Imported VCF annotations are not used.</p>
-            <button className="button primary wide" onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}>{runningDeviceId ? "Evaluating…" : "Refresh active Evidence devices"}</button>
+            <button className="button secondary evidence-refresh" title="Evidence updates automatically when you focus an allele. Refresh to evaluate it again." onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}>{runningDeviceId ? "Evaluating…" : "Refresh evidence"}</button>
             {visibleEvidence.length > 0 ? <div className="evidence-stack">
               {visibleEvidence.map((evidence, index) => <EvidenceCard evidence={evidence} key={`${selectedEvidenceKey}-${evidence.source}-${index}`} />)}
               <p className="limitation">{evaluation?.limitation ?? "Consequences and evidence are evaluated independently for one exact allele. Compound and phase-dependent effects are not calculated."}</p>
@@ -4915,6 +4957,7 @@ export default function App() {
   const [exportRequest, setExportRequest] = useState<ExportRequest>();
   const [historyRequest, setHistoryRequest] = useState<HistoryRequest>();
   const [deviceBrowserRequest, setDeviceBrowserRequest] = useState(0);
+  const [workspaceMenuRequest, setWorkspaceMenuRequest] = useState<WorkspaceMenuRequest>();
   const [projectTemplate, setProjectTemplate] = useState<ProjectTemplateId>("standardEvidence");
   const [initialAppliedDeviceIds, setInitialAppliedDeviceIds] = useState<string[]>(dgwStarterDeviceIds);
   const [projectTemplateDialogOpen, setProjectTemplateDialogOpen] = useState(false);
@@ -5124,6 +5167,10 @@ export default function App() {
     setHistoryRequest((current) => ({ id: (current?.id ?? 0) + 1, direction }));
   }
 
+  function requestWorkspaceMenuCommand(command: WorkspaceMenuCommand) {
+    setWorkspaceMenuRequest((current) => ({ id: (current?.id ?? 0) + 1, command }));
+  }
+
   async function beginNewProject(template: ProjectTemplateId) {
     if (!await closeProject()) return;
     setProjectTemplate(template);
@@ -5183,6 +5230,8 @@ export default function App() {
       canRedo={historyState.canRedo}
       undoLabel={historyState.undoLabel}
       redoLabel={historyState.redoLabel}
+      activeTrackName={snapshot?.activeTrack.name}
+      activeTrackReadOnly={snapshot?.activeTrack.readOnly ?? true}
       onNewProject={() => beginNewProject("standardEvidence")}
       onNewFromTemplate={() => {
         setTemplateCreationError(undefined);
@@ -5199,6 +5248,7 @@ export default function App() {
       onSettingsChange={setSettings}
       onUndo={() => requestHistory("undo")}
       onRedo={() => requestHistory("redo")}
+      onWorkspaceCommand={requestWorkspaceMenuCommand}
       onAddDevice={() => {
         setSettings((current) => ({ ...current, showDeviceRack: true }));
         setDeviceBrowserRequest((current) => current + 1);
@@ -5220,6 +5270,7 @@ export default function App() {
           exportRequest={exportRequest}
           historyRequest={historyRequest}
           deviceBrowserRequest={deviceBrowserRequest}
+          workspaceMenuRequest={workspaceMenuRequest}
           initialAppliedDeviceIds={initialAppliedDeviceIds}
           onShowDeviceRack={() => setSettings((current) => ({ ...current, showDeviceRack: true }))}
           onShowEvidencePanel={() => setSettings((current) => current.showEvidenceInspector

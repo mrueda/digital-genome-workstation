@@ -49,13 +49,13 @@ export function TrackPredictionComparison({ projectPath, trackId, revision, devi
     catch (err) { setError(String(err)); } finally { setSubmitting(false); }
   }
   return <section className="comparison-workspace" aria-label="Whole track prediction comparison">
-    <header><div><h2>Which changes altered predictions?</h2><p>Independent allele-copy consequences at changed imported loci</p></div><button onClick={onBack}>Back to tracks</button></header>
+    <header><div><h2>Which changes altered predictions?</h2><p>Independent allele-copy consequences at changed imported loci</p></div><button onClick={onBack}>Return to editing</button></header>
     <div className="comparison-actions"><button className="button primary" disabled={running || submitting || !deviceIds.includes("org.dgw.builtin.variant-consequences")} onClick={() => { void start(); }}>{submitting ? "Submitting…" : "Compare track predictions"}</button>
       {running && <button onClick={() => { void api.cancelBackgroundJob(projectPath, job!.id).then(next => setJob(next as BackgroundJob<PredictionComparisonReport>)).catch(err => setError(String(err))); }}>Cancel comparison</button>}
       {job && <span role="status">{job.progress}% · {job.message}</span>}
     </div>
     {running && <progress aria-label="Prediction comparison progress" max={100} value={job?.progress ?? 0} />}
-    <p className="muted">Uses active Variant Consequences, not a new burden score. Same predictions do not establish equivalent biological effects. REF reductions take precedence and remain separate, including loci that also contain replacement ALTs. Other Evidence devices remain available in the editor.</p>
+    <details className="comparison-details"><summary>Comparison details</summary><p className="muted">Uses active Variant Consequences, not a new burden score. Same predictions do not establish equivalent biological effects. REF reductions take precedence and remain separate, including loci that also contain replacement ALTs. Other Evidence devices remain available in the editor.</p></details>
     {!deviceIds.includes("org.dgw.builtin.variant-consequences") && <p>Enable Variant Consequences in the rack to run this comparison.</p>}
     {error && <p role="alert">{error}</p>}
     {error && job?.status === "completed" && <button onClick={() => { setError(""); setRetry(value => value + 1); }}>Retry loading results</button>}

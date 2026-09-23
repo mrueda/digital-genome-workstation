@@ -51,7 +51,7 @@ export function ComparisonWorkspace({ rows, trackName, scope, revision, deviceId
     }));
   }
   return <section className="comparison-workspace" aria-label="Compare source and candidate">
-    <header><div><h2>What changed?</h2><p>Imported source → {trackName}</p></div><button className="button secondary" onClick={onBack}>Back to tracks</button></header>
+    <header><div><h2>What changed?</h2><p>Imported source → {trackName}</p></div><button className="button secondary" onClick={onBack}>Return to editing</button></header>
     <p className="muted">{scope} · loaded region only, not the whole track. {rows.length} allele rows · {changed.length} DNA changes.</p>
     <div className="comparison-actions">
       <label>Show <select aria-label="Comparison filter" value={filter} onChange={event => setFilter(event.target.value)}>
@@ -61,7 +61,7 @@ export function ComparisonWorkspace({ rows, trackName, scope, revision, deviceId
       <button className="button primary" onClick={() => { void evaluate(); }} disabled={running || !targets.length || !deviceIds.includes(consequenceId)}>Compare predictions</button>
       {progress && <span role="status">{progress.done} / {progress.total} compared</span>}
     </div>
-    <p className="muted">Compares transcript, consequence and impact for up to 200 changed ALT pairs, using active Variant Consequences. REF restorations are separate; an unchanged prediction does not mean an unchanged biological effect.</p>
+    <details className="comparison-details"><summary>Comparison details</summary><p className="muted">Compares transcript, consequence and impact for up to 200 changed ALT pairs, using active Variant Consequences. REF restorations are separate; an unchanged prediction does not mean an unchanged biological effect.</p></details>
     <div className="comparison-table-scroll"><table><thead><tr><th>Position</th><th>Source ALT</th><th>Current</th><th>Prediction comparison</th><th>Inspect</th></tr></thead>
       <tbody>{visible.slice(0, 200).map(row => { const key = row.source ?? row.current!.key; return <tr key={row.id} aria-selected={selectedId === row.id}>
         <td>{key.contig}:{key.position.toLocaleString()}<small className="comparison-copy">{row.copy === "Unphased" ? "Copy unknown (unphased)" : `Copy ${row.copy}`}</small></td><td><code>{row.source?.alternate ?? "Unknown"}</code></td>

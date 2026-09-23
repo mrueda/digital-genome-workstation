@@ -12,6 +12,8 @@ Its organization comes from the mature digital audio workstation (DAW) ecosystem
 
 ## One source, several alternatives
 
+DGW is an **editing workstation, not a new variant-effect predictor or prediction atlas**. Resources such as AlphaGenome Atlas provide predictions; DGW keeps editable scenarios, the operations that produced them and their evaluated results. See [how these roles differ](reference/faq.md#how-does-dgw-differ-from-alphagenome-atlas). AlphaGenome integration is not currently implemented.
+
 The imported sample becomes a read-only **source track**. Duplicate it to make an editable scenario. Edits belong to that track; the original VCF stays untouched.
 
 ![Workflow from sample import through duplication, editing, evaluation and comparison to saving or export](/img/dgw-workstation-workflow.svg)

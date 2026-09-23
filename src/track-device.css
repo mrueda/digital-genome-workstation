@@ -39,6 +39,10 @@
   grid-template-rows: minmax(0, 1fr) 7px minmax(0, min(45%, var(--dgw-device-rack-height, 220px)));
 }
 
+.dgw-workspace-main.comparison-open:not(.hide-device-rack) {
+  grid-template-rows: minmax(0, 1fr) 7px minmax(0, min(55%, max(300px, var(--dgw-device-rack-height, 220px))));
+}
+
 .dgw-track-device-workspace button,
 .dgw-track-device-workspace input,
 .dgw-track-device-workspace select {
