@@ -536,7 +536,7 @@ export function ProjectTemplateDialog({
       <div className="project-template-options">
         <button type="button" disabled={busy} onClick={() => onSelect("standardEvidence")}>
           <b>DGW Starter</b>
-          <span>{busy ? "Creating project…" : "Start with Mutation Generator, Genome Morph, the three Evidence devices, Genome Optimizer, and Variant Map applied."}</span>
+          <span>{busy ? "Creating project…" : "Start with Mutation Generator, Genome Morph, Consequence Predictor, ClinVar, COSMIC, Genome Optimizer, and Track Compare applied."}</span>
         </button>
         <button type="button" disabled={busy} onClick={() => onSelect("empty")}>
           <b>Empty</b>

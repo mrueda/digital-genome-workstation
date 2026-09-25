@@ -155,7 +155,7 @@ export interface TrackComparisonMap {
 
 export interface PredictionComparisonReport { revision: string; deviceIds: string[]; counts: Record<string, number>; total: number }
 export interface PredictionComparisonRow { outcome: string; locus: TrackComparisonLocus; evidence: Record<string, EvidenceResult> }
-export interface PredictionComparisonPage { stale: boolean; total: number; rows: PredictionComparisonRow[] }
+export interface PredictionComparisonPage { stale: boolean; total: number; rows: PredictionComparisonRow[]; consequences?: string[]; impacts?: string[] }
 
 export interface GenomeState {
   id: string;

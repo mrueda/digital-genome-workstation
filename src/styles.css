@@ -475,6 +475,8 @@ label > input, label > select { margin-top: 6px; }
 .application-shell.large-interface .workstation.hide-variants { grid-template-columns: minmax(470px, 1fr) 270px; }
 .application-shell.large-interface .workstation.hide-evidence { grid-template-columns: 190px minmax(470px, 1fr); }
 .application-shell.large-interface .workstation.hide-variants.hide-evidence { grid-template-columns: minmax(470px, 1fr); }
+.application-shell.large-interface .workstation:has(.dgw-device-rack.is-expanded),
+.application-shell.large-interface .workstation:has(.dgw-track-compare) { grid-template-columns: minmax(0, 1fr); }
 .app-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .mini-brand { width: 42px; height: 42px; margin: 0; border-radius: 10px; box-shadow: none; }
 .app-header > div:nth-child(2) { display: flex; flex-direction: column; }

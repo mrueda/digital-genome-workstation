@@ -4,6 +4,7 @@ docs-site/build/
 docs-site/.docusaurus/
 target/
 playwright-report/
+.paper-work/
 test-results/
 __pycache__/
 *.py[cod]

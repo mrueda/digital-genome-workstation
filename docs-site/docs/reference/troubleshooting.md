@@ -21,7 +21,7 @@ Then run `cargo check -p dgw-desktop` again.
 
 ## The bundle validator reports a missing path
 
-Expand **Resource bundle** on the onboarding screen and update the JSON. Paths are local and machine-specific. The supplied development profile expects `/media/mrueda/2TBS`. The reference and version-matched VCF tools are required for a project. An assembly-matched consequence GFF3 is required only for Variant Consequences and Saturation. A missing optional consequence or database resource should leave only the dependent device unavailable; remove or repair its configuration rather than inventing a placeholder file.
+Expand **Resource bundle** on the onboarding screen and update the JSON. Paths are local and machine-specific. The supplied development profile expects `/media/mrueda/2TBS`. The reference and version-matched VCF tools are required for a project. An assembly-matched consequence GFF3 is required only for Consequence Predictor and Saturation. A missing optional consequence or database resource should leave only the dependent device unavailable; remove or repair its configuration rather than inventing a placeholder file.
 
 For an open project, use **Help → About DGW → Tools and resources**. DGW checks that registered files and indexes still exist and runs the configured bcftools executable to compare its reported version with the project profile. **Ready** means the registered paths passed this immediate check; it does not independently validate the scientific content of a third-party database.
 
@@ -45,11 +45,11 @@ DGW v0.1 imports only strict `FILTER=PASS` records carried as non-reference geno
 
 Confirm that the FASTA is BGZF-compressed and that both `.fai` and `.gzi` belong to the exact file. Contig names must match the VCF.
 
-## Variant Consequences fails
+## Consequence Predictor fails
 
 Confirm that the configured bcftools executable includes `csq`, the reference FASTA indexes belong to the exact FASTA, and the Ensembl GFF3 matches the project assembly. GRCh38 model loading can take several seconds and about 800 MB in the current development environment. Failures are not cached.
 
-A `.dgw` project pins the resource profile used when it was created. A development project created before the Variant Consequences migration has no Ensembl consequence descriptor and therefore shows this device as unavailable; opening the package does not silently rewrite its scientific resource identity. Reimport the source VCF with the updated assembly profile for now. An explicit resource-rebinding workflow is planned for projects that must retain their existing edits.
+A `.dgw` project pins the resource profile used when it was created. A development project created before the Consequence Predictor migration has no Ensembl consequence descriptor and therefore shows this device as unavailable; opening the package does not silently rewrite its scientific resource identity. Reimport the source VCF with the updated assembly profile for now. An explicit resource-rebinding workflow is planned for projects that must retain their existing edits.
 
 ## An index is older than its database
 

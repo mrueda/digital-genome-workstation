@@ -1082,7 +1082,7 @@ fn evaluate_conservative_alleles(
             .any(|device_id| device_id == CONSEQUENCE_DEVICE_ID)
     {
         return Err(
-            "Weighted annotation burden requires applied, active Variant Consequences.".into(),
+            "Weighted annotation burden requires applied, active Consequence Predictor.".into(),
         );
     }
     if need_clinvar_guard
@@ -1113,7 +1113,7 @@ fn evaluate_conservative_alleles(
                 .evaluate_device(project, &key, CONSEQUENCE_DEVICE_ID)
                 .map_err(error_text)?
         } else {
-            not_computed_evidence("Variant Consequences")
+            not_computed_evidence("Consequence Predictor")
         };
         let clinvar = if need_clinvar_guard && source_keys.contains(&key.stable_key()) {
             evaluation
@@ -1746,11 +1746,13 @@ fn start_prediction_comparison_job(
     device_ids: Vec<String>,
     worker_threads: Option<u16>,
     selection: VariantSelection,
+    current_only: Option<bool>,
 ) -> Result<BackgroundJob, String> {
+    let current_only = current_only.unwrap_or(false);
     let mut ids = dgw_core::normalized_track_profile_devices(&device_ids);
     ids.sort();
     if !ids.iter().any(|id| id == CONSEQUENCE_DEVICE_ID) {
-        return Err("Activate Variant Consequences to compare predictions".into());
+        return Err("Activate Consequence Predictor to compare predictions".into());
     }
     let project = Project::open(project_path).map_err(error_text)?;
     let revision = project
@@ -1760,7 +1762,7 @@ fn start_prediction_comparison_job(
     let now = chrono::Utc::now();
     let mut job = BackgroundJob {
         id: Uuid::new_v4().to_string(),
-        operation: "trackPredictionComparison".into(),
+        operation: if current_only { "selectionPrediction" } else { "trackPredictionComparison" }.into(),
         device_id: CONSEQUENCE_DEVICE_ID.into(),
         track_id: track_id.clone(),
         status: BackgroundJobStatus::Queued,
@@ -1786,7 +1788,7 @@ fn start_prediction_comparison_job(
         let outcome = (|| -> Result<_, String> {
             let _guard = lock.lock().map_err(error_text)?;
             pool.run(threads, || {
-                dgw_core::prediction_comparison::run_selected(
+                dgw_core::prediction_comparison::run_selection(
                     &project,
                     &service,
                     &track_id,
@@ -1794,6 +1796,7 @@ fn start_prediction_comparison_job(
                     &revision,
                     &ids,
                     Some(&selection),
+                    current_only,
                     |percent, message| {
                         if job_was_cancelled(&cancelled, &job_id) {
                             return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
@@ -1821,7 +1824,7 @@ fn start_prediction_comparison_job(
                     BackgroundJobStatus::Completed,
                     100,
                     "completed",
-                    "Prediction comparison ready",
+                    if current_only { "Selection predictions ready" } else { "Prediction comparison ready" },
                 );
             }
             Err(error) => {
@@ -1856,12 +1859,14 @@ async fn prediction_comparison_page(
     device_ids: Vec<String>,
     outcome: Option<String>,
     offset: u64,
+    consequences: Option<Vec<String>>,
+    impacts: Option<Vec<String>>,
 ) -> Result<dgw_core::prediction_comparison::PredictionPage, String> {
     let mut ids = dgw_core::normalized_track_profile_devices(&device_ids);
     ids.sort();
     tauri::async_runtime::spawn_blocking(move || {
         let project = Project::open(project_path).map_err(error_text)?;
-        dgw_core::prediction_comparison::page(&project, &job_id, &ids, outcome.as_deref(), offset)
+        dgw_core::prediction_comparison::filtered_page(&project, &job_id, &ids, outcome.as_deref(), offset, &consequences.unwrap_or_default(), &impacts.unwrap_or_default())
             .map_err(error_text)
     })
     .await
@@ -2061,7 +2066,7 @@ fn start_track_evidence_profile_job(
 
 fn evidence_device_label(device_id: &str) -> &'static str {
     match device_id {
-        CONSEQUENCE_DEVICE_ID => "Variant Consequences",
+        CONSEQUENCE_DEVICE_ID => "Consequence Predictor",
         "org.dgw.builtin.clinvar" => "ClinVar",
         "org.dgw.builtin.cosmic" => "COSMIC",
         _ => "Evidence",

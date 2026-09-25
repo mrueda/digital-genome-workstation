@@ -2639,7 +2639,7 @@ fn default_worker_threads() -> u16 {
 
 fn evidence_device_label(device_id: &str) -> &'static str {
     match device_id {
-        dgw_core::CONSEQUENCE_DEVICE_ID => "Variant Consequences",
+        dgw_core::CONSEQUENCE_DEVICE_ID => "Consequence Predictor",
         "org.dgw.builtin.clinvar" => "ClinVar",
         "org.dgw.builtin.cosmic" => "COSMIC",
         _ => "Evidence",

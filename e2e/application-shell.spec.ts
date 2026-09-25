@@ -625,28 +625,42 @@ test("failed mutation application shows an error instead of confirmation", async
   await expect(device.getByRole("button", { name: "Generate mutations", exact: true })).toBeEnabled();
 });
 
+test("optimizer scoring labels stay above the knob controls", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  for (const expanded of [false, true]) {
+    if (expanded) await page.getByRole("button", { name: "Maximize Genome Optimizer", exact: true }).click();
+    const optimizer = page.locator(".dgw-optimizer").first();
+    const label = optimizer.locator(".dgw-fader-state").first();
+    await expect(label).toBeVisible();
+    const labelBox = await label.boundingBox();
+    const knobBox = await optimizer.locator(".dgw-knob-bank").first().boundingBox();
+    expect(labelBox).not.toBeNull(); expect(knobBox).not.toBeNull();
+    expect(labelBox!.y + labelBox!.height).toBeLessThanOrEqual(knobBox!.y);
+  }
+});
+
 test("maximized devices keep their actual input scope visible", async ({ page }) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
-  for (const name of ["Mutation Generator", "Genome Optimizer"]) {
+  for (const name of ["Mutation Generator", "Genome Optimizer", "Consequence Predictor"]) {
     await page.getByRole("button", { name: `Maximize ${name}`, exact: true }).click();
     const scope = page.getByLabel("Device input scope");
     await expect(scope).toContainText("10 alleles selected");
     await expect(scope).toContainText("All chromosomes");
     await expect(scope).toContainText("BRAF · restore to REF");
-    await scope.getByRole("button", { name: "Change selection…" }).click();
+    await scope.getByRole("button", { name: "Change selection", exact: true }).click();
   }
   await page.getByLabel("Allele selection controls").getByRole("button", { name: "Clear", exact: true }).click();
   await page.getByRole("button", { name: "Maximize Genome Optimizer", exact: true }).click();
   await expect(page.getByLabel("Device input scope")).toContainText("No alleles selected");
-  await page.getByRole("button", { name: "Select alleles…", exact: true }).click();
+  await page.getByRole("button", { name: "Change selection", exact: true }).click();
   await expect(page.locator(".dgw-track-deck")).toBeVisible();
-  await page.getByRole("button", { name: "Maximize Variant Consequences", exact: true }).click();
-  await expect(page.getByLabel("Device input scope")).toContainText("Focused allele only · not the multi-selection");
-  await expect(page.getByLabel("Device input scope")).not.toContainText("alleles selected");
+  await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
+  await expect(page.getByLabel("Device input scope")).toContainText("No alleles selected");
+  await expect(page.getByRole("button", { name: "Predict selection", exact: true })).toBeDisabled();
 });
 
-test("offers device bypass only for Evidence", async ({ page }) => {
+test("offers device bypass only for database Evidence devices", async ({ page }) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   for (const name of ["Mutation Generator", "Genome Morph", "Genome Optimizer"]) {
     const device = page.locator(".dgw-device-chain").getByLabel(name, { exact: true });
@@ -654,12 +668,11 @@ test("offers device bypass only for Evidence", async ({ page }) => {
     await expect(device.locator(".dgw-bypass")).toHaveCount(0);
   }
   await expect(page.getByRole("button", { name: /Track Compare is .* Toggle device/ })).toHaveCount(0);
-  const toggle = page.getByRole("button", { name: "Variant Consequences is active. Toggle device.", exact: true });
+  await expect(page.getByRole("button", { name: /Consequence Predictor is .* Toggle device/ })).toHaveCount(0);
+  const toggle = page.getByRole("button", { name: "ClinVar is active. Toggle device.", exact: true });
   await toggle.click();
-  await expect(page.getByRole("button", { name: "Variant Consequences is bypassed. Toggle device.", exact: true })).toBeVisible();
-  await expect(page.getByText("Variant Consequences is bypassed", { exact: true })).toBeVisible();
-  await expect(page.getByText("Score unavailable", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Variant Consequences is bypassed. Toggle device.", exact: true }).click();
+  await expect(page.getByRole("button", { name: "ClinVar is bypassed. Toggle device.", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "ClinVar is bypassed. Toggle device.", exact: true }).click();
   await expect(toggle).toBeVisible();
 });
 
@@ -835,6 +848,18 @@ test("expanded devices share the same Back to tracks control", async ({ page }) 
   for (const size of sizes) expect(size).toEqual(sizes[0]);
 });
 
+test("large interface expanded devices use the full workstation width", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.locator(".application-shell").evaluate(node => node.classList.add("large-interface"));
+  for (const name of ["Maximize Mutation Generator", "Open Track Compare"]) {
+    await page.getByRole("button", { name, exact: true }).click();
+    const workspace = await page.locator(".workstation").boundingBox();
+    const canvas = await page.locator(".canvas").boundingBox();
+    expect(canvas!.width).toBeGreaterThan(workspace!.width * 0.95);
+    await page.getByRole("button", { name: "Back to tracks", exact: true }).click();
+  }
+});
+
 test("consequence comparison requires selection instead of offering implicit scopes", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
@@ -843,13 +868,13 @@ test("consequence comparison requires selection instead of offering implicit sco
   const comparison = page.getByRole("region", { name: "Track Compare", exact: true });
   for (const tab of ["DNA changes", "Genome view", "Consequence changes"]) {
     await comparison.getByRole("button", { name: tab, exact: true }).click();
-    await expect(comparison.getByLabel("Comparison selection")).toContainText("0 alleles selected");
+    await expect(comparison.getByLabel("Comparison selection")).toContainText("No alleles selected");
     await expect(comparison.getByRole("table")).toHaveCount(0);
     await expect(comparison.getByRole("button", { name: "Compare consequences", exact: true })).toHaveCount(0);
   }
   await expect(page.getByRole("group", { name: "Comparison scope" })).toHaveCount(0);
   await expect(comparison.getByRole("table")).toHaveCount(0);
-  await comparison.getByRole("button", { name: "Select variants in Track view", exact: true }).click();
+  await comparison.getByRole("button", { name: "Change selection", exact: true }).click();
   await expect(page.locator(".dgw-track-deck")).toBeVisible();
 });
 
@@ -1073,8 +1098,8 @@ test("makes every transcript evidence record accessible without changing the all
   const evidenceMenu = page.getByRole("button", { name: /Evidence panel$/ });
   if (!(await evidenceMenu.getAttribute("class"))?.includes("is-selected")) await evidenceMenu.click();
   await page.keyboard.press("Escape");
-  const card = page.getByRole("article", { name: "Variant Consequences evidence" });
-  const selector = card.getByLabel("Variant Consequences record");
+  const card = page.getByRole("article", { name: "Consequence Predictor predictions" });
+  const selector = card.getByLabel("Consequence Predictor record");
   await expect(selector).toHaveCount(1);
   await selector.selectOption("1");
   await expect(card.locator("dl")).toContainText("ENST00000479537");
@@ -1083,4 +1108,50 @@ test("makes every transcript evidence record accessible without changing the all
   await expect(card).toContainText("Synthetic second transcript record");
   await selector.selectOption("0");
   await expect(card.locator("dl")).toContainText("ENST00000288602");
+});
+
+test("shows compact prediction progress and a working cancel control", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("test-hold-prediction", "1"));
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select visible", exact: true }).click();
+  await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
+  const results = page.getByRole("region", { name: "Selected allele predictions" });
+  await results.getByRole("button", { name: "Predict selection", exact: true }).click();
+  await expect(results.getByRole("progressbar", { name: "Prediction progress", exact: true })).toHaveAttribute("value", "20");
+  const cancel = results.getByRole("button", { name: "Cancel prediction", exact: true });
+  await expect(cancel).toHaveText("Cancel");
+  await page.screenshot({ path: "/tmp/dgw-prediction-progress.png" });
+  await cancel.click();
+  await expect(cancel).toHaveCount(0);
+  await expect(results.getByRole("button", { name: "Predict selection", exact: true })).toBeEnabled();
+});
+
+test("predicts the track selection with paged current-only results", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
+  await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
+  const results = page.getByRole("region", { name: "Selected allele predictions" });
+  await results.getByRole("button", { name: "Predict selection", exact: true }).click();
+  await expect(results.getByRole("columnheader", { name: "REF → ALT", exact: true })).toBeVisible();
+  await expect(results.getByRole("columnheader", { name: "Source ALTs" })).toHaveCount(0);
+  await expect(results.getByRole("button", { name: "Transcripts", exact: true })).toHaveCount(200);
+  await results.getByRole("button", { name: "Transcripts", exact: true }).first().click();
+  await expect(results.getByRole("article", { name: "Consequence Predictor predictions" })).toContainText("TEST_TRANSCRIPT");
+  await page.screenshot({ path: "/tmp/dgw-selection-predictor.png" });
+  await results.getByRole("navigation", { name: "Consequence results pagination top" }).getByRole("button", { name: "Next page", exact: true }).click();
+  await expect(results.getByRole("button", { name: "Transcripts", exact: true })).toHaveCount(5);
+  await results.getByRole("group", { name: "Consequence filter" }).getByRole("button", { name: "synonymous", exact: true }).click();
+  await expect(results.getByRole("button", { name: "Transcripts", exact: true })).toHaveCount(200);
+  await results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "LOW", exact: true }).click();
+  await results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "MODERATE", exact: true }).click();
+  await expect(results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "LOW", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "MODERATE", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const lowChip = results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "LOW", exact: true });
+  const moderateChip = results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "MODERATE", exact: true });
+  expect(await lowChip.evaluate(el => getComputedStyle(el).color)).not.toEqual(await moderateChip.evaluate(el => getComputedStyle(el).color));
+  await page.screenshot({ path: "/tmp/dgw-prediction-filter-colors.png" });
+  await results.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(results).toContainText("strongest transcript impact");
 });

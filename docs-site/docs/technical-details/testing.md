@@ -47,7 +47,7 @@ cargo run -p dgw-desktop --release --example profile_parallel_benchmark -- \
   config/local-hs37d5.development.json
 ```
 
-The pool is local to the desktop process. It parallelizes independent Evidence devices and 2,000-allele indexed-resource batches; it is not a service or persistent worker system. Variant Consequences remains one complete batch, and project mutations remain serial.
+The pool is local to the desktop process. It parallelizes independent Evidence devices and 2,000-allele indexed-resource batches; it is not a service or persistent worker system. Consequence Predictor remains one complete batch, and project mutations remain serial.
 
 CI runs core/frontend tests and production builds. A separate Linux/macOS job compile-checks the Tauri shell; Linux installs the official GTK/WebKit prerequisites first. The local acceptance workflow adds the real reference, bcftools, Ensembl and indexed Evidence-resource boundary that public CI cannot reproduce without the external bundle.
 

@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let evaluation = EvaluationService::new().evaluate(&project, &variant.key)?;
     require_usable_evidence(
-        "Variant Consequences",
+        "Consequence Predictor",
         evaluation.consequence.status.clone(),
     )?;
     require_usable_evidence("ClinVar", evaluation.clinvar.status.clone())?;

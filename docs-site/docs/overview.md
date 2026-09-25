@@ -39,8 +39,8 @@ See [Focused Track Workspace](usage/focused-workspace.md) for selection, zoom an
 | Role | Built-in examples | What they do |
 | --- | --- | --- |
 | Edit | Mutation Generator | Propose reversible allele changes. |
-| Evidence | Variant Consequences, ClinVar, COSMIC | Predict transcript effects or retrieve exact-allele records. |
-| Analyze | Genome Optimizer | Propose changes under a named, bounded scoring model. |
+| Evidence | ClinVar, COSMIC | Retrieve reported variant records and submitted clinical interpretations. |
+| Analyze | Consequence Predictor, Genome Optimizer | Predict transcript effects or propose changes under a named, bounded scoring model. |
 | Visualize | Track Compare | Display available results without editing or scoring. |
 
 Use **Create → Add Device** to browse devices. The rack shows those applied to the selected track, not every available tool. Devices are built into DGW today; third-party plug-in installation is not yet supported. Grouping by role does not imply an audio-style signal chain.

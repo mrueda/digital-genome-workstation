@@ -28,7 +28,7 @@ On first launch, if no resources are registered, DGW opens **Step 2: Set up geno
 2. Before installing resources, confirm that DGW does not silently use the developer's genome files.
 3. Choose an assembly and a new storage folder, then **Download and install**. To test offline installation instead, use **Other installation options → Install downloaded packages** and select the matching assembly and tools archives.
 4. Follow the progress through archive validation, extraction and registration. The assembly should become available on the landing page.
-5. Open its matching example. Select an allele and verify that Variant Consequences returns evidence. Missing optional COSMIC data should be reported as unavailable, not as a startup failure.
+5. Open its matching example. Select an allele and verify that Consequence Predictor returns evidence. Missing optional COSMIC data should be reported as unavailable, not as a startup failure.
 
 ### Add optional COSMIC data
 

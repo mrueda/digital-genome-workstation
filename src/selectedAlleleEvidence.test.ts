@@ -8,7 +8,7 @@ import {
   type SelectedAlleleEvidenceCache
 } from "./selectedAlleleEvidence";
 
-const found: EvidenceResult = { source: "Variant Consequences", status: "found", records: [{ impact: "HIGH" }] };
+const found: EvidenceResult = { source: "Consequence Predictor", status: "found", records: [{ impact: "HIGH" }] };
 const exactMiss: EvidenceResult = { source: "ClinVar", status: "noExactMatch", records: [] };
 
 describe("selected-allele live evidence", () => {
@@ -30,7 +30,7 @@ describe("selected-allele live evidence", () => {
 
   it("does not retain transient unavailable or error responses", () => {
     const cache: SelectedAlleleEvidenceCache = new Map();
-    cacheStableEvidence(cache, "allele", "consequence", { source: "Variant Consequences", status: "resourceUnavailable", records: [] });
+    cacheStableEvidence(cache, "allele", "consequence", { source: "Consequence Predictor", status: "resourceUnavailable", records: [] });
     cacheStableEvidence(cache, "allele", "clinvar", { source: "ClinVar", status: "error", records: [] });
 
     expect(cache.get("allele")).toBeUndefined();

@@ -15,7 +15,7 @@ This fixture is opened when the onboarding screen's **GRCh38** reference profile
 ## `braf-v600e.synthetic.vcf`
 
 One fictional sample (`DGW_DEMO`) with an unphased BRAF V600E genotype. The file is generated test data and contains no participant data.
-It remains the focused real-resource smoke-test fixture because its exact Variant Consequences, ClinVar, and COSMIC behavior is easy to verify.
+It remains the focused real-resource smoke-test fixture because its exact Consequence Predictor, ClinVar, and COSMIC behavior is easy to verify.
 
 ## `multiallelic.synthetic.vcf`
 

@@ -1,14 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1800" height="1013" viewBox="0 0 1800 1013" role="img" aria-labelledby="title desc">
-  <title id="title">Digital Genome Workstation application workspace</title>
-  <desc id="desc">The DGW desktop interface showing source variants, genome tracks, Track Monitor, exact-allele Evidence, and the Device Rack.</desc>
-  <rect width="1800" height="1013" fill="#f4f6f8"/>
-  <rect x="98" y="5" width="1604" height="1004" rx="8" fill="#16191c" stroke="#aeb8c2" stroke-width="2"/>
-  <image x="100" y="7" width="1600" height="1000" preserveAspectRatio="xMidYMid meet" xlink:href="figure-1-workspace-base.png"/>
-  <g font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" text-anchor="middle" dominant-baseline="central" stroke="#ffffff" stroke-width="3" paint-order="stroke">
-    <circle cx="124" cy="166" r="23" fill="#31a8bd" stroke="none"/><text x="124" y="166" fill="#102029">A</text>
-    <circle cx="488" cy="306" r="23" fill="#ee9639" stroke="none"/><text x="488" y="306" fill="#2b1605">B</text>
-    <circle cx="1132" cy="258" r="23" fill="#d8ad3d" stroke="none"/><text x="1132" y="258" fill="#2b2104">C</text>
-    <circle cx="1640" cy="168" r="23" fill="#65b891" stroke="none"/><text x="1640" y="168" fill="#092117">D</text>
-    <circle cx="725" cy="765" r="23" fill="#9f87d3" stroke="none"/><text x="725" y="765" fill="#1f1532">E</text>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3760" height="2127" viewBox="0 0 3760 2127"><rect width="3760" height="2127" fill="white"/><image width="3760" height="2060" xlink:href="figure-1-workspace-base.png"/><circle cx="395" cy="204" r="27" fill="#39acc0" stroke="white" stroke-width="4"/><text x="395" y="215" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">A</text><circle cx="890" cy="406" r="27" fill="#eeaa57" stroke="white" stroke-width="4"/><text x="890" y="417" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">B</text><circle cx="3025" cy="396" r="27" fill="#dfbd53" stroke="white" stroke-width="4"/><text x="3025" y="407" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">C</text><circle cx="3680" cy="210" r="27" fill="#77c29a" stroke="white" stroke-width="4"/><text x="3680" y="221" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">D</text><circle cx="2470" cy="1660" r="27" fill="#b49adc" stroke="white" stroke-width="4"/><text x="2470" y="1671" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">E</text><circle cx="620" cy="192" r="27" fill="#85bed5" stroke="white" stroke-width="4"/><text x="620" y="203" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">F</text></svg>

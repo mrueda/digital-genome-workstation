@@ -128,10 +128,10 @@ export const api = {
     invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
   trackComparisonPage: (projectPath: string, trackId: string, selection: VariantSelection, offset = 0, limit = 200, changedOnly = false, search = "") =>
     invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, selection, offset, limit, changedOnly, search }),
-  startPredictionComparison: (projectPath: string, trackId: string, deviceIds: string[], workerThreads: number, selection: VariantSelection) =>
-    invoke<BackgroundJob<PredictionComparisonReport>>("start_prediction_comparison_job", { projectPath, trackId, deviceIds, workerThreads, selection }),
-  predictionComparisonPage: (projectPath: string, jobId: string, deviceIds: string[], outcome: string | undefined, offset: number) =>
-    invoke<PredictionComparisonPage>("prediction_comparison_page", { projectPath, jobId, deviceIds, outcome, offset }),
+  startPredictionComparison: (projectPath: string, trackId: string, deviceIds: string[], workerThreads: number, selection: VariantSelection, currentOnly = false) =>
+    invoke<BackgroundJob<PredictionComparisonReport>>("start_prediction_comparison_job", { projectPath, trackId, deviceIds, workerThreads, selection, currentOnly }),
+  predictionComparisonPage: (projectPath: string, jobId: string, deviceIds: string[], outcome: string | undefined, offset: number, consequences: string[] = [], impacts: string[] = []) =>
+    invoke<PredictionComparisonPage>("prediction_comparison_page", { projectPath, jobId, deviceIds, outcome, offset, consequences, impacts }),
   variantContigs: (projectPath: string) =>
     invoke<VariantContigSummary[]>("variant_contigs", { projectPath }),
   variantNavigationBins: (projectPath: string, contig: string, bins = 16, start?: number, end?: number) =>

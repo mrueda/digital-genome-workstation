@@ -14,10 +14,11 @@ export function EvidenceCard({ evidence, deviceId }: { evidence: EvidenceResult;
   const [recordIndex, setRecordIndex] = useState(0);
   const index = Math.min(recordIndex, Math.max(0, evidence.records.length - 1));
   const record = evidence.records[index];
-  const transcripts = evidence.source.startsWith("Variant Consequences");
+  const transcripts = evidence.source.startsWith("Consequence Predictor");
   const effects = [...new Set(evidence.records.map(row => row.effect).filter(Boolean))];
-  return <article className="evidence-card" aria-label={`${display.title} evidence`}>
-    <header><h4>{display.title}</h4><span className={`status ${evidence.status}`}>{evidence.status === "resourceUnavailable" ? "Unavailable" : evidence.status.replace(/[A-Z]/g, value => ` ${value.toLowerCase()}`)}</span></header>
+  return <article className="evidence-card" aria-label={`${display.title} ${transcripts ? "predictions" : "evidence"}`}>
+    <header><h4>{display.title}</h4><span className={`status ${evidence.status}`}>{transcripts && evidence.status === "found" ? "Predicted" : evidence.status === "resourceUnavailable" ? "Unavailable" : evidence.status.replace(/[A-Z]/g, value => ` ${value.toLowerCase()}`)}</span></header>
+    <p className="muted">{transcripts ? "Computed transcript effects · bcftools csq. Predictions, not experimental confirmation." : /clinvar/i.test(evidence.source) ? "ClinVar · submitted clinical interpretations. Check review status and conflicting interpretations." : /cosmic/i.test(evidence.source) ? "COSMIC · reported somatic variant records. A match alone does not establish causality." : "Database records"}</p>
     {display.message && <p className="warning">{display.message}</p>}
     {display.explanation && <p className="muted">{display.explanation}</p>}
     {effects.length > 0 && <p className="evidence-summary">{effects.join(" · ")}</p>}

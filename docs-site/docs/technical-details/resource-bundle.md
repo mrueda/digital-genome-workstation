@@ -2,7 +2,7 @@
 
 A resource bundle lists one compatible reference/tool core and any locally available Evidence resources. It is the first implementation of a DGW **resource pack**. v0.1 accepts `assembly: b37` and `assembly: hg38`. The project uses the reference FASTA naming convention internally and translates safe `1`/`chr1` and mitochondrial aliases for resources that declare another `contigStyle`. This changes names only, never coordinates or assemblies.
 
-Resource packs provide data and configured tool resources; they are not device code. Variant Consequences, ClinVar, and COSMIC appear as Evidence devices in the rack, while the Ensembl GFF3 and indexed database releases are resources.
+Resource packs provide data and configured tool resources; they are not device code. Consequence Predictor, ClinVar, and COSMIC appear as Evidence devices in the rack, while the Ensembl GFF3 and indexed database releases are resources.
 
 ## Required core
 
@@ -15,7 +15,7 @@ These paths are required to validate the sample, reconstruct focused sequence, a
 
 - An assembly-matched Ensembl GFF3 for transcript consequence prediction with `bcftools csq`.
 
-The Variant Consequences device and the Genome Optimizer's Saturation mode require this resource. A project can still be created, edited, saved, and exported without it.
+The Consequence Predictor device and the Genome Optimizer's Saturation mode require this resource. A project can still be created, edited, saved, and exported without it.
 
 ## Optional database Evidence resources
 

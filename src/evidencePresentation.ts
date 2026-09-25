@@ -3,7 +3,7 @@ import type { EvidenceResult } from "./types";
 const names: Record<string, string> = {
   "org.dgw.builtin.cosmic": "COSMIC",
   "org.dgw.builtin.clinvar": "ClinVar",
-  "org.dgw.builtin.variant-consequences": "Variant Consequences"
+  "org.dgw.builtin.variant-consequences": "Consequence Predictor"
 };
 
 export function evidencePresentation(evidence: EvidenceResult, deviceId?: string) {

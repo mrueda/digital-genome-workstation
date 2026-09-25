@@ -179,7 +179,7 @@ impl EvaluationService {
             let fresh = match consequence_resource_unavailable(bundle) {
                 Some(message) => vec![
                     EvidenceResult {
-                        source: "Variant Consequences".into(),
+                        source: "Consequence Predictor".into(),
                         status: EvidenceStatus::ResourceUnavailable,
                         records: vec![],
                         message: Some(message)
@@ -291,7 +291,7 @@ impl EvaluationService {
         let result = match device_id {
             CONSEQUENCE_DEVICE_ID => match consequence_resource_unavailable(bundle) {
                 Some(message) => EvidenceResult {
-                    source: "Variant Consequences".into(),
+                    source: "Consequence Predictor".into(),
                     status: EvidenceStatus::ResourceUnavailable,
                     records: Vec::new(),
                     message: Some(message),
@@ -299,7 +299,7 @@ impl EvaluationService {
                 None => match self.annotate_consequences(bundle, std::slice::from_ref(variant)) {
                     Ok(mut results) => results.remove(0),
                     Err(error) => EvidenceResult {
-                        source: "Variant Consequences".into(),
+                        source: "Consequence Predictor".into(),
                         status: EvidenceStatus::Error,
                         records: Vec::new(),
                         message: Some(error.to_string()),
@@ -374,7 +374,7 @@ impl EvaluationService {
             let evidence_batch = if let Some(message) = consequence_resource_unavailable(bundle) {
                 vec![
                     EvidenceResult {
-                        source: "Variant Consequences".into(),
+                        source: "Consequence Predictor".into(),
                         status: EvidenceStatus::ResourceUnavailable,
                         records: Vec::new(),
                         message: Some(message),
@@ -386,7 +386,7 @@ impl EvaluationService {
                     Ok(results) => results,
                     Err(error) => vec![
                         EvidenceResult {
-                            source: "Variant Consequences".into(),
+                            source: "Consequence Predictor".into(),
                             status: EvidenceStatus::Error,
                             records: Vec::new(),
                             message: Some(error.to_string()),
@@ -482,7 +482,7 @@ impl EvaluationService {
             .any(|device_id| device_id == CONSEQUENCE_DEVICE_ID)
         {
             return Err(DgwError::InvalidDevice(
-                "Saturation mode requires applied, active Variant Consequences for comparable candidate scoring.".into(),
+                "Saturation mode requires applied, active Consequence Predictor for comparable candidate scoring.".into(),
             ));
         }
         if !request
@@ -540,7 +540,7 @@ impl EvaluationService {
         for (source, candidate) in candidates {
             let consequence_signal = consequence.get(&candidate).ok_or_else(|| {
                 DgwError::Tool(format!(
-                    "Variant Consequences omitted candidate {}",
+                    "Consequence Predictor omitted candidate {}",
                     candidate.display()
                 ))
             })?;
@@ -549,7 +549,7 @@ impl EvaluationService {
                 EvidenceStatus::Error | EvidenceStatus::ResourceUnavailable
             ) {
                 return Err(DgwError::Tool(format!(
-                    "Variant Consequences could not evaluate saturation candidate {}",
+                    "Consequence Predictor could not evaluate saturation candidate {}",
                     candidate.display()
                 )));
             }
@@ -557,7 +557,7 @@ impl EvaluationService {
                 DgwError::Tool(format!("ClinVar omitted candidate {}", candidate.display()))
             })?;
             let consequence_evidence =
-                evidence_from_batch_signal("Variant Consequences", consequence_signal);
+                evidence_from_batch_signal("Consequence Predictor", consequence_signal);
             let clinvar_evidence = evidence_from_batch_signal(
                 &project.manifest().resource_bundle.clinvar.release,
                 clinvar_signal,
@@ -697,7 +697,7 @@ fn device_cache_envelope(
     let mut result = EvaluationResult {
         variant: variant.clone(),
         cache_key,
-        consequence: not_computed_evidence("Variant Consequences"),
+        consequence: not_computed_evidence("Consequence Predictor"),
         clinvar: not_computed_evidence("ClinVar"),
         cosmic: not_computed_evidence("COSMIC"),
         evaluated_at: Utc::now(),
@@ -827,7 +827,7 @@ fn annotate_consequence_batch(
         )));
     }
 
-    let source = format!("Variant Consequences · {}", annotation.release);
+    let source = format!("Consequence Predictor · {}", annotation.release);
     let mut results = vec![None; variants.len()];
     for line in BufReader::new(File::open(output.path())?).lines() {
         let line = line?;
@@ -1478,7 +1478,7 @@ mod tests {
         let resource = bundle.consequence_annotation.as_ref().unwrap();
         let record = no_transcript_feature_record(&bundle, resource);
         let evidence = EvidenceResult {
-            source: "Variant Consequences".into(),
+            source: "Consequence Predictor".into(),
             status: EvidenceStatus::Found,
             records: vec![record],
             message: None,
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn consequence_signal_uses_the_strongest_transcript_impact() {
         let evidence = EvidenceResult {
-            source: "Variant Consequences".into(),
+            source: "Consequence Predictor".into(),
             status: EvidenceStatus::Found,
             records: vec![
                 BTreeMap::from([("impact".into(), "LOW".into())]),

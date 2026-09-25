@@ -142,7 +142,7 @@ where
                                 (chunk_base + chunk_span * 0.58 * fraction).round() as u8,
                                 "consequences",
                                 format!(
-                                    "Variant Consequences batch {} of {} · {}/{} candidate alleles",
+                                    "Consequence Predictor batch {} of {} · {}/{} candidate alleles",
                                     chunk_index + 1,
                                     chunk_count,
                                     processed,
@@ -252,7 +252,7 @@ where
                                     (processed * 24 / total) as u8
                                 },
                                 "consequences",
-                                format!("Variant Consequences · {processed}/{total} alleles"),
+                                format!("Consequence Predictor · {processed}/{total} alleles"),
                             )
                             .map_err(crate::DgwError::Tool)
                         },
@@ -449,7 +449,7 @@ fn validate_evidence_contract(request: &OptimizerRequest) -> std::result::Result
         .any(|device_id| device_id == CLINVAR_DEVICE_ID);
     if request.mode == OptimizerMode::Saturation && (!has_consequence || !has_clinvar) {
         return Err(
-            "Saturation requires applied, active Variant Consequences and ClinVar devices".into(),
+            "Saturation requires applied, active Consequence Predictor and ClinVar devices".into(),
         );
     }
     if request.mode == OptimizerMode::Conservative
@@ -458,7 +458,7 @@ fn validate_evidence_contract(request: &OptimizerRequest) -> std::result::Result
         && !has_consequence
     {
         return Err(
-            "Weighted annotation burden requires applied, active Variant Consequences".into(),
+            "Weighted annotation burden requires applied, active Consequence Predictor".into(),
         );
     }
     if request.mode == OptimizerMode::Conservative
@@ -577,7 +577,7 @@ fn saturation_inputs(
         }) {
             let consequence_signal = consequence.get(candidate).ok_or_else(|| {
                 format!(
-                    "Variant Consequences omitted candidate {}",
+                    "Consequence Predictor omitted candidate {}",
                     candidate.display()
                 )
             })?;
@@ -591,7 +591,7 @@ fn saturation_inputs(
             evaluated.push(SaturationAlleleInput {
                 source_variant: source.clone(),
                 candidate_variant: candidate.clone(),
-                consequence: evidence_from_batch_signal("Variant Consequences", consequence_signal),
+                consequence: evidence_from_batch_signal("Consequence Predictor", consequence_signal),
                 clinvar: clinvar_evidence.clone(),
                 evidence_statuses: BTreeMap::from([
                     (
@@ -624,8 +624,8 @@ fn conservative_inputs(
             variant: key.clone(),
             consequence: consequence
                 .get(key)
-                .map(|signal| evidence_from_batch_signal("Variant Consequences", signal))
-                .unwrap_or_else(|| not_computed_evidence("Variant Consequences")),
+                .map(|signal| evidence_from_batch_signal("Consequence Predictor", signal))
+                .unwrap_or_else(|| not_computed_evidence("Consequence Predictor")),
             clinvar: clinvar
                 .get(key)
                 .map(|signal| {

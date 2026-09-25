@@ -27,7 +27,7 @@ describe("source comparison", () => {
     expect(comparisonRows([source], { ...lane, variants: [] })).toEqual([]);
   });
   it("separates missing, identical and different predictions", () => {
-    const result: EvidenceResult = { source: "Variant Consequences", status: "found", records: [{ featureId: "t1", impact: "HIGH", effect: "stop_gained" }] };
+    const result: EvidenceResult = { source: "Consequence Predictor", status: "found", records: [{ featureId: "t1", impact: "HIGH", effect: "stop_gained" }] };
     expect(predictionDifference(result, result)).toBe("same");
     expect(predictionDifference(result, undefined)).toBe("missing");
     expect(predictionDifference(result, { ...result, records: [] })).toBe("missing");

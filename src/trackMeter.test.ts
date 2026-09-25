@@ -4,7 +4,7 @@ import { consequenceImpactSignal } from "./trackMeter";
 
 function evidence(status: EvidenceResult["status"], impacts: string[] = []): EvidenceResult {
   return {
-    source: "Variant Consequences",
+    source: "Consequence Predictor",
     status,
     records: impacts.map((impact) => ({ impact }))
   };

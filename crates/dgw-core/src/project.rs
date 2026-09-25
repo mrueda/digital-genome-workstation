@@ -984,7 +984,7 @@ impl Project {
         Ok(summary)
     }
 
-    fn root_variants(&self) -> Result<Vec<RootVariant>> {
+    pub(crate) fn root_variants(&self) -> Result<Vec<RootVariant>> {
         let connection = self.connection()?;
         let mut statement =
             connection.prepare("SELECT payload FROM root_variants ORDER BY stable_key")?;
@@ -6507,6 +6507,51 @@ mod tests {
     }
 
     #[test]
+    fn selection_prediction_includes_unchanged_loci_and_pages_only_current_alleles() {
+        let (_temporary, project) = test_project();
+        let track = project.active_track().unwrap();
+        let roots: Vec<_> = (1..=205).map(|pos| observed_variant(if pos == 205 { "2" } else { "1" }, pos)).collect();
+        insert_root_variants(&project, &roots);
+        let ids = vec![crate::CONSEQUENCE_DEVICE_ID.to_owned()];
+        let revision = project.track_comparison_revision(&track.id).unwrap();
+        let selection = VariantSelection::AllTrack { track_id: track.id.clone(), exclusions: vec![roots[0].key.clone()] };
+        let id = Uuid::new_v4().to_string();
+        let report = crate::prediction_comparison::run_selection(&project, &crate::EvaluationService::new(), &track.id, &id, &revision, &ids, Some(&selection), true, |_, _| Ok(())).unwrap();
+        assert_eq!(report.total, 204);
+        assert_eq!(report.counts.get("missing"), Some(&204)); // No predictor resources in the fixture, never a benign result.
+        let now = Utc::now();
+        project.save_background_job(&BackgroundJob { id: id.clone(), operation: "selectionPrediction".into(), device_id: crate::CONSEQUENCE_DEVICE_ID.into(), track_id: track.id.clone(), status: BackgroundJobStatus::Completed, progress: 100, stage: "completed".into(), message: "done".into(), worker_threads: 1, request: serde_json::json!({"selection": selection}), result: Some(serde_json::to_value(report).unwrap()), error: None, created_at: now, updated_at: now }).unwrap();
+        let first = crate::prediction_comparison::page(&project, &id, &ids, None, 0).unwrap();
+        assert_eq!(first.rows.len(), 200);
+        assert!(first.rows.iter().all(|row| row.locus.source.is_empty() && row.locus.current.len() == 1 && !row.locus.changed && row.evidence.len() == 1));
+        let last = crate::prediction_comparison::page(&project, &id, &ids, None, 200).unwrap();
+        assert_eq!(last.rows.len(), 4);
+        assert_eq!(last.rows.last().unwrap().locus.contig, "2");
+        // Synthetic saved predictions exercise server-side filters beyond page one.
+        let db = Connection::open(crate::prediction_comparison::report_path(&project, &id).unwrap()).unwrap();
+        let mut row = first.rows.into_iter().next().unwrap();
+        for value in row.evidence.values_mut() {
+            value.status = crate::EvidenceStatus::Found;
+            value.records = vec![BTreeMap::from([("effect".into(), "stop_gained".into()), ("impact".into(), "HIGH".into())]), BTreeMap::from([("effect".into(), "synonymous".into()), ("impact".into(), "LOW".into())])];
+        }
+        db.execute("UPDATE results SET payload=?1 WHERE ordinal=0", [serde_json::to_string(&row).unwrap()]).unwrap();
+        let mut row = last.rows.into_iter().last().unwrap();
+        for value in row.evidence.values_mut() {
+            value.status = crate::EvidenceStatus::Found;
+            value.records = vec![BTreeMap::from([("effect".into(), "missense&splice_region".into()), ("impact".into(), "MODERATE".into())])];
+        }
+        db.execute("UPDATE results SET payload=?1 WHERE ordinal=203", [serde_json::to_string(&row).unwrap()]).unwrap();
+        let filtered = crate::prediction_comparison::filtered_page(&project, &id, &ids, None, 0, &["splice_region".into()], &["MODERATE".into()]).unwrap();
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.rows[0].locus.contig, "2");
+        assert!(filtered.consequences.contains(&"stop_gained".to_string()));
+        assert_eq!(crate::prediction_comparison::filtered_page(&project, &id, &ids, None, 0, &["synonymous".into()], &["HIGH".into()]).unwrap().total, 0);
+        assert_eq!(crate::prediction_comparison::filtered_page(&project, &id, &ids, None, 0, &[], &["HIGH".into()]).unwrap().total, 1);
+        assert_eq!(crate::prediction_comparison::filtered_page(&project, &id, &ids, None, 0, &["stop_gained".into(), "splice_region".into()], &["HIGH".into(), "MODERATE".into()]).unwrap().total, 2);
+        assert!(crate::prediction_comparison::run_selection(&project, &crate::EvaluationService::new(), &track.id, &Uuid::new_v4().to_string(), &revision, &ids, Some(&selection), true, |_, _| Err(DgwError::Tool("cancelled".into()))).is_err());
+    }
+
+    #[test]
     fn changed_comparison_index_finds_changes_beyond_the_first_page_and_rejects_stale_state() {
         let (_temporary, project) = test_project();
         let track = project.active_track().unwrap();
@@ -7591,7 +7636,7 @@ mod tests {
             variant: roots[0].key.clone(),
             cache_key: "fixture-evaluation".into(),
             consequence: EvidenceResult {
-                source: "Variant Consequences".into(),
+                source: "Consequence Predictor".into(),
                 status: EvidenceStatus::NoExactMatch,
                 records: Vec::new(),
                 message: None,

@@ -1434,7 +1434,7 @@ mod tests {
         impact: Option<&str>,
     ) -> SaturationAlleleInput {
         let consequence = EvidenceResult {
-            source: "Variant Consequences".into(),
+            source: "Consequence Predictor".into(),
             status: if impact.is_some() {
                 EvidenceStatus::Found
             } else {
@@ -1480,7 +1480,7 @@ mod tests {
         OptimizerAlleleEvidenceInput {
             variant: variant.clone(),
             consequence: EvidenceResult {
-                source: "Variant Consequences".into(),
+                source: "Consequence Predictor".into(),
                 status: if impact.is_some() {
                     EvidenceStatus::Found
                 } else {

@@ -21,7 +21,7 @@ DGW adds:
 - `DGW_SOURCE_KEY` — original normalized allele, when applicable; and
 - project, internal state, source, resource-bundle, and provenance identifiers in meta headers.
 
-DGW does not insert Variant Consequences, ClinVar, or COSMIC results into the VCF. Those records are resource-versioned evidence, not properties of the genotype file.
+DGW does not insert Consequence Predictor, ClinVar, or COSMIC results into the VCF. Those records are resource-versioned evidence, not properties of the genotype file.
 
 A sibling `<output>.evidence.json.gz` contains a snapshot of the project's cached live exact-allele evidence at export time. It records device and resource identities, exact allele keys, status, evaluation time, and coverage. An entry need not be active in the exported track, and absence means “not cached,” not a negative result.
 

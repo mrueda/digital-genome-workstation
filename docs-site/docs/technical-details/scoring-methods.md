@@ -14,7 +14,7 @@ The input VCF is normalized during import. Imported INFO annotations are ignored
 
 Each allele is evaluated separately. DGW does not combine nearby edits into one transcript or protein sequence for scoring.
 
-## Variant Consequences
+## Consequence Predictor
 
 DGW runs `bcftools csq --local-csq` against the project's reference FASTA and assembly-matched Ensembl GFF3. `--local-csq` evaluates each VCF record independently. The engine returns one or more `BCSQ` records with these fields:
 
@@ -127,7 +127,7 @@ $$
 \overline{\Delta I} = \frac{\Delta I_{\mathrm{track}}}{|M|}
 $$
 
-These values are shown only when the required Variant Consequences evaluations are complete. Bypassed mutation blocks and a bypassed Variant Consequences device do not contribute.
+These values are shown only when the required Consequence Predictor evaluations are complete. Bypassed mutation blocks and a bypassed Consequence Predictor device do not contribute.
 
 The optimizer score and Track Monitor use the same consequence category mapping but different scales. Genome Optimizer applies $w_I$; Track Monitor reports the unweighted source-relative change.
 
@@ -135,7 +135,7 @@ The optimizer score and Track Monitor use the same consequence category mapping 
 
 The following fields do not currently change the Saturation score:
 
-- Variant Consequences effect, gene, transcript, biotype, and change descriptions;
+- Consequence Predictor effect, gene, transcript, biotype, and change descriptions;
 - COSMIC records;
 - ClinVar classifications, except for the fixed exclusion described above;
 - INFO annotations from the imported VCF.

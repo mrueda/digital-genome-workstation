@@ -479,8 +479,8 @@ pub fn canonical_device_id(device_id: &str) -> &str {
 pub fn consequence_device_manifest() -> DeviceManifest {
     built_in_manifest(
         CONSEQUENCE_DEVICE_ID,
-        "Variant Consequences",
-        "Predict transcript consequences for one normalized allele.",
+        "Consequence Predictor",
+        "Predicts allele effects using bcftools csq.",
         DeviceKind::Analysis,
         ALLELE_INPUT_SCHEMA_ID,
         ANNOTATION_OUTPUT_SCHEMA_ID,

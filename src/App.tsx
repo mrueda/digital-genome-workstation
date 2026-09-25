@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, FileInput, Database, Dna, FlaskConical, ChevronDown } from "lucide-react";
+import { DeviceSelectionScope } from "./DeviceSelectionScope";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
@@ -142,7 +143,7 @@ const optimizerObjectives: OptimizerObjective[] = [
 ];
 
 const optimizerWeights: OptimizerWeightControl[] = [
-  { id: "impact", label: "Impact", sourceDeviceId: DEVICE_IDS.consequence, sourceLabel: "Variant Consequences", description: "Weight of the live transcript-consequence impact result for each exact allele.", min: 0, max: 100, step: 5 }
+  { id: "impact", label: "Impact", sourceDeviceId: DEVICE_IDS.consequence, sourceLabel: "Consequence Predictor", description: "Weight of the live transcript-consequence impact result for each exact allele.", min: 0, max: 100, step: 5 }
 ];
 
 function alleleId(variant: EffectiveVariant) {
@@ -299,7 +300,7 @@ function sameVariant(left: EffectiveVariant["key"], right: EffectiveVariant["key
 function evidenceSummary(evidence?: EvidenceResult) {
   if (!evidence) return "Not run for this allele";
   if (evidence.status === "found") {
-    if (evidence.source.startsWith("Variant Consequences")) {
+    if (evidence.source.startsWith("Consequence Predictor")) {
       const hasTranscriptFeature = evidence.records.some((record) => record.effect !== "no_transcript_feature");
       if (!hasTranscriptFeature) return "No overlapping transcript feature";
       return `${evidence.records.length.toLocaleString()} ${evidence.records.length === 1 ? "transcript consequence" : "transcript consequences"}`;
@@ -1673,7 +1674,7 @@ function Workstation({
         const kind = visualization
           ? "visualization"
           : manifest.id === DEVICE_IDS.consequence
-          ? "annotation"
+          ? "prediction"
             : "evidence";
         const running = runningDeviceId === manifest.id || runningDeviceId === "all";
         const scoringInput = optimizerWeights.find((input) => input.sourceDeviceId === manifest.id)
@@ -1689,12 +1690,14 @@ function Workstation({
           status: visualization ? "ready" : running ? "running" : evidence?.status ?? "notComputed",
           resource,
           version,
+          evidence: visualization ? undefined : evidence,
+          alleleLabel: selected ? `${selected.key.contig}:${selected.key.position.toLocaleString()} · ${selected.key.reference} → ${selected.key.alternate}` : undefined,
           result: visualization
             ? `${visibleVariantCount.toLocaleString()} visible ${visibleVariantCount === 1 ? "allele" : "alleles"} · ${activeEditCount.toLocaleString()} active ${activeEditCount === 1 ? "edit" : "edits"}`
             : evidenceSummary(evidence),
           limitation: manifest.scientificLimitations[0],
           canRun: visualization || Boolean(selected),
-          runLabel: visualization ? "Open Track Compare" : evidence ? "Refresh" : "Run now",
+          runLabel: visualization ? "Open Track Compare" : manifest.id === DEVICE_IDS.consequence ? evidence ? "Refresh prediction" : "Predict allele" : evidence ? "Refresh" : "Run now",
           scoreInclusion: visualization || activeTrack.readOnly ? undefined : inputState === "excluded" ? "excluded" : "included"
         } satisfies RackDeviceView;
       });
@@ -1832,7 +1835,7 @@ function Workstation({
       }, { higher: 0, lower: 0, unchanged: 0 })
       : undefined;
     const labels = new Map([
-      [DEVICE_IDS.consequence, "Variant Consequences"],
+      [DEVICE_IDS.consequence, "Consequence Predictor"],
       [DEVICE_IDS.clinvar, "ClinVar"],
       [DEVICE_IDS.cosmic, "COSMIC"]
     ]);
@@ -2519,7 +2522,7 @@ function Workstation({
             : DEVICE_IDS.consequence);
           setHiddenTrackIds(stored.hiddenTrackIds ?? []);
           setAppliedDevicesByTrack(canonicalDeviceMap(stored.appliedDevicesByTrack));
-          setBypassedDevicesByTrack(canonicalDeviceMap(stored.bypassedDevicesByTrack));
+          setBypassedDevicesByTrack(Object.fromEntries(Object.entries(canonicalDeviceMap(stored.bypassedDevicesByTrack)).map(([id, devices]) => [id, devices.filter(device => device === DEVICE_IDS.clinvar || device === DEVICE_IDS.cosmic)])));
           setOptimizers(Object.fromEntries(Object.entries(stored.optimizers ?? {}).map(([trackId, device]) => [trackId, resumableOptimizer(device)])));
           setRandomizers(Object.fromEntries(Object.entries(stored.randomizers ?? {}).map(([trackId, device]) => [trackId, resumableRandomizer(device)])));
           setMorphs(Object.fromEntries(Object.entries(stored.morphs ?? {}).map(([trackId, device]) => [trackId, resumableMorph(device)])));
@@ -3509,7 +3512,7 @@ function Workstation({
       return;
     }
     if (device.settings.mode === "saturation" && !activeEvidenceDeviceIds.includes(DEVICE_IDS.consequence)) {
-      setNotice("Saturation requires applied, active Variant Consequences.");
+      setNotice("Saturation requires applied, active Consequence Predictor.");
       return;
     }
     if ((device.settings.mode === "saturation" || device.settings.direction === "maximize")
@@ -4446,7 +4449,7 @@ function Workstation({
   }
 
   function toggleRackDevice(trackId: string, deviceId: string, bypassed: boolean) {
-    if (!alleleDeviceIds.some(id => id === deviceId)) return;
+    if (deviceId !== DEVICE_IDS.clinvar && deviceId !== DEVICE_IDS.cosmic) return;
     setBypassedDevicesByTrack((current) => {
       const existing = current[trackId] ?? [];
       return {
@@ -4462,7 +4465,7 @@ function Workstation({
     const scoringInput = optimizerWeights.find((input) => input.sourceDeviceId === deviceId);
     const contributesToObjective = Boolean(scoringInput && objective?.includedWeightIds.includes(scoringInput.id));
     if (contributesToObjective) invalidateOptimizerScoringInputs(trackId, `${name} is ${bypassed ? "bypassed" : "active"}. Generate again to use the updated effective scoring inputs.`);
-    setNotice(`${bypassed ? "Bypassed" : "Enabled"} ${name}; genome edits are unchanged.${deviceId === DEVICE_IDS.consequence && bypassed ? " Track Monitor's impact score is unavailable while this device is bypassed." : bypassed ? " This evidence is excluded from evaluation." : " This evidence is available for evaluation."}`);
+    setNotice(`${bypassed ? "Bypassed" : "Enabled"} ${name}; genome edits are unchanged.${bypassed ? " This evidence is excluded from evaluation." : " This evidence is available for evaluation."}`);
   }
 
   async function renderVcf() {
@@ -4750,7 +4753,16 @@ function Workstation({
             allAllelesSelected={allTrackSelectionActive}
             objectives={optimizerObjectives}
             weightControls={optimizerWeights}
-            rackDevices={rackDevices}
+            rackDevices={rackDevices.map(device => device.id !== DEVICE_IDS.consequence ? device : {
+              ...device, status: "ready" as const, canRun: true, runLabel: "Open predictions",
+              result: `${comparisonSelectedCount.toLocaleString()} alleles selected`,
+              renderPredictions: close => <TrackPredictionComparison currentOnly key={`predict:${consequenceViewKey}`} projectPath={projectPath} trackId={activeTrack.id}
+                savedView={consequenceViews.current.get(`predict:${consequenceViewKey}`)} onRemember={state => { consequenceViews.current.set(`predict:${consequenceViewKey}`, state); if (consequenceViews.current.size > 20) consequenceViews.current.delete(consequenceViews.current.keys().next().value!); }}
+                selection={comparisonSelection} selectedCount={comparisonSelectedCount}
+                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} deviceIds={[DEVICE_IDS.consequence]}
+                workerThreads={settings.workerThreads === "auto" ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1) : settings.workerThreads}
+                onBack={close} onFocus={locus => { close(); focusComparisonLocus(locus, true); }} />
+            })}
             appliedDeviceIds={activeAppliedDevices}
             variantDensity={viewportDensity}
             trackMeter={trackMeter}
@@ -4764,11 +4776,7 @@ function Workstation({
             busy={busy}
             detailPanelLabel="Allele editor"
             renderComparison={(view, close) => <div className="dgw-comparison-pane">
-              <div className="comparison-actions" aria-label="Comparison selection">
-                <b>{comparisonSelectedCount.toLocaleString()} alleles selected</b>
-                <span>{comparisonSelection.kind === "allTrack" ? "All chromosomes" : comparisonSelection.kind === "interval" ? "Selected interval" : "Explicit selection"} · shared by all three views</span>
-                <button onClick={close}>{comparisonSelectedCount ? "Change selection in Track view" : "Select variants in Track view"}</button>
-              </div>
+              <DeviceSelectionScope label="Comparison selection" track={activeTrack.name} count={comparisonSelectedCount} scope={comparisonSelection.kind === "allTrack" ? "All chromosomes" : "Selected positions"} onChange={close} />
               {activeTrack.readOnly && <p className="comparison-source-notice" role="status">This is the protected source track. Select a candidate track above to compare its changes with the source.</p>}
               {!comparisonSelectedCount ? <p>Select variants in Track view to compare them. Browsing or zooming here does not change that selection.</p> : view === "map" ? <GenomeDifferenceMap key={consequenceViewKey} projectPath={projectPath} trackId={activeTrack.id} selection={comparisonSelection}
                 revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} region={context}

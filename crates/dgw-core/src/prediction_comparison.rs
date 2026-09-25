@@ -135,25 +135,51 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
     expected_revision: &str,
     ids: &[String],
     selection: Option<&crate::VariantSelection>,
-    mut progress: F,
+    progress: F,
+) -> Result<PredictionComparisonReport> {
+    run_selection(project, service, track_id, job_id, expected_revision, ids, selection, false, progress)
+}
+
+/// The same cached predictor and paged artifact, optionally inspecting only the current track.
+pub fn run_selection<F: FnMut(u8, &str) -> Result<()>>(
+    project: &Project, service: &EvaluationService, track_id: &str, job_id: &str,
+    expected_revision: &str, ids: &[String], selection: Option<&crate::VariantSelection>,
+    current_only: bool, mut progress: F,
 ) -> Result<PredictionComparisonReport> {
     if !ids.iter().any(|id| id == CONSEQUENCE_DEVICE_ID) {
         return Err(DgwError::Project(
-            "Activate Variant Consequences to compare predictions".into(),
+            "Activate Consequence Predictor to compare predictions".into(),
         ));
     }
-    progress(5, "Indexing changed loci")?;
-    let mut index = project.build_track_comparison_index(track_id)?;
-    if let Some(selection) = selection {
-        filter_selected_loci(&mut index, selection)?;
-    }
-    if index.revision != expected_revision {
+    progress(5, "Resolving selected loci")?;
+    let revision = project.track_comparison_revision(track_id)?;
+    if revision != expected_revision {
         return Err(DgwError::Project(
             "Track changed before comparison started".into(),
         ));
     }
     let resource_fingerprints = resources(project, ids)?;
     let mut rows = Vec::new();
+    if current_only {
+        let selection = selection.ok_or_else(|| DgwError::Project("Selection is required".into()))?;
+        let matches = selected_locus_filter(track_id, selection)?;
+        let mut loci = BTreeMap::new();
+        for variant in project.root_variants()? {
+            if matches(&variant.key) {
+                loci.entry((variant.key.contig.clone(), variant.key.position, variant.key.reference.clone()))
+                    .or_insert_with(|| TrackComparisonLocus { contig: variant.key.contig.clone(), position: variant.key.position, reference: variant.key.reference.clone(), source: vec![], current: vec![], changed: false });
+            }
+        }
+        progress(10, "Reading current track alleles")?;
+        for variant in project.effective_variants_for_track(track_id)? {
+            if let Some(row) = loci.get_mut(&(variant.key.contig.clone(), variant.key.position, variant.key.reference.clone())) {
+                row.current.push(variant);
+            }
+        }
+        rows = loci.into_values().collect();
+    } else {
+    let mut index = project.build_track_comparison_index(track_id)?;
+    if let Some(selection) = selection { filter_selected_loci(&mut index, selection)?; }
     for offset in (0..index.changed_keys.len()).step_by(200) {
         progress(10, "Reconstructing source and current alleles")?;
         rows.extend(
@@ -161,6 +187,7 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
                 .changed_comparison_page(&index, offset as u64, 200)?
                 .rows,
         );
+    }
     }
     let keys: Vec<_> = rows
         .iter()
@@ -171,7 +198,7 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
         .collect();
     progress(
         20,
-        "Comparing predictions: loading cached evidence and batching new alleles",
+        "Loading cached predictions and batching new alleles",
     )?;
     let evidence = service.comparison_consequences(project, &keys)?;
     progress(85, "Writing comparison results")?;
@@ -185,7 +212,11 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
     let tx = db.transaction()?;
     let mut counts = BTreeMap::new();
     for (ordinal, row) in rows.iter().enumerate() {
-        let outcome = classify(row, &evidence);
+        let outcome = if current_only {
+            if row.current.is_empty() { "reference" }
+            else if row.current.iter().all(|v| evidence.get(&v.key).is_some_and(|e| e.status == EvidenceStatus::Found)) { "predicted" }
+            else { "missing" }
+        } else { classify(row, &evidence) };
         *counts.entry(outcome.to_owned()).or_insert(0) += 1;
         let snapshot = PredictionRow {
             outcome: outcome.into(),
@@ -208,7 +239,7 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
     }
     tx.commit()?;
     progress(95, "Checking track and resource revision")?;
-    if project.track_comparison_revision(track_id)? != index.revision
+    if project.track_comparison_revision(track_id)? != revision
         || resources(project, ids)? != resource_fingerprints
     {
         return Err(DgwError::Project(
@@ -223,7 +254,7 @@ pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
         ))
     })?;
     Ok(PredictionComparisonReport {
-        revision: index.revision,
+        revision,
         device_ids: ids.to_vec(),
         resource_fingerprints,
         counts,
@@ -304,6 +335,8 @@ pub struct PredictionPage {
     pub stale: bool,
     pub total: u64,
     pub rows: Vec<PredictionRow>,
+    pub consequences: Vec<String>,
+    pub impacts: Vec<String>,
 }
 #[derive(Serialize, Deserialize)]
 pub struct PredictionRow {
@@ -319,9 +352,16 @@ pub fn page(
     outcome: Option<&str>,
     offset: u64,
 ) -> Result<PredictionPage> {
+    filtered_page(project, job_id, ids, outcome, offset, &[], &[])
+}
+
+pub fn filtered_page(
+    project: &Project, job_id: &str, ids: &[String], outcome: Option<&str>, offset: u64,
+    consequences: &[String], impacts: &[String],
+) -> Result<PredictionPage> {
     let (track_id, result) = match project.background_job(job_id) {
         Ok(job) => {
-            if job.operation != "trackPredictionComparison"
+            if !matches!(job.operation.as_str(), "trackPredictionComparison" | "selectionPrediction")
                 || job.status != crate::BackgroundJobStatus::Completed
             {
                 return Err(DgwError::Project("comparison is not complete".into()));
@@ -335,7 +375,7 @@ pub fn page(
         Err(_) => {
             // Clearing routine Jobs history must not invalidate an open saved report.
             let run = project.device_run(job_id)?;
-            if run.operation != "trackPredictionComparison"
+            if !matches!(run.operation.as_str(), "trackPredictionComparison" | "selectionPrediction")
                 || run.status != crate::DeviceRunStatus::Completed
             {
                 return Err(DgwError::Project("comparison is not complete".into()));
@@ -352,19 +392,24 @@ pub fn page(
             stale: true,
             total: 0,
             rows: vec![],
+            consequences: vec![],
+            impacts: vec![],
         });
     }
     let db = rusqlite::Connection::open_with_flags(
         report_path(project, job_id)?,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
+    let consequence = serde_json::to_string(consequences)?;
+    let impact = serde_json::to_string(impacts)?;
+    let record_match = "(?1 IS NULL OR outcome = ?1) AND ((json_array_length(?3) = 0 AND json_array_length(?4) = 0) OR EXISTS (SELECT 1 FROM json_each(json_extract(results.payload, '$.evidence')) AS e, json_each(json_extract(e.value, '$.records')) AS r WHERE (json_array_length(?3) = 0 OR EXISTS (SELECT 1 FROM json_each(?3) AS c WHERE instr('&' || json_extract(r.value, '$.effect') || '&', '&' || c.value || '&') > 0)) AND (json_array_length(?4) = 0 OR json_extract(r.value, '$.impact') IN (SELECT value FROM json_each(?4)))))";
     let total = db.query_row(
-        "SELECT COUNT(*) FROM results WHERE (?1 IS NULL OR outcome = ?1)",
-        [outcome],
+        &format!("SELECT COUNT(*) FROM results WHERE {record_match}"),
+        rusqlite::params![outcome, offset, consequence, impact],
         |row| row.get(0),
     )?;
-    let mut statement = db.prepare("SELECT outcome, payload FROM results WHERE (?1 IS NULL OR outcome = ?1) ORDER BY ordinal LIMIT 200 OFFSET ?2")?;
-    let records = statement.query_map(rusqlite::params![outcome, offset], |row| {
+    let mut statement = db.prepare(&format!("SELECT outcome, payload FROM results WHERE {record_match} ORDER BY ordinal LIMIT 200 OFFSET ?2"))?;
+    let records = statement.query_map(rusqlite::params![outcome, offset, consequence, impact], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
     let mut rows = Vec::new();
@@ -372,10 +417,20 @@ pub fn page(
         let (_, payload) = record?;
         rows.push(serde_json::from_str(&payload)?);
     }
+    let mut facets = db.prepare("SELECT DISTINCT json_extract(r.value, '$.effect'), json_extract(r.value, '$.impact') FROM results, json_each(json_extract(results.payload, '$.evidence')) AS e, json_each(json_extract(e.value, '$.records')) AS r")?;
+    let pairs = facets.query_map([], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)))?;
+    let (mut consequences, mut impacts) = (BTreeSet::new(), BTreeSet::new());
+    for pair in pairs {
+        let (effect, impact) = pair?;
+        if let Some(effect) = effect { consequences.extend(effect.split('&').filter(|s| !s.is_empty()).map(str::to_owned)); }
+        if let Some(impact) = impact { impacts.insert(impact); }
+    }
     Ok(PredictionPage {
         stale: false,
         total,
         rows,
+        consequences: consequences.into_iter().collect(),
+        impacts: impacts.into_iter().collect(),
     })
 }
 
@@ -472,7 +527,7 @@ mod tests {
     }
     fn result(effect: &str) -> EvidenceResult {
         EvidenceResult {
-            source: "Variant Consequences".into(),
+            source: "Consequence Predictor".into(),
             status: EvidenceStatus::Found,
             records: vec![BTreeMap::from([
                 ("effect".into(), effect.into()),

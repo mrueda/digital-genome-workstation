@@ -197,7 +197,7 @@ export async function installTauriShellMock(page: Page) {
     const deviceCatalog = [
       ["org.dgw.builtin.mutation-generator", "Mutation Generator", "editing", "Generate controlled variant changes."],
       ["org.dgw.builtin.genome-morph", "Genome Morph", "editing", "Move one track toward another track."],
-      ["org.dgw.builtin.variant-consequences", "Variant Consequences", "evidence", "Predict transcript consequences with bcftools csq."],
+      ["org.dgw.builtin.variant-consequences", "Consequence Predictor", "analysis", "Predicts allele effects using bcftools csq."],
       ["org.dgw.builtin.clinvar", "ClinVar", "evidence", "Look up exact ClinVar records."],
       ["org.dgw.builtin.cosmic", "COSMIC", "evidence", "Look up exact COSMIC records."],
       ["org.dgw.builtin.genome-optimizer", "Genome Optimizer", "analysis", "Generate bounded score-directed edits."],
@@ -258,10 +258,11 @@ export async function installTauriShellMock(page: Page) {
       }
       if (commandName === "start_prediction_comparison_job") {
         stalePrediction = false;
-        predictionJob = { id: "prediction-test-job", operation: "trackPredictionComparison", deviceId: "org.dgw.builtin.variant-consequences", trackId: args.trackId, status: "queued", progress: 0, message: "Queued", stage: "queued", workerThreads: args.workerThreads, request: { deviceIds: args.deviceIds, selection: args.selection }, result: undefined, createdAt: now, updatedAt: now };
+        predictionJob = { id: "prediction-test-job", operation: args.currentOnly ? "selectionPrediction" : "trackPredictionComparison", deviceId: "org.dgw.builtin.variant-consequences", trackId: args.trackId, status: "queued", progress: 0, message: "Queued", stage: "queued", workerThreads: args.workerThreads, request: { deviceIds: args.deviceIds, selection: args.selection }, result: undefined, createdAt: now, updatedAt: now };
         return predictionJob;
       }
       if (commandName === "background_job" && args.jobId === predictionJob?.id) {
+        if (localStorage.getItem("test-hold-prediction")) return { ...predictionJob, status: "running", progress: 20, message: "Loading cached predictions and batching new alleles" };
         predictionJob = { ...predictionJob, status: "completed", progress: 100, message: "Prediction comparison ready", result: { revision: "fixture", deviceIds: [], counts: { different: 1, same: 1, missing: 1, referenceRestoration: 1 }, total: 4 } };
         return predictionJob;
       }
@@ -269,11 +270,22 @@ export async function installTauriShellMock(page: Page) {
         predictionJob = { ...predictionJob, status: "cancelled", message: "Comparison cancelled" }; return predictionJob;
       }
       if (commandName === "prediction_comparison_page") {
+        if (predictionJob?.operation === "selectionPrediction") {
+          const rows = Array.from({ length: 205 }, (_, i) => {
+            const current = { ...sourceVariants[0], key: { ...sourceVariants[0].key, position: 1000 + i } };
+            const key = current.key;
+            return { outcome: "predicted", locus: { contig: key.contig, position: key.position, reference: key.reference, source: [], current: [current], changed: false }, evidence: { [[key.assembly, key.contig, key.position, key.reference, key.alternate].join("|")]: { source: "Consequence Predictor", status: "found", records: [{ geneName: "BRAF", featureId: "TEST_TRANSCRIPT", impact: "LOW", effect: "synonymous" }] } } };
+          });
+          const consequences = (args.consequences ?? []) as string[];
+          const impacts = (args.impacts ?? []) as string[];
+          const filtered = rows.filter(row => (!args.outcome || args.outcome === row.outcome) && (!consequences.length || consequences.includes("synonymous")) && (!impacts.length || impacts.includes("LOW")));
+          return { stale: stalePrediction, total: stalePrediction ? 0 : filtered.length, rows: stalePrediction ? [] : filtered.slice(Number(args.offset), Number(args.offset) + 200), consequences: ["synonymous", "missense"], impacts: ["LOW", "MODERATE"] };
+        }
         const outcomes = ["different", "same", "missing", "referenceRestoration"];
         const rows = outcomes.map((outcome, i) => {
           const source = sourceVariants[i]; const current = { ...source, key: { ...source.key, alternate: ["A", "C", "G", "T"].find(base => base !== source.key.reference && base !== source.key.alternate)! } };
           const stable = (key: typeof source.key) => [key.assembly, key.contig, key.position, key.reference, key.alternate].join("|");
-          const evidence = { source: "Variant Consequences", status: "found", records: [{ featureId: "TEST_TRANSCRIPT", effect: "stop_gained", impact: "HIGH" }] };
+          const evidence = { source: "Consequence Predictor", status: "found", records: [{ featureId: "TEST_TRANSCRIPT", effect: "stop_gained", impact: "HIGH" }] };
           const currentEvidence = outcome === "different" ? { ...evidence, records: [{ featureId: "TEST_TRANSCRIPT", effect: "missense", impact: "MODERATE" }] } : outcome === "missing" ? { ...evidence, status: "unavailable", records: [] } : evidence;
           return { outcome, locus: { contig: source.key.contig, position: source.key.position, reference: source.key.reference, source: [source], current: outcome === "referenceRestoration" ? [] : [current], changed: true }, evidence: { [stable(source.key)]: evidence, [stable(current.key)]: currentEvidence } };
         }).filter(row => !args.outcome || row.outcome === args.outcome);
@@ -451,7 +463,7 @@ export async function installTauriShellMock(page: Page) {
       }
       if (commandName === "evaluate_device") {
         const deviceId = String(args.deviceId);
-        if (deviceId === "org.dgw.builtin.variant-consequences") return { source: "Variant Consequences", status: "found", records: [
+        if (deviceId === "org.dgw.builtin.variant-consequences") return { source: "Consequence Predictor", status: "found", records: [
           { impact: "HIGH", effect: "stop_gained", featureId: "ENST00000288602", engine: "bcftools csq 1.24" },
           { impact: "LOW", effect: "synonymous", featureId: "ENST00000479537", engine: "bcftools csq 1.24", raw: "Synthetic second transcript record" }
         ] };

@@ -637,7 +637,7 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
     }
     if bundle.consequence_annotation.is_none() {
         warnings.push(
-            "Consequence annotation GFF3 is not configured; Variant Consequences will remain unavailable."
+            "Consequence annotation GFF3 is not configured; Consequence Predictor will remain unavailable."
                 .into()
         );
     } else if let Some(resource) = &bundle.consequence_annotation {
@@ -654,7 +654,7 @@ pub fn validate_resource_bundle(bundle: &ResourceBundle) -> Result<Vec<String>> 
         }
         if !resource.path.is_file() {
             warnings.push(format!(
-                "{} consequence annotation is missing; Variant Consequences will remain unavailable",
+                "{} consequence annotation is missing; Consequence Predictor will remain unavailable",
                 resource.release
             ));
         }

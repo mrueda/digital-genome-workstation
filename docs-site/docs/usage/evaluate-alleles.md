@@ -2,13 +2,13 @@
 
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
-Evaluation always targets one exact normalized allele selected from an edit block or observed call. It does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
+Each prediction or database lookup targets an exact normalized allele. Consequence Predictor can evaluate a selection in one background run, but effects remain independent per allele. DGW does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
 
 ## Which result answers your question?
 
 | Result | Question it answers | What it does not establish |
 | --- | --- | --- |
-| Variant Consequences | What transcript effect is predicted for this exact allele? | Its clinical significance or the joint effect of nearby edits. |
+| Consequence Predictor | What transcript effect is predicted for this exact allele? | Its clinical significance or the joint effect of nearby edits. |
 | ClinVar | Does this exact allele have a record in the configured snapshot? | That an absent record means benign. |
 | COSMIC, optional | Is this exact allele in the supplied local snapshot? | Disease probability for this sample. |
 | Track Monitor | How do the track's independent-allele signals compare with its source? | A combined biological effect or whole-genome risk. |
@@ -19,11 +19,21 @@ Click a variant mark or edit block, then read the Evidence Inspector. Use the Tr
 
 ## Run the applied evidence devices
 
-In the Device Browser, Variant Consequences, ClinVar, and COSMIC are all **Evidence** devices: they report annotations, predictions, classifications, or observations for one allele. DGW Starter applies them to a new track's Rack by default, between Mutation Generator and Genome Optimizer. Their code is separate from the configured models and database snapshots in the resource pack.
+In the Device Browser, Consequence Predictor belongs to **Analyze**: it computes transcript effects using bcftools csq. ClinVar and COSMIC belong to **Evidence**: they retrieve submitted interpretations and reported variant records. Only those database devices have Bypass. DGW Starter applies all three. Their code is separate from the models and database snapshots in the resource pack.
+
+## Predict the selection
+
+Select positions in Track view, open Consequence Predictor, then choose **Predict selection**. The same selection controls work here and in Track Compare, including all chromosomes. **Change selection** returns to Track view.
+
+The predictor evaluates current ALTs at every selected locus, including unchanged variants on the source track. It does not require edits or compare against Source. A selected multiallelic locus includes all its current ALTs; a locus restored to REF is listed as having no current ALT, not as benign.
+
+Results are saved by a background job and displayed in pages of at most 200 loci. Position, REF/ALT, gene, consequences and impact classes appear in the table; **Transcripts** opens the detailed records inline. A single-locus result opens its details automatically. Multiple impact classes refer to different transcript/allele records, not a combined effect. The report is marked outdated if track or resource inputs change. Cancel is checked between stages, not inside a running bcftools process.
 
 With DGW Starter, the selected track's Rack initially shows the complete seven-device workflow, including the read-only Variant Map after Genome Optimizer. A missing optional resource leaves its Evidence card unavailable and inert; the other cards, visualization, and genome editing continue to work. Selecting an allele automatically runs the applied, non-bypassed Evidence cards after a short debounce. Stable cached results appear first and DGW requests only missing device results. **Refresh active Evidence devices** and each card's manual action remain available. Bypassing an Evidence card hides and excludes its result for that track without changing any allele or edit block. Applied-chain and card-bypass choices persist in the `.dgw` workstation session.
 
 ## Consequence layer
+
+Use the **Consequence** and **Impact** chips above the prediction table separately or together. You can select several labels in each group: any selected consequence and any selected impact must match the same transcript record. **All** removes that group's restriction; **Clear filters** resets both groups. Filters search the complete saved report before pagination; other records at a matching locus remain available in its details. Filtering does not rerun bcftools or change the track.
 
 <figure>
   <img src={useBaseUrl('/img/dgw-evidence-inspector.png')} alt="Evidence Inspector with transcript predictions and explicit no-exact-match database results" width="360" loading="lazy" />
@@ -46,14 +56,14 @@ Each card reports one of [five explicit statuses](../reference/evidence-statuses
 Results are cached per device by normalized variant key, device version, and device-resource fingerprint. Found and exact no-match results are durable; tool or resource errors are not cached. Imported VCF annotations are neither displayed nor used. New results have their own timestamp and recorded resource versions.
 
 :::caution Per-variant interpretation
-Variant Consequences results are independent per allele. DGW v0.1 does not calculate joint transcript/protein effects for nearby edits on the same genome copy. A device may place several edit blocks on one track, but their evidence cards remain separate. Track Profiler can submit all active mutation blocks to the applied Evidence devices in one coordinated run and aggregate their coverage and source-relative signals; it does not change the scientific scope of the underlying allele requests.
+Consequence Predictor results are independent per allele. DGW v0.1 does not calculate joint transcript/protein effects for nearby edits on the same genome copy. A device may place several edit blocks on one track, but their evidence cards remain separate. Track Profiler can submit all active mutation blocks to the applied Evidence devices in one coordinated run and aggregate their coverage and source-relative signals; it does not change the scientific scope of the underlying allele requests.
 
 For the exact fields, transcript rule, numerical mapping, and formulas, see [Scoring and Evidence Methods](../technical-details/scoring-methods.md).
 :::
 
 ## Optimizer scores are not live evidence
 
-The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Variant Consequences for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provides context and never reduces the score through absence.
+The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Consequence Predictor for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provides context and never reduces the score through absence.
 
 REF is the registered reference allele, not a benign or healthy classification. Likewise, Minimize and Maximize mean lower or higher values of the displayed proxy score only.
 

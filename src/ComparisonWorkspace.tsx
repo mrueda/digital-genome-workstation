@@ -61,7 +61,7 @@ export function ComparisonWorkspace({ rows, trackName, scope, revision, deviceId
   }
   return <section className="comparison-workspace" aria-label="Compare source and candidate">
     <header className="prediction-intro"><div><h2>Did the edits change predicted consequences?</h2><p>Source → {trackName} · {scope} · visible region, not selected alleles</p></div></header>
-    <div className="prediction-run-row"><div><b>Inspect prediction differences behind the track score</b><p>Monitor summarises the score; this view compares individual Variant Consequences predictions. Different consequences can have the same score.</p></div>
+    <div className="prediction-run-row"><div><b>Inspect prediction differences behind the track score</b><p>Monitor summarises the score; this view compares individual Consequence Predictor predictions. Different consequences can have the same score.</p></div>
       <button className="button primary" onClick={() => { void evaluate(); }} disabled={running || !changed.length || !deviceIds.includes(consequenceId)}>{running ? "Comparing consequences…" : "Compare consequences"}</button>
     </div>
     <p className="prediction-coverage">{targets.length} eligible ALT pairs · up to 200 per region comparison. REF restorations are listed separately.</p>
@@ -73,7 +73,7 @@ export function ComparisonWorkspace({ rows, trackName, scope, revision, deviceId
       return { id: row.id, label: `${key.contig}:${key.position} ${row.source?.alternate ?? "?"} → ${row.restored ? key.reference : row.current?.key.alternate ?? "?"}`, impact: impacts[row.id] };
     })} onSelect={setSelectedId} /></details>
     </>}
-    {!deviceIds.includes(consequenceId) && <p className="comparison-scope-note">Enable Variant Consequences in the rack to compare predictions. DNA differences remain available.</p>}
+    {!deviceIds.includes(consequenceId) && <p className="comparison-scope-note">Enable Consequence Predictor in the rack to compare predictions. DNA differences remain available.</p>}
     {changed.length === 0 && <p className="prediction-empty">No applied DNA changes in this region. Edit the track first, or choose All chromosomes to look elsewhere.</p>}
     {progress && !running && <>
     <div className="comparison-actions">
