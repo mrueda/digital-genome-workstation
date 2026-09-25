@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { EvidenceResult } from "./types";
+import { evidencePresentation } from "./evidencePresentation";
 
 const labels: Record<string, string> = {
  effect: "Consequence", impact: "Impact", geneName: "Gene", featureId: "Transcript",
@@ -8,15 +9,17 @@ const labels: Record<string, string> = {
  CLNSIG: "Clinical significance", CLNREVSTAT: "Review status"
 };
 
-export function EvidenceCard({ evidence }: { evidence: EvidenceResult }) {
+export function EvidenceCard({ evidence, deviceId }: { evidence: EvidenceResult; deviceId?: string }) {
+  const display = evidencePresentation(evidence, deviceId);
   const [recordIndex, setRecordIndex] = useState(0);
   const index = Math.min(recordIndex, Math.max(0, evidence.records.length - 1));
   const record = evidence.records[index];
   const transcripts = evidence.source.startsWith("Variant Consequences");
   const effects = [...new Set(evidence.records.map(row => row.effect).filter(Boolean))];
-  return <article className="evidence-card" aria-label={`${evidence.source} evidence`}>
-    <header><h4>{evidence.source}</h4><span className={`status ${evidence.status}`}>{evidence.status.replace(/[A-Z]/g, value => ` ${value.toLowerCase()}`)}</span></header>
-    {evidence.message && <p className="warning">{evidence.message}</p>}
+  return <article className="evidence-card" aria-label={`${display.title} evidence`}>
+    <header><h4>{display.title}</h4><span className={`status ${evidence.status}`}>{evidence.status === "resourceUnavailable" ? "Unavailable" : evidence.status.replace(/[A-Z]/g, value => ` ${value.toLowerCase()}`)}</span></header>
+    {display.message && <p className="warning">{display.message}</p>}
+    {display.explanation && <p className="muted">{display.explanation}</p>}
     {effects.length > 0 && <p className="evidence-summary">{effects.join(" · ")}</p>}
     {evidence.records.length > 1 && <label className="evidence-record-selector">
       {transcripts ? "Transcript consequences" : "Matched records"} · {index + 1} / {evidence.records.length}

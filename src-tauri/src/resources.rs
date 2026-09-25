@@ -360,6 +360,91 @@ pub async fn register_resource_bundle(app: tauri::AppHandle, path: PathBuf) -> R
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn add_cosmic_resource(
+    app: tauri::AppHandle,
+    descriptor: PathBuf,
+    path: PathBuf,
+    release: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ResourceInstaller>();
+        let _lock = state
+            .0
+            .try_lock()
+            .map_err(|_| "An installation is already running")?;
+        let mut settings = preferences(&app)?;
+        let descriptor = descriptor.canonicalize().map_err(|e| e.to_string())?;
+        if !settings.registered.contains(&descriptor) {
+            return Err("Choose a registered resource profile".into());
+        }
+        let mut bundle = read_bundle(&descriptor)?;
+        let release = release.trim();
+        if release.is_empty() || release.len() > 120 {
+            return Err("Enter the COSMIC release (up to 120 characters)".into());
+        }
+        let path = path.canonicalize().map_err(|e| e.to_string())?;
+        if !path.to_string_lossy().ends_with(".vcf.gz") {
+            return Err("Choose a bgzip-compressed COSMIC VCF (.vcf.gz), not a TSV export".into());
+        }
+        let index_path = ["tbi", "csi"]
+            .into_iter()
+            .map(|ext| PathBuf::from(format!("{}.{ext}", path.display())))
+            .find(|p| p.is_file())
+            .ok_or("A matching .tbi or .csi index must be beside the VCF")?;
+        let header = std::process::Command::new(&bundle.bcftools_path)
+            .args(["view", "-h"])
+            .arg(&path)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !header.status.success() {
+            return Err("Cannot read this COSMIC VCF header".into());
+        }
+        let contigs = std::process::Command::new(&bundle.tabix_path)
+            .arg("-l")
+            .arg(&path)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !contigs.status.success() || contigs.stdout.is_empty() {
+            return Err("Cannot read the COSMIC index or it contains no contigs".into());
+        }
+        let names = String::from_utf8_lossy(&contigs.stdout);
+        let style = if names.lines().any(|n| n == "chr1") {
+            "chr_prefix"
+        } else if names.lines().any(|n| n == "1") {
+            "no_chr_prefix"
+        } else {
+            return Err("COSMIC index must contain human chromosome 1 (1 or chr1)".into());
+        };
+        bundle.cosmic = IndexedResource {
+            path,
+            index_path,
+            release: release.into(),
+            license_label: "COSMIC — separately obtained; subject to its license".into(),
+            contig_style: Some(style.into()),
+            fingerprint: None,
+        };
+        bundle.bundle_fingerprint = None;
+        let suffix = uuid::Uuid::new_v4();
+        bundle.id = format!("{}-cosmic-{suffix}", bundle.id);
+        validate_resource_bundle(&bundle).map_err(|e| e.to_string())?;
+        let folder = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("resource-profiles");
+        fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        let destination = folder.join(format!("{suffix}.json"));
+        let mut file = tempfile::NamedTempFile::new_in(&folder).map_err(|e| e.to_string())?;
+        serde_json::to_writer_pretty(&mut file, &bundle).map_err(|e| e.to_string())?;
+        file.persist(&destination).map_err(|e| e.to_string())?;
+        settings.registered.push(destination);
+        save_preferences(&app, &settings)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn safe_relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path

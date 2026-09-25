@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { EvidenceResult, VariantKey } from "./types";
 import { selectionEvidenceKey } from "./selectedAlleleEvidence";
+import { evidencePresentation } from "./evidencePresentation";
 
 type Evidence = Record<string, EvidenceResult>;
-function summary(result?: EvidenceResult): string {
+function summary(result?: EvidenceResult, deviceId?: string): string {
   if (!result) return "Not evaluated";
-  if (result.status !== "found") return result.status === "noExactMatch" ? "No exact match (unknown)" : result.message || result.status;
+  if (result.status !== "found") return result.status === "noExactMatch" ? "No exact match (unknown)" : evidencePresentation(result, deviceId).message || result.status;
   const values = [...new Set(result.records.map(row => [row.impact, row.effect, row.CLNSIG].filter(Boolean).join(" · ")).filter(Boolean))];
   return values.join(" / ") || "Matched records available";
 }
@@ -33,9 +34,9 @@ export function AlleleEvidenceComparison({ source, current, restored, deviceIds,
     <table>
       <thead><tr><th>Evidence</th><th>Source ALT <code>{source?.alternate ?? "Unknown"}</code></th><th>Current <code>{restored ? source?.reference ?? "REF" : current?.alternate ?? "Unavailable"}</code></th></tr></thead>
       <tbody>{deviceIds.map(id => <tr key={id}>
-        <th>{ready?.source[id]?.source ?? ready?.current[id]?.source ?? id.split(".").at(-1)}</th>
-        <td>{!source ? "Source allele unresolved" : !ready ? "Loading…" : summary(ready.source[id])}</td>
-        <td>{restored ? "REF restored · not scored as an ALT" : !current ? "No active ALT selected" : !ready ? "Loading…" : summary(ready.current[id])}</td>
+        <th>{ready?.source[id] || ready?.current[id] ? evidencePresentation(ready.source[id] ?? ready.current[id], id).title : id.split(".").at(-1)}</th>
+        <td>{!source ? "Source allele unresolved" : !ready ? "Loading…" : summary(ready.source[id], id)}</td>
+        <td>{restored ? "REF restored · not scored as an ALT" : !current ? "No active ALT selected" : !ready ? "Loading…" : summary(ready.current[id], id)}</td>
       </tr>)}</tbody>
     </table>
     {deviceIds.length === 0 && <p className="muted">No active Evidence devices.</p>}

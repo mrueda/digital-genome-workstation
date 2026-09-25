@@ -83,7 +83,7 @@ export const CONTEXT_HELP_TOPICS: Record<string, ContextHelpTopic> = {
   "device-rack": {
     title: "Device Rack",
     purpose: "Apply ordered Evidence, Edit, Analyze, and Visualization devices to the selected track.",
-    effect: "Reset restores a selected configurable device's factory controls; bypass removes its active contribution without deleting prior edits.",
+    effect: "Reset restores device controls without changing applied edits. Only Evidence devices have Bypass: it excludes that evidence without changing the genome. Use Undo/Redo for editing actions.",
     limitation: "An applied device is not necessarily included in every scoring objective."
   },
   "genome-optimizer": {

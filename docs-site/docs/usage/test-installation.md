@@ -29,6 +29,14 @@ On first launch, if no resources are registered, DGW opens **Step 2: Set up geno
 3. Choose an assembly and a new storage folder, then **Download and install**. To test offline installation instead, use **Other installation options → Install downloaded packages** and select the matching assembly and tools archives.
 4. Follow the progress through archive validation, extraction and registration. The assembly should become available on the landing page.
 5. Open its matching example. Select an allele and verify that Variant Consequences returns evidence. Missing optional COSMIC data should be reported as unavailable, not as a startup failure.
+
+### Add optional COSMIC data
+
+In **Settings → Resources → Optional resources · COSMIC**, choose an installed reference profile and your separately obtained COSMIC `.vcf.gz`. Its `.tbi` or `.csi` index must be beside it. Enter the release and confirm that the file matches the profile's genome assembly, then choose **Validate and add COSMIC**. TSV exports are not supported.
+
+DGW checks the VCF header and indexed contigs; this does not prove the assembly. Check the build stated by the data provider. The files remain in their original location and retain their own license terms.
+
+This creates a new reference profile, which you can select when importing a new project. Existing projects keep their recorded resources; adding COSMIC here does not update them.
 6. Duplicate a track, make an edit, compare it, save the project and close the application.
 7. Reopen the installed application and saved project. Confirm the track and edit remain, then export a VCF to a new destination.
 

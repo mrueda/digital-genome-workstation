@@ -779,35 +779,68 @@ async fn track_comparison_page(
     offset: u64,
     limit: Option<u32>,
     changed_only: Option<bool>,
+    search: Option<String>,
+    selection: dgw_core::VariantSelection,
 ) -> Result<TrackComparisonPage, String> {
     let index_cache = Arc::clone(&state.comparison_index);
     tauri::async_runtime::spawn_blocking(move || {
         Project::open(&project_path)
             .and_then(|project| {
-                if changed_only.unwrap_or(false) {
-                    let revision = project.track_comparison_revision(&track_id)?;
-                    let path = std::fs::canonicalize(&project_path)?;
-                    let mut cache = index_cache.lock().map_err(|_| {
-                        dgw_core::DgwError::Project("comparison cache unavailable".into())
-                    })?;
-                    let valid = cache.as_ref().is_some_and(|(cached_path, index)| {
-                        cached_path == &path
-                            && index.track_id == track_id
-                            && index.revision == revision
-                    });
-                    if !valid {
-                        *cache = Some((path, project.build_track_comparison_index(&track_id)?));
-                    }
-                    return project.changed_comparison_page(
-                        &cache.as_ref().unwrap().1,
-                        offset,
-                        limit.unwrap_or(dgw_core::VARIANT_PAGE_SIZE),
-                    );
+                let revision = project.track_comparison_revision(&track_id)?;
+                let path = std::fs::canonicalize(&project_path)?;
+                let mut cache = index_cache.lock().map_err(|_| {
+                    dgw_core::DgwError::Project("comparison cache unavailable".into())
+                })?;
+                let valid = cache.as_ref().is_some_and(|(cached_path, index)| {
+                    cached_path == &path && index.track_id == track_id && index.revision == revision
+                });
+                if !valid {
+                    *cache = Some((path, project.build_track_comparison_index(&track_id)?));
                 }
-                project.track_comparison_page(
-                    &track_id,
+                return project.selected_comparison_page(
+                    &cache.as_ref().unwrap().1,
+                    &selection,
                     offset,
                     limit.unwrap_or(dgw_core::VARIANT_PAGE_SIZE),
+                    changed_only.unwrap_or(false),
+                    search.as_deref().unwrap_or(""),
+                );
+            })
+            .map_err(error_text)
+    })
+    .await
+    .map_err(error_text)?
+}
+
+#[tauri::command]
+async fn track_comparison_map(
+    state: tauri::State<'_, AppState>,
+    project_path: PathBuf,
+    track_id: String,
+    context: Option<FocusContext>,
+    bins: Option<u32>,
+    selection: dgw_core::VariantSelection,
+) -> Result<dgw_core::TrackComparisonMap, String> {
+    let index_cache = Arc::clone(&state.comparison_index);
+    tauri::async_runtime::spawn_blocking(move || {
+        Project::open(&project_path)
+            .and_then(|project| {
+                let revision = project.track_comparison_revision(&track_id)?;
+                let path = std::fs::canonicalize(&project_path)?;
+                let mut cache = index_cache.lock().map_err(|_| {
+                    dgw_core::DgwError::Project("comparison cache unavailable".into())
+                })?;
+                let valid = cache.as_ref().is_some_and(|(cached_path, index)| {
+                    cached_path == &path && index.track_id == track_id && index.revision == revision
+                });
+                if !valid {
+                    *cache = Some((path, project.build_track_comparison_index(&track_id)?));
+                }
+                project.track_comparison_map_selected(
+                    &cache.as_ref().unwrap().1,
+                    context.as_ref(),
+                    bins.unwrap_or(128),
+                    Some(&selection),
                 )
             })
             .map_err(error_text)
@@ -1712,6 +1745,7 @@ fn start_prediction_comparison_job(
     track_id: String,
     device_ids: Vec<String>,
     worker_threads: Option<u16>,
+    selection: VariantSelection,
 ) -> Result<BackgroundJob, String> {
     let mut ids = dgw_core::normalized_track_profile_devices(&device_ids);
     ids.sort();
@@ -1734,7 +1768,7 @@ fn start_prediction_comparison_job(
         stage: "queued".into(),
         message: "Waiting for the background compute slot".into(),
         worker_threads: worker_threads.unwrap_or(1).clamp(1, 256),
-        request: serde_json::json!({"stateId": track.head_state_id, "revision": revision, "deviceIds": ids}),
+        request: serde_json::json!({"stateId": track.head_state_id, "revision": revision, "deviceIds": ids, "selection": selection}),
         result: None,
         error: None,
         created_at: now,
@@ -1752,13 +1786,14 @@ fn start_prediction_comparison_job(
         let outcome = (|| -> Result<_, String> {
             let _guard = lock.lock().map_err(error_text)?;
             pool.run(threads, || {
-                dgw_core::prediction_comparison::run(
+                dgw_core::prediction_comparison::run_selected(
                     &project,
                     &service,
                     &track_id,
                     &job_id,
                     &revision,
                     &ids,
+                    Some(&selection),
                     |percent, message| {
                         if job_was_cancelled(&cancelled, &job_id) {
                             return Err(dgw_core::DgwError::Tool("__cancelled__".into()));
@@ -2307,6 +2342,7 @@ pub fn run() {
             resources::resource_inventory,
             resources::set_resource_directory,
             resources::register_resource_bundle,
+            resources::add_cosmic_resource,
             resources::install_resource_release,
             resources::install_downloaded_packages,
             inspect_vcf_file,
@@ -2325,6 +2361,7 @@ pub fn run() {
             track_deck,
             variant_page,
             track_comparison_page,
+            track_comparison_map,
             variant_contigs,
             variant_navigation_bins,
             variant_density,

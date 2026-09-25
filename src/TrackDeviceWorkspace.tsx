@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Trash2, Plus, RotateCcw, Power, ZoomIn, ZoomOut, LocateFixed, Ellipsis } from "lucide-react";
+import { ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Trash2, Plus, RotateCcw, Power, ZoomIn, ZoomOut, LocateFixed, Ellipsis, Maximize2 } from "lucide-react";
 import { focusViewport, panViewport, viewportSpan, zoomViewport } from "./genomeViewport";
 import { scoringInputState } from "./scoringInputs";
 import type { FocusContext, MorphOrdering, TrackMorphPreviewResult, VariantDensity } from "./types";
-import { sampleVariantMapMarks, variantMapTone, variantMapY } from "./variantMap";
 import "./track-device.css";
 
 export type GenomeTrackKind = "source" | "candidate";
@@ -128,6 +127,7 @@ export interface GenomeOptimizerResult {
 }
 
 export interface GenomeOptimizerDevice {
+  lastApplied?: string;
   id: string;
   name?: string;
   bypassed: boolean;
@@ -169,6 +169,7 @@ export interface AlleleRandomizerPreview {
 }
 
 export interface AlleleRandomizerDevice {
+  lastApplied?: string;
   id: string;
   name: string;
   bypassed: boolean;
@@ -190,6 +191,7 @@ export interface GenomeMorphSettings {
 }
 
 export interface GenomeMorphDevice {
+  lastApplied?: string;
   id: string;
   name: string;
   bypassed: boolean;
@@ -281,6 +283,7 @@ export interface GenomeTrackModel {
   sourceVariantTotal?: number;
   densityMode?: boolean;
   totalEditCount?: number;
+  activeEditCount?: number;
   randomizer?: AlleleRandomizerDevice;
   morph?: GenomeMorphDevice;
   optimizer?: GenomeOptimizerDevice;
@@ -311,6 +314,7 @@ export interface TrackDeviceWorkspaceProps {
   contigLength?: number;
   busy?: boolean;
   detailPanel?: ReactNode;
+  renderComparison?: (view: "changes" | "map" | "evidence", close: () => void) => ReactNode;
   detailPanelLabel?: string;
   onViewportChange?: (region: FocusContext) => void;
   onSelectTrack: (trackId: string) => void;
@@ -329,17 +333,12 @@ export interface TrackDeviceWorkspaceProps {
   onRedoAction?: () => void;
   onToggleEdit: (trackId: string, editId: string, enabled: boolean) => void;
   onOptimizerChange: (trackId: string, settings: GenomeOptimizerSettings) => void;
-  onOptimizerBypass: (trackId: string, bypassed: boolean) => void;
   onRegenerate: (trackId: string) => void;
   onConsolidate: (trackId: string) => void;
   onRandomizerChange?: (trackId: string, settings: AlleleRandomizerSettings) => void;
-  onRandomizerPreview?: (trackId: string) => void;
-  onRandomizerApply?: (trackId: string) => void;
-  onRandomizerBypass?: (trackId: string, bypassed: boolean) => void;
+  onRandomizerGenerate?: (trackId: string) => void;
   onMorphChange?: (trackId: string, settings: GenomeMorphSettings) => void;
-  onMorphPreview?: (trackId: string) => void;
   onMorphApply?: (trackId: string) => void;
-  onMorphBypass?: (trackId: string, bypassed: boolean) => void;
   onSelectDevice?: (trackId: string, deviceId: string) => void;
   onToggleDevice?: (trackId: string, deviceId: string, bypassed: boolean) => void;
   onRunDevice?: (trackId: string, deviceId: string) => void;
@@ -711,6 +710,9 @@ function TrackRail({
             }}
             disabled={busy}
           />
+          <span className={`dgw-track-edit-status${(track.activeEditCount ?? 0) > 0 ? " has-edits" : ""}`} aria-label={`Edit status for ${track.name}`} title={isSource ? "Original imported track; editing is disabled." : (track.activeEditCount ?? 0) > 0 ? "Active edits across all chromosomes, including bulk mutations. This is not a count of DNA differences: edits can cancel each other. Open Track Compare to inspect the final DNA." : (track.totalEditCount ?? 0) > 0 ? "All recorded edits are bypassed." : "No edits have been applied to this track. Selecting alleles alone does not edit them."}>
+            {isSource ? "Read-only" : (track.activeEditCount ?? 0) > 0 ? `${track.activeEditCount!.toLocaleString()} active ${track.activeEditCount === 1 ? "edit" : "edits"}` : (track.totalEditCount ?? 0) > 0 ? "Edits bypassed" : "No edits"}
+          </span>
         </label>
         <div className="dgw-track-actions" aria-label={`Actions for ${track.name}`}>
           <button
@@ -1031,7 +1033,7 @@ function CompactDeviceCard({
             <b>{device.name}</b>
           </span>
         </button>
-        <button
+        {(device.kind === "evidence" || device.kind === "annotation") && <button
           type="button"
           className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`}
           aria-pressed={!device.bypassed}
@@ -1041,7 +1043,7 @@ function CompactDeviceCard({
           disabled={!onToggle || disabled}
         >
           <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
-        </button>
+        </button>}
       </header>
 
       <div className="dgw-device-status-line" aria-label="Device status">
@@ -1084,6 +1086,7 @@ function CompactDeviceCard({
 function OptimizerDeviceCard({
   track,
   actions,
+  feedback,
   device,
   objectives,
   weightControls,
@@ -1092,12 +1095,12 @@ function OptimizerDeviceCard({
   busy,
   onSelect,
   onChange,
-  onBypass,
   onRegenerate,
   onConsolidate
 }: {
   track: GenomeTrackModel;
   actions?: ReactNode;
+  feedback?: ReactNode;
   device: GenomeOptimizerDevice;
   objectives: OptimizerObjective[];
   weightControls: OptimizerWeightControl[];
@@ -1106,7 +1109,6 @@ function OptimizerDeviceCard({
   busy: boolean;
   onSelect?: () => void;
   onChange: (settings: GenomeOptimizerSettings) => void;
-  onBypass: (bypassed: boolean) => void;
   onRegenerate: () => void;
   onConsolidate: () => void;
 }) {
@@ -1142,24 +1144,14 @@ function OptimizerDeviceCard({
   const resource = [device.resource, device.version].filter(Boolean).join(" · ") || "Configured evidence devices";
 
   return (
-    <section className={`dgw-optimizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label={device.name ?? "Genome Optimizer"} data-context-help="genome-optimizer">
+    <section className={`dgw-optimizer${selected ? " is-selected" : ""}`} aria-label={device.name ?? "Genome Optimizer"} data-context-help="genome-optimizer">
       <header className="dgw-device-header">
         {actions}
         <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
-          <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
+          <span className={`dgw-device-light ${deviceLightState(device.status)}`} aria-hidden="true" />
           <span><small>analyze</small><b>{device.name ?? "Genome Optimizer"}</b></span>
         </button>
-        <button
-          type="button"
-          className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`}
-          aria-pressed={!device.bypassed}
-          aria-label={`${device.name ?? "Genome Optimizer"} is ${device.bypassed ? "bypassed" : "active"}. Toggle device.`}
-          onClick={() => onBypass(!device.bypassed)}
-          title={device.bypassed ? "Enable device" : "Bypass device"}
-          disabled={disabled}
-        >
-          <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
-        </button>
+
       </header>
 
       <div className="dgw-device-status-line" aria-label="Optimizer scope and status">
@@ -1283,6 +1275,7 @@ function OptimizerDeviceCard({
         />
       </label>
 
+      {feedback}
       <div className="dgw-device-result" aria-live="polite">
         <span>{device.status === "running"
           ? <span className="dgw-device-running"><i aria-hidden="true" /><b>{device.progress === undefined ? "Working" : `${device.progress}%`}</b>{device.message ?? "Genome Optimizer is running in the background…"}</span>
@@ -1338,7 +1331,7 @@ function OptimizerDeviceCard({
       </div>
 
       <footer className="dgw-device-actions">
-        <button type="button" className={hasGeneratedChanges ? undefined : "primary"} onClick={onRegenerate} disabled={disabled || device.bypassed || hasNoEffectiveWeight || selectionOverLimit || saturationBlocked} title={selectionOverLimit
+        <button type="button" className={hasGeneratedChanges ? undefined : "primary"} onClick={onRegenerate} disabled={disabled || hasNoEffectiveWeight || selectionOverLimit || saturationBlocked} title={selectionOverLimit
           ? `Raise Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection`
           : saturationBlocked
           ? selectedCount === 0 ? "Select at least one SNV position" : "Apply and enable Variant Consequences and ClinVar first"
@@ -1349,7 +1342,7 @@ function OptimizerDeviceCard({
           type="button"
           className={hasGeneratedChanges ? "primary" : undefined}
           onClick={onConsolidate}
-          disabled={disabled || device.bypassed || (track.totalEditCount ?? track.edits.length) === 0}
+          disabled={disabled || (track.totalEditCount ?? track.edits.length) === 0}
           title={(track.totalEditCount ?? track.edits.length) === 0
             ? "This track has no mutation blocks to consolidate"
             : "Materialize enabled edits into a new track baseline"}
@@ -1386,49 +1379,50 @@ function OptimizerDeviceCard({
 function RandomizerDeviceCard({
   device,
   actions,
+  feedback,
   selectedCount,
   interactiveMaterializationLimit,
   selected,
   busy,
   onSelect,
   onChange,
-  onPreview,
-  onApply,
-  onBypass
+  onGenerate,
 }: {
   device: AlleleRandomizerDevice;
   actions?: ReactNode;
+  feedback?: ReactNode;
   selectedCount: number;
   interactiveMaterializationLimit: number;
   selected: boolean;
   busy: boolean;
   onSelect?: () => void;
   onChange: (settings: AlleleRandomizerSettings) => void;
-  onPreview: () => void;
-  onApply: () => void;
-  onBypass: (bypassed: boolean) => void;
+  onGenerate: () => void;
 }) {
   const disabled = busy || device.status === "running";
-  const preview = device.preview;
   const maximumPositions = Math.max(1, Math.min(100_000, Math.trunc(device.settings.maximumPositions || 1_000)));
   const selectionOverLimit = selectedCount > maximumPositions;
   const bulkPreview = selectedCount > interactiveMaterializationLimit;
-  const compoundPreview = Boolean(preview?.compoundLayerId);
+  const statusLabel = device.status === "stale" ? "Ready to generate"
+    : device.status === "ready" ? device.lastApplied ? "Applied" : "Ready to generate"
+    : rackStatusLabel(device.status);
+  const nextStep = device.status === "running" ? undefined
+    : device.status === "error" ? "Generation failed. You can try again."
+    : selectedCount === 0 ? "Select positions to begin."
+    : selectionOverLimit ? "Raise Maximum positions or narrow the selection."
+    : "Adds reversible mutations to this track. Use Undo to reverse this action.";
   const update = (patch: Partial<AlleleRandomizerSettings>) => onChange({ ...device.settings, ...patch });
-  return <section className={`dgw-randomizer${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label="Mutation Generator">
+  return <section className={`dgw-randomizer${selected ? " is-selected" : ""}`} aria-label="Mutation Generator">
     <header className="dgw-device-header">
       {actions}
       <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
-        <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
+        <span className={`dgw-device-light ${deviceLightState(device.status)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
-      </button>
-      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} title={device.bypassed ? "Enable device" : "Bypass device"} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
-        <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
       </button>
     </header>
     <div className="dgw-device-status-line" aria-label="Selected positions and status">
       <span>{selectedCount.toLocaleString()} selected {selectedCount === 1 ? "position" : "positions"}</span>
-      <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
+      <span className={`dgw-rack-status ${device.status}`}>{statusLabel}</span>
     </div>
     <div className="dgw-randomizer-controls">
       <label>
@@ -1466,45 +1460,27 @@ function RandomizerDeviceCard({
     <div className="dgw-randomizer-result" aria-live="polite">
       {device.status === "running" ? <div className="dgw-device-running">
         <i aria-hidden="true" />
-        <b>Preparing mutation layer</b>
-        <small>{device.message ?? "The background preview is running…"}</small>
-      </div> : preview ? <>
-        <b>{preview.randomizedPositions.toLocaleString()}/{preview.selectedPositions.toLocaleString()} positions · {preview.generatedEdits.toLocaleString()} {compoundPreview ? "copy-specific changes" : "mutation blocks"}</b>
-        {compoundPreview && <small>Background result · ready as one reversible mutation layer</small>}
-        <small>{preview.transitionPositions} transitions · {preview.transversionPositions} transversions</small>
-        {preview.excludedPositions > 0 && <small>{preview.excludedPositions} unsupported or unavailable positions skipped</small>}
-        {preview.message && <small>{preview.message}</small>}
-      </> : <span>{selectionOverLimit
+        <b>Working…</b>
+        <small>{device.message ?? "Generating mutations…"}</small>
+      </div> : <span>{selectionOverLimit
         ? `${selectedCount.toLocaleString()} positions are selected. Raise Maximum positions to test the complete scope, or narrow the selection.`
-        : bulkPreview
-          ? `Bulk scope: ${selectedCount.toLocaleString()} selected positions. Preview prepares one compact mutation layer for this track.`
-        : device.message ?? "Select visible alleles, then preview a deterministic randomization."}</span>}
+        : device.message ?? (bulkPreview
+          ? `Bulk scope: ${selectedCount.toLocaleString()} selected positions. Generation adds one reversible mutation layer to this track.`
+        : "Select alleles, then generate deterministic mutations.")}</span>}
     </div>
+    {device.status !== "running" && feedback}
+    {nextStep && <p className="dgw-randomizer-next-step" role="status">{nextStep}</p>}
     <footer className="dgw-device-actions">
       <button
         type="button"
-        onClick={onPreview}
-        disabled={disabled || device.bypassed || selectedCount === 0 || selectionOverLimit}
-        title={selectionOverLimit ? `Raise Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection` : undefined}
-      >{device.status === "running" ? "Preparing…" : "Preview"}</button>
-      <button
-        type="button"
         className="primary"
-        onClick={onApply}
-        disabled={disabled || device.bypassed || !preview || preview.generatedEdits === 0 || (bulkPreview && !preview.compoundLayerId)}
-        title={compoundPreview ? "Apply every previewed change to the selected track as one reversible layer" : undefined}
-      >{compoundPreview ? "Apply mutation layer" : "Apply as blocks"}</button>
+        onClick={onGenerate}
+        disabled={disabled || selectedCount === 0 || selectionOverLimit}
+        title={selectionOverLimit ? `Raise Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection` : undefined}
+      >{device.status === "running" ? "Generating…" : "Generate mutations"}</button>
     </footer>
     <details className="dgw-device-details">
-      <summary>{preview?.changeCount ? `${preview.changeCount.toLocaleString()} changes & details` : "Details"}</summary>
-      {preview && <div className="dgw-randomizer-changes">
-        {preview.changeCount > 0 && preview.changes.length === 0
-          ? <small>Bulk preview: {preview.changeCount.toLocaleString()} planned allele changes are summarized above; individual changes are not rendered.</small>
-          : preview.changeCount > preview.changes.length
-            ? <small>Showing the first {preview.changes.length.toLocaleString()} of {preview.changeCount.toLocaleString()} planned allele changes.</small>
-            : null}
-        {preview.changes.map((change) => <code key={`${change.contig}-${change.position}-${change.from}-${change.to}`}>{change.contig}:{change.position.toLocaleString()} {change.from}→{change.to} · {change.substitutionClass}</code>)}
-      </div>}
+      <summary>Details</summary>
       <dl className="dgw-device-metadata">
         <div><dt>Scope</dt><dd>Canonical SNVs · substitution class relative to REF</dd></div>
       </dl>
@@ -1514,6 +1490,7 @@ function RandomizerDeviceCard({
 }
 
 function GenomeMorphDeviceCard({
+  feedback,
   track,
   actions,
   targets,
@@ -1522,44 +1499,37 @@ function GenomeMorphDeviceCard({
   busy,
   onSelect,
   onChange,
-  onPreview,
   onApply,
-  onBypass
 }: {
   track: GenomeTrackModel;
   targets: GenomeTrackModel[];
   device: GenomeMorphDevice;
+  feedback?: ReactNode;
   actions?: ReactNode;
   selected: boolean;
   busy: boolean;
   onSelect?: () => void;
   onChange: (settings: GenomeMorphSettings) => void;
-  onPreview: () => void;
   onApply: () => void;
-  onBypass: (bypassed: boolean) => void;
 }) {
   const disabled = busy || device.status === "running";
   const target = targets.find((candidate) => candidate.id === device.settings.targetTrackId);
-  const preview = device.preview;
   const update = (patch: Partial<GenomeMorphSettings>) => onChange({ ...device.settings, ...patch });
-  return <section className={`dgw-randomizer dgw-morph${selected ? " is-selected" : ""}${device.bypassed ? " is-bypassed" : ""}`} aria-label="Genome Morph">
+  return <section className={`dgw-randomizer dgw-morph${selected ? " is-selected" : ""}`} aria-label="Genome Morph">
     <header className="dgw-device-header">
       {actions}
       <button type="button" className="dgw-device-identity" onClick={onSelect} disabled={!onSelect || busy}>
-        <span className={`dgw-device-light ${deviceLightState(device.status, device.bypassed)}`} aria-hidden="true" />
+        <span className={`dgw-device-light ${deviceLightState(device.status)}`} aria-hidden="true" />
         <span><small>edit</small><b>{device.name}</b></span>
-      </button>
-      <button type="button" className={`dgw-bypass ${device.bypassed ? "is-active" : ""}`} aria-pressed={!device.bypassed} title={device.bypassed ? "Enable device" : "Bypass device"} onClick={() => onBypass(!device.bypassed)} disabled={disabled}>
-        <Power aria-hidden="true" /><span className="dgw-visually-hidden">{device.bypassed ? "Bypassed" : "Active"}</span>
       </button>
     </header>
     <div className="dgw-device-status-line" aria-label="Morph source and status">
-      <span title={track.name}>From {track.name}</span>
+      <span title={track.name}>Modify: {track.name}</span>
       <span className={`dgw-rack-status ${device.status}`}>{rackStatusLabel(device.status)}</span>
     </div>
     <div className="dgw-randomizer-controls dgw-morph-controls">
       <label className="dgw-morph-target">
-        <span>Target track</span>
+        <span>Toward target track</span>
         <select value={device.settings.targetTrackId} onChange={(event) => update({ targetTrackId: event.currentTarget.value })} disabled={disabled || targets.length === 0}>
           <option value="">Choose target…</option>
           {targets.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}
@@ -1569,7 +1539,7 @@ function GenomeMorphDeviceCard({
         <span>Morph <output>{device.settings.amount}%</output></span>
         <input type="range" min={0} max={100} step={1} value={device.settings.amount} onChange={(event) => update({ amount: Number(event.currentTarget.value) })} disabled={disabled} />
       </label>
-      <label>
+      <label className="dgw-morph-ordering">
         <span>Ordering</span>
         <select value={device.settings.ordering} onChange={(event) => update({ ordering: event.currentTarget.value as MorphOrdering })} disabled={disabled}>
           <option value="genomic">Genomic order</option>
@@ -1581,29 +1551,25 @@ function GenomeMorphDeviceCard({
         <input type="number" min={0} step={1} value={device.settings.seed} onChange={(event) => update({ seed: Math.max(0, Math.trunc(Number(event.currentTarget.value) || 0)) })} disabled={disabled} />
       </label>}
     </div>
+    <p className="dgw-device-limitation">Changes this track only; the target stays unchanged. Each run uses the remaining differences, not the original starting state.</p>
+    {device.status !== "running" && feedback}
     <div className="dgw-morph-result" aria-live="polite">
       {device.status === "running" ? <>
-        <div><b>Preparing morph preview</b><strong>{device.progress ?? 0}%</strong></div>
+        <div><b>Working…</b><strong>{device.progress === undefined ? "" : `${device.progress}%`}</strong></div>
         <span className="dgw-morph-progress"><i style={{ width: `${device.progress ?? 0}%` }} /></span>
         <small>{device.message}</small>
-      </> : preview ? <>
-        <b>{preview.selectedPositions.toLocaleString()} / {preview.differingPositions.toLocaleString()} differing positions</b>
-        <small>{preview.generatedEdits.toLocaleString()} copy-specific changes · {preview.amount}% toward {target?.name ?? "target"}</small>
-        {preview.noOpReason && <small>{preview.noOpReason}</small>}
       </> : <span>{targets.length === 0
         ? "Duplicate a track to create a compatible morph target."
-        : device.message ?? "Choose another project track and preview a discrete intermediate state."}</span>}
+        : device.message ?? "Choose a target, set the amount, then apply the morph."}</span>}
     </div>
     <footer className="dgw-device-actions">
-      <button type="button" onClick={onPreview} disabled={disabled || device.bypassed || track.kind === "source" || !target}>Preview</button>
-      <button type="button" className="primary" onClick={onApply} disabled={disabled || device.bypassed || !preview?.compoundLayerId || preview.generatedEdits === 0}>Apply morph state</button>
+      <button type="button" className="primary" onClick={onApply} disabled={disabled || track.kind === "source" || !target}>{device.status === "running" ? "Applying morph…" : "Apply morph"}</button>
     </footer>
     <details className="dgw-device-details">
       <summary>Details</summary>
-      {preview && <dl className="dgw-device-metadata">
-        <div><dt>Track differences</dt><dd>{preview.differingPositions.toLocaleString()} positions · {preview.differingAlleles.toLocaleString()} allele-copy changes</dd></div>
-        <div><dt>Preview state</dt><dd>{preview.selectedPositions.toLocaleString()} positions · {preview.generatedEdits.toLocaleString()} changes</dd></div>
-      </dl>}
+      <p>Applies one reversible layer to this track. The target is unchanged. Use Undo to reverse this action; consolidation is separate.</p>
+      <p>To morph from Source toward an edited track: duplicate Source, select the copy, and choose the edited track as the target.</p>
+      <p>50% copies target genotypes at half the currently differing positions, rounded up. Applying 50% again uses the differences that remain. To compare independent amounts from the same starting state, use a fresh duplicate for each run.</p>
       <p className="dgw-device-limitation optimizer-limit"><b>Limit</b>{device.limitation}</p>
     </details>
   </section>;
@@ -1621,6 +1587,7 @@ function TrackMeterCard({
   onAnalyze?: () => void;
 }) {
   const complete = meter.activeMutations > 0 && meter.evaluatedMutations === meter.activeMutations;
+  const consequenceBypassed = meter.deviceCoverage.some(device => device.id === CONSEQUENCE_DEVICE_ID && device.bypassed);
   const profilerProgress = Math.max(0, Math.min(100, profiler?.progress
     ?? (profiler?.totalMutations
       ? Math.round((profiler.processedMutations / profiler.totalMutations) * 100)
@@ -1653,7 +1620,7 @@ function TrackMeterCard({
     </header>
     <div className="dgw-monitor-coverage" aria-label="Mutation evaluation coverage">
       <span><b>{meter.evaluatedMutations.toLocaleString()}</b> / {meter.activeMutations.toLocaleString()} mutations evaluated</span>
-      <span>{meter.activeMutations === 0 ? "No active edits" : complete ? "Complete" : "Incomplete"}</span>
+      <span>{consequenceBypassed ? "Score unavailable" : meter.activeMutations === 0 ? "No active edits" : complete ? "Complete" : "Incomplete"}</span>
     </div>
     {run && <section className={`dgw-monitor-device-run${run.active ? " is-active" : " is-bypassed"}`} aria-label={`${run.device} ${run.mode} result`}>
       <header><span>{run.device}</span><b>{run.mode} · {run.direction}</b></header>
@@ -1682,7 +1649,7 @@ function TrackMeterCard({
       <div className="dgw-meter-readout">
         <small>Mean Δ per mutation</small>
         <strong>{meanDelta === undefined ? "—" : `${meanDelta >= 0 ? "+" : ""}${meanDelta.toFixed(4)}`}</strong>
-        <span>{meanDelta === undefined ? meter.activeMutations === 0 ? "Edit a track to compare" : profiler?.status === "running" ? "Updating…" : "Awaiting complete evaluation" : meanDelta > 0 ? "Higher than source" : meanDelta < 0 ? "Lower than source" : "Unchanged from source"}</span>
+        <span>{consequenceBypassed ? "Variant Consequences is bypassed" : meanDelta === undefined ? meter.activeMutations === 0 ? "Edit a track to compare" : profiler?.status === "running" ? "Updating…" : "Awaiting complete evaluation" : meanDelta > 0 ? "Higher than source" : meanDelta < 0 ? "Lower than source" : "Unchanged from source"}</span>
         <div className="dgw-meter-total">
           <span>Total Δ <small>model units</small></span>
           <b>{delta === undefined ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}`}</b>
@@ -1795,150 +1762,13 @@ function DeviceBrowserItem({ item, applied, onAdd }: {
   </button>;
 }
 
-function VariantMapPanel({
-  track,
-  region,
-  meter,
-  selectedEditId,
-  selectedAlleleIds,
-  onSelectEdit,
-  onSelectAllele,
-  onClose
-}: {
-  track: GenomeTrackModel;
-  region: FocusContext;
-  meter?: TrackMeterModel;
-  selectedEditId?: string;
-  selectedAlleleIds: string[];
-  onSelectEdit: (editId: string) => void;
-  onSelectAllele: (alleleId: string, additive: boolean) => void;
-  onClose: () => void;
-}) {
-  const sourceMarks = sampleVariantMapMarks(
-    [...track.alleles].sort((left, right) => left.position - right.position || left.id.localeCompare(right.id)),
-    480
-  );
-  const activeEdits = (meter?.items ?? [])
-    .filter((item) => item.enabled && item.contig === region.contig && item.position >= region.start && item.position <= region.end)
-    .sort((left, right) => left.position - right.position || left.editId.localeCompare(right.editId));
-  const compactBulkLayers = (meter?.items ?? [])
-    .filter((item) => item.enabled && (item.mutationCount ?? 1) > 1);
-  const compactBulkMutations = compactBulkLayers.reduce(
-    (total, item) => total + (item.mutationCount ?? 1),
-    0
-  );
-  const editMarks = sampleVariantMapMarks(activeEdits, 500);
-  const evaluatedEdits = activeEdits.filter((item) => item.evaluated && item.impactDelta !== undefined);
-  const scale = Math.max(0.33, ...evaluatedEdits.map((item) => Math.abs(item.impactDelta ?? 0)));
-  const ticks = viewportTicks(region);
-  const xFor = (position: number) => 72 + positionPercent(position, region) * 9;
-  const toneLabel = (delta?: number) => {
-    const tone = variantMapTone(delta);
-    if (tone === "unknown") return "not evaluated";
-    if (tone === "neutral") return "no molecular-impact change";
-    return `${tone} molecular-impact output`;
-  };
-  const deltaLabel = (delta?: number) => delta === undefined ? "unknown" : `${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
-
-  return <section className="dgw-variant-map" aria-label="Variant Map visualization">
-    <header className="dgw-variant-map-header">
-      <div><span>Variant Map</span><small>{track.name} · {region.contig}:{region.start.toLocaleString()}–{region.end.toLocaleString()} · 1-based positions</small></div>
-      <button type="button" onClick={onClose}>Back to rack</button>
-    </header>
-
-    <div className="dgw-variant-map-summary">
-      <div><small>Visible alleles</small><b>{track.alleles.length.toLocaleString()}</b></div>
-      <div><small>Active edits</small><b>{activeEdits.length.toLocaleString()}</b></div>
-      <div><small>Evaluated edits</small><b>{evaluatedEdits.length.toLocaleString()} / {activeEdits.length.toLocaleString()}</b></div>
-      {compactBulkMutations > 0 && <div className="bulk"><small>Compact bulk mutations</small><b>{compactBulkMutations.toLocaleString()}</b></div>}
-      <p>Transcript-consequence impact Δ relative to the source allele</p>
-    </div>
-
-    <div className="dgw-variant-map-chart">
-      <svg viewBox="0 0 1000 240" role="img" aria-label="Source-relative molecular-impact changes by genomic position">
-        <line className="map-grid" x1="72" x2="972" y1="34" y2="34" />
-        <line className="map-source-line" x1="72" x2="972" y1="120" y2="120" />
-        <line className="map-grid" x1="72" x2="972" y1="206" y2="206" />
-        <text className="map-axis-label higher" x="10" y="38">HIGHER</text>
-        <text className="map-axis-label" x="10" y="124">SOURCE</text>
-        <text className="map-axis-label lower" x="10" y="210">LOWER</text>
-        <text className="map-scale-label" x="976" y="38" textAnchor="end">+{scale.toFixed(2)}</text>
-        <text className="map-scale-label" x="976" y="210" textAnchor="end">−{scale.toFixed(2)}</text>
-
-        {ticks.map((position) => {
-          const x = xFor(position);
-          return <g className="map-position-tick" key={position}>
-            <line x1={x} x2={x} y1="34" y2="206" />
-            <text x={x} y="230" textAnchor="middle">{position.toLocaleString()}</text>
-          </g>;
-        })}
-
-        {sourceMarks.map((allele) => {
-          const x = xFor(allele.position);
-          const y = 120 + ((allele.stackIndex ?? 0) - ((allele.stackCount ?? 1) - 1) / 2) * 12;
-          const selected = selectedAlleleIds.includes(allele.id);
-          return <g
-            className={`map-source-mark${selected ? " is-selected" : ""}`}
-            role="button"
-            tabIndex={0}
-            aria-label={`${region.contig}:${allele.position} ${allele.reference} to ${allele.alternate}`}
-            onClick={(event) => onSelectAllele(allele.id, event.ctrlKey || event.metaKey)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onSelectAllele(allele.id, event.ctrlKey || event.metaKey);
-              }
-            }}
-            key={allele.id}
-          >
-            <line x1={x} x2={x} y1={Math.min(120, y)} y2={Math.max(120, y)} />
-            <circle cx={x} cy={y} r={selected ? 5 : 3.5} />
-            <title>{region.contig}:{allele.position.toLocaleString()} · {allele.reference}→{allele.alternate} · {allele.origin}</title>
-          </g>;
-        })}
-
-        {editMarks.map((item) => {
-          const x = xFor(item.position);
-          const y = variantMapY(item.impactDelta, scale, 34, 120, 206);
-          const tone = variantMapTone(item.impactDelta);
-          const selected = selectedEditId === item.editId;
-          const size = selected ? 9 : 7;
-          const label = `${region.contig}:${item.position} ${item.reference} to ${item.alternate}; ${toneLabel(item.impactDelta)}; delta ${deltaLabel(item.impactDelta)}`;
-          return <g
-            className={`map-edit-mark ${tone}${selected ? " is-selected" : ""}`}
-            role="button"
-            tabIndex={0}
-            aria-label={label}
-            onClick={() => onSelectEdit(item.editId)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onSelectEdit(item.editId);
-              }
-            }}
-            key={item.editId}
-          >
-            <line className="map-delta-stem" x1={x} x2={x} y1="120" y2={y} />
-            <path d={`M ${x} ${y - size} L ${x + size} ${y} L ${x} ${y + size} L ${x - size} ${y} Z`} />
-            <title>{label}</title>
-          </g>;
-        })}
-      </svg>
-      {activeEdits.length === 0 && compactBulkMutations === 0 && <p className="dgw-variant-map-empty">No active mutation blocks in this region. Source VCF alleles remain visible on the center line.</p>}
-      {compactBulkMutations > 0 && <p className="dgw-variant-map-empty bulk-layer-note"><b>{compactBulkMutations.toLocaleString()} active mutations are stored in {compactBulkLayers.length === 1 ? "a compact bulk layer" : `${compactBulkLayers.length} compact bulk layers`}.</b> Variant Map does not yet expand bulk layers into position-level marks. Use Track Monitor for the aggregate profile; ordinary allele-level blocks remain visible here.</p>}
-    </div>
-
-    <footer className="dgw-variant-map-footer">
-      <div className="dgw-variant-map-legend"><span className="higher"><i />Higher</span><span className="neutral"><i />No change</span><span className="lower"><i />Lower</span><span className="unknown"><i />Not evaluated</span></div>
-      <p>Higher and lower mean only the displayed source-relative consequence model output. They do not mean diseased, healthy, pathogenic, or benign. Nearby allele interactions are not modeled.</p>
-      {(track.alleles.length > sourceMarks.length || activeEdits.length > editMarks.length) && <small>Dense view: showing {sourceMarks.length.toLocaleString()} representative allele marks and {editMarks.length.toLocaleString()} representative active edits.</small>}
-    </footer>
-  </section>;
-}
 
 function DeviceRack({
   track,
   tracks,
+  selectionScope,
+  focusedAlleleLabel,
+  regionLabel,
   selectedAlleleCount,
   interactiveAlleleLimit,
   rackDevices,
@@ -1947,17 +1777,12 @@ function DeviceRack({
   weightControls,
   busy,
   onOptimizerChange,
-  onOptimizerBypass,
   onRegenerate,
   onConsolidate,
   onRandomizerChange,
-  onRandomizerPreview,
-  onRandomizerApply,
-  onRandomizerBypass,
+  onRandomizerGenerate,
   onMorphChange,
-  onMorphPreview,
   onMorphApply,
-  onMorphBypass,
   onSelectDevice,
   onToggleDevice,
   onRunDevice,
@@ -1970,6 +1795,9 @@ function DeviceRack({
 }: {
   track?: GenomeTrackModel;
   tracks: GenomeTrackModel[];
+  selectionScope: string;
+  focusedAlleleLabel?: string;
+  regionLabel: string;
   selectedAlleleCount: number;
   interactiveAlleleLimit: number;
   rackDevices: RackDeviceView[];
@@ -1978,17 +1806,12 @@ function DeviceRack({
   weightControls: OptimizerWeightControl[];
   busy: boolean;
   onOptimizerChange: (settings: GenomeOptimizerSettings) => void;
-  onOptimizerBypass: (bypassed: boolean) => void;
   onRegenerate: () => void;
   onConsolidate: () => void;
   onRandomizerChange?: (settings: AlleleRandomizerSettings) => void;
-  onRandomizerPreview?: () => void;
-  onRandomizerApply?: () => void;
-  onRandomizerBypass?: (bypassed: boolean) => void;
+  onRandomizerGenerate?: () => void;
   onMorphChange?: (settings: GenomeMorphSettings) => void;
-  onMorphPreview?: () => void;
   onMorphApply?: () => void;
-  onMorphBypass?: (bypassed: boolean) => void;
   onSelectDevice?: (deviceId: string) => void;
   onToggleDevice?: (deviceId: string, bypassed: boolean) => void;
   onRunDevice?: (deviceId: string) => void;
@@ -2000,6 +1823,22 @@ function DeviceRack({
   openBrowserRequest?: number;
 }) {
   const [deviceBrowserOpen, setDeviceBrowserOpen] = useState(false);
+  const [expandedId, setExpandedId] = useState<string>();
+  const expandInvoker = useRef<HTMLButtonElement | null>(null);
+  const backButton = useRef<HTMLButtonElement>(null);
+  const savedScroll = useRef(0);
+  useEffect(() => { setExpandedId(undefined); }, [track?.id]);
+  useEffect(() => {
+    if (expandedId && !appliedDeviceIds.includes(expandedId)) setExpandedId(undefined);
+  }, [expandedId, appliedDeviceIds]);
+  useEffect(() => { if (expandedId) backButton.current?.focus(); }, [expandedId]);
+  function collapseDevice() {
+    setExpandedId(undefined);
+    requestAnimationFrame(() => {
+      if (deviceChainRef.current) deviceChainRef.current.scrollLeft = savedScroll.current;
+      expandInvoker.current?.focus({ preventScroll: true });
+    });
+  }
   const [deviceMenu, setDeviceMenu] = useState<ContextMenuState>();
   const closeDeviceMenu = useCallback(() => {
     setDeviceMenu(current => { current?.invoker?.focus(); return undefined; });
@@ -2018,7 +1857,7 @@ function DeviceRack({
     chain.addEventListener("scroll", update);
     update();
     return () => { observer.disconnect(); chain.removeEventListener("scroll", update); };
-  }, [track?.id, appliedDeviceIds.join("|")]);
+  }, [track?.id, appliedDeviceIds.join("|"), expandedId]);
   useEffect(() => {
     const chain = deviceChainRef.current;
     if (!chain) return;
@@ -2069,6 +1908,7 @@ function DeviceRack({
   })).filter((group) => group.items.length > 0);
   const selectedItem = rackItems.find((item) => item.device.id === selectedDeviceId) ?? rackItems[0];
   const selectedRackDeviceId = selectedItem?.device.id;
+  const expandedItem = rackItems.find(item => item.device.id === expandedId);
 
   function openDeviceBrowser() {
     setDeviceBrowserOpen(true);
@@ -2076,15 +1916,34 @@ function DeviceRack({
 
   function renderRackItem(item: RackItem) {
     const name = item.device.name ?? "Genome Optimizer";
+    const expandLabel = `Maximize ${name}`;
     const actions = <div className="dgw-device-local-actions">
+      <button type="button" className="dgw-device-expand" hidden={Boolean(expandedItem)} disabled={item.type === "compact" && item.device.kind === "visualization" && item.device.bypassed} aria-label={expandLabel} title={expandLabel} onClick={event => {
+        if (item.type === "compact" && item.device.kind === "visualization") {
+          onOpenVisualization?.(item.device.id);
+          return;
+        }
+        expandInvoker.current = event.currentTarget;
+        savedScroll.current = deviceChainRef.current?.scrollLeft ?? 0;
+        setExpandedId(item.device.id);
+        onSelectDevice?.(item.device.id);
+      }}><Maximize2 aria-hidden="true" /></button>
       {item.type !== "compact" && <button type="button" className="dgw-device-reset" aria-label={`Reset ${name} to defaults`} title="Reset to defaults. Applied edits stay unchanged." disabled={busy || item.device.status === "running" || !onResetDevice} onClick={() => onResetDevice?.(item.device.id)}><RotateCcw aria-hidden="true" /></button>}
       <button type="button" className="dgw-device-more" aria-label={`${name} options`} aria-haspopup="menu" aria-expanded={deviceMenu?.label === `${name} options`} title="Device options" disabled={busy || item.device.status === "running"} onClick={event => {
         const bounds = event.currentTarget.getBoundingClientRect();
         setDeviceMenu({ x: bounds.right - CONTEXT_MENU_WIDTH, y: bounds.bottom + 4, label: `${name} options`, invoker: event.currentTarget, items: [{ id: "remove", label: `Remove ${name} from rack`, danger: true, disabled: !onRemoveDevice, action: () => onRemoveDevice?.(item.device.id) }] });
       }}><Ellipsis aria-hidden="true" /></button>
     </div>;
+    const feedback = item.type !== "compact" && (item.device.status === "running" || item.device.status === "error" || item.device.lastApplied)
+      ? <div className={`dgw-action-feedback ${item.device.status}`} role={item.device.status === "error" ? "alert" : "status"}>
+        <strong>{item.device.status === "running" ? item.device.message ?? "Working…"
+          : item.device.status === "error" ? item.device.message ?? "The action failed."
+          : `Last applied: ${item.device.lastApplied} to “${selectedRackTrack.name}”.`}</strong>
+        {item.device.status !== "running" && item.device.status !== "error" && expandedItem && <button type="button" onClick={collapseDevice}>View track</button>}
+      </div> : undefined;
     return item.type === "optimizer" ? (
       <OptimizerDeviceCard
+        feedback={feedback}
         actions={actions}
         key={item.device.id}
         track={selectedRackTrack}
@@ -2096,12 +1955,12 @@ function DeviceRack({
         busy={busy}
         onSelect={onSelectDevice ? () => onSelectDevice(item.device.id) : undefined}
         onChange={onOptimizerChange}
-        onBypass={onOptimizerBypass}
         onRegenerate={onRegenerate}
         onConsolidate={onConsolidate}
       />
     ) : item.type === "randomizer" ? (
       <RandomizerDeviceCard
+        feedback={feedback}
         actions={actions}
         key={item.device.id}
         device={item.device}
@@ -2111,12 +1970,11 @@ function DeviceRack({
         busy={busy}
         onSelect={onSelectDevice ? () => onSelectDevice(item.device.id) : undefined}
         onChange={onRandomizerChange ?? (() => undefined)}
-        onPreview={onRandomizerPreview ?? (() => undefined)}
-        onApply={onRandomizerApply ?? (() => undefined)}
-        onBypass={onRandomizerBypass ?? (() => undefined)}
+        onGenerate={onRandomizerGenerate ?? (() => undefined)}
       />
     ) : item.type === "morph" ? (
       <GenomeMorphDeviceCard
+        feedback={feedback}
         actions={actions}
         key={item.device.id}
         track={selectedRackTrack}
@@ -2126,9 +1984,7 @@ function DeviceRack({
         busy={busy}
         onSelect={onSelectDevice ? () => onSelectDevice(item.device.id) : undefined}
         onChange={onMorphChange ?? (() => undefined)}
-        onPreview={onMorphPreview ?? (() => undefined)}
         onApply={onMorphApply ?? (() => undefined)}
-        onBypass={onMorphBypass ?? (() => undefined)}
       />
     ) : (
       <CompactDeviceCard
@@ -2147,18 +2003,41 @@ function DeviceRack({
   }
 
   return (
-    <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}`} data-context-help="device-rack">
+    <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}${expandedItem ? " is-expanded" : ""}`} data-context-help="device-rack"
+      onKeyDown={event => {
+        if (expandedItem && event.key === "Escape" && !event.defaultPrevented && !deviceMenu && !(event.target instanceof HTMLSelectElement)) {
+          event.preventDefault(); event.stopPropagation(); collapseDevice();
+        }
+      }}>
       {deviceMenu && <ContextMenu menu={deviceMenu} onClose={closeDeviceMenu} />}
       <div className="dgw-device-rack-title">
-        <div><span>Device rack</span><small title={rackTemplateName}>{track.name}</small></div>
+        <div><span>{expandedItem ? expandedItem.device.name ?? "Genome Optimizer" : "Device rack"}</span><small title={rackTemplateName}>{track.name}</small></div>
         <div className="dgw-device-rack-actions">
-          <button type="button" onClick={openDeviceBrowser} disabled={busy}><Plus aria-hidden="true" /> Add device</button>
+          {expandedItem ? <button type="button" className="dgw-back-to-tracks" ref={backButton} aria-keyshortcuts="Escape" onClick={collapseDevice}><ChevronLeft aria-hidden="true" /> Back to tracks</button>
+            : <button type="button" onClick={openDeviceBrowser} disabled={busy}><Plus aria-hidden="true" /> Add device</button>}
         </div>
       </div>
 
+      {expandedItem && <div className="dgw-device-scope" aria-label="Device input scope">
+        <span className="dgw-device-scope-track">Track: <b>{track.name}</b></span>
+        <div role="status">
+          {expandedItem.type === "randomizer" || expandedItem.type === "optimizer" ? <>
+            <strong>{selectedAlleleCount > 0 ? `${selectedAlleleCount.toLocaleString()} ${selectedAlleleCount === 1 ? "allele" : "alleles"} selected` : "No alleles selected"}</strong>
+            {selectedAlleleCount > 0 && <span>{selectionScope}</span>}
+          </> : expandedItem.type === "morph" ? <>
+            <strong>Toward: {tracks.find(candidate => candidate.id === expandedItem.device.settings.targetTrackId)?.name ?? "Choose a target track"}</strong>
+            <span>Track-to-track · allele selection is not used</span>
+          </> : <>
+            <strong>{expandedItem.device.target === "selectedAllele" ? focusedAlleleLabel ?? "No focused allele" : regionLabel}</strong>
+            <span>{expandedItem.device.target === "selectedAllele" ? "Focused allele only · not the multi-selection" : "Focused region"}</span>
+          </>}
+        </div>
+        {(expandedItem.type === "randomizer" || expandedItem.type === "optimizer") && <button type="button" onClick={collapseDevice}>{selectedAlleleCount === 0 ? "Select alleles…" : "Change selection…"}</button>}
+      </div>}
+
       <div className="dgw-device-rack-body">
           <div id="dgw-applied-device-chain" ref={deviceChainRef} className="dgw-device-chain" tabIndex={0} aria-label={`Applied devices for ${track.name}`}>
-            {rackItems.length > 0 ? rackItems.map(renderRackItem) : <button type="button" className="dgw-empty-device-chain" onClick={openDeviceBrowser}>
+            {rackItems.length > 0 ? (expandedItem ? [expandedItem] : rackItems).map(renderRackItem) : <button type="button" className="dgw-empty-device-chain" onClick={openDeviceBrowser}>
               <b>No devices applied</b><small>Add a device to this Genome Track</small>
             </button>}
           </div>
@@ -2238,6 +2117,7 @@ export function TrackDeviceWorkspace({
   contigLength,
   busy = false,
   detailPanel,
+  renderComparison,
   detailPanelLabel = "Allele editor",
   onViewportChange,
   onSelectTrack,
@@ -2256,17 +2136,12 @@ export function TrackDeviceWorkspace({
   onRedoAction,
   onToggleEdit,
   onOptimizerChange,
-  onOptimizerBypass,
   onRegenerate,
   onConsolidate,
   onRandomizerChange,
-  onRandomizerPreview,
-  onRandomizerApply,
-  onRandomizerBypass,
+  onRandomizerGenerate,
   onMorphChange,
-  onMorphPreview,
   onMorphApply,
-  onMorphBypass,
   onSelectDevice,
   onToggleDevice,
   onRunDevice,
@@ -2298,6 +2173,10 @@ export function TrackDeviceWorkspace({
     return Number.isFinite(stored) && stored >= MIN_RACK_HEIGHT ? stored : DEFAULT_RACK_HEIGHT;
   });
   const [openVisualizationId, setOpenVisualizationId] = useState<string>();
+  const [comparisonView, setComparisonView] = useState<"map" | "changes" | "evidence">("changes");
+  const comparisonBack = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (openVisualizationId) comparisonBack.current?.focus(); }, [openVisualizationId]);
+  useEffect(() => { setOpenVisualizationId(undefined); }, [selectedTrackId, Boolean(detailPanel)]);
   const [resizingRack, setResizingRack] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -2482,7 +2361,7 @@ export function TrackDeviceWorkspace({
           <div className="dgw-track-heading">
             <span>Tracks <b className="dgw-edit-target" title="Edits and devices act on this selected track">{selectedTrack?.name}</b></span>
             <details className="dgw-track-help">
-              <summary>Track help</summary>
+              <summary aria-label="Track help" title="Track help">?</summary>
               <div>Diamonds mark VCF alleles; rectangles mark mutation blocks. Drag across the active lane to select alleles; Ctrl/⌘-click toggles one. Ctrl/⌘ + wheel zooms; Shift + wheel pans.</div>
             </details>
           </div>
@@ -2521,10 +2400,11 @@ export function TrackDeviceWorkspace({
                 type="button"
                 className={allAllelesSelected ? "is-active" : undefined}
                 aria-pressed={allAllelesSelected}
+                aria-label={allAllelesSelected ? "All selected · all chromosomes ✓" : "Select all variants · all chromosomes"}
                 onClick={() => onSelectAllAlleles?.(selectedTrackId)}
                 disabled={busy || !onSelectAllAlleles}
                 title="Select every VCF allele in this track across all chromosomes (Ctrl/Command+A)"
-              >{allAllelesSelected ? "All selected · all chromosomes ✓" : "Select all variants · all chromosomes"}</button>
+              >{allAllelesSelected ? "All chromosomes ✓" : "Select all · all chr"}</button>
               <button type="button" onClick={onClearAlleleSelection} disabled={busy || !onClearAlleleSelection || semanticSelectedAlleleCount === 0}>Clear</button>
             </span>
             <span className="dgw-height-controls" aria-label="Track height controls">
@@ -2609,18 +2489,23 @@ export function TrackDeviceWorkspace({
         onKeyDown={resizeRackWithKeyboard}
       ><span aria-hidden="true" /></div>}
       {showLowerPane && <div className="dgw-lower-pane">
-        <div className="dgw-lower-main">{detailPanel ?? (openVisualization && selectedTrack ? <VariantMapPanel
-          track={selectedTrack}
-          region={region}
-          meter={trackMeter}
-          selectedEditId={selectedEditId}
-          selectedAlleleIds={selectedAlleleIds}
-          onSelectEdit={(editId) => onSelectEdit(selectedTrack.id, editId)}
-          onSelectAllele={(alleleId, additive) => onSelectAllele(selectedTrack.id, alleleId, additive)}
-          onClose={() => setOpenVisualizationId(undefined)}
-        /> : <DeviceRack
+        <div className="dgw-lower-main">{detailPanel ?? (openVisualization && selectedTrack ? <section className="dgw-track-compare" aria-label="Track Compare" onKeyDown={event => {
+          if (event.key === "Escape" && !event.defaultPrevented && !(event.target instanceof HTMLSelectElement)) {
+            event.preventDefault(); event.stopPropagation(); setOpenVisualizationId(undefined);
+          }
+        }}>
+          <header className="dgw-track-compare-header"><div><h2>Track Compare</h2><p>Reference: <b>Source</b> → Current: <b>{selectedTrack.name}</b></p></div><button type="button" className="dgw-back-to-tracks" ref={comparisonBack} aria-keyshortcuts="Escape" onClick={() => setOpenVisualizationId(undefined)}><ChevronLeft aria-hidden="true" />Back to tracks</button></header>
+          <div className="dgw-compare-views" role="group" aria-label="Track Compare views">
+            <div className="dgw-compare-view-switch">{(["changes", "map", "evidence"] as const).map(view => <button key={view} aria-label={view === "map" ? "Genome view" : view === "changes" ? "DNA changes" : "Consequence changes"} aria-pressed={comparisonView === view} onClick={() => setComparisonView(view)}>{view === "map" ? "Genome view" : view === "changes" ? "DNA changes" : "Consequence changes"}</button>)}</div>
+            <span>{comparisonView === "map" ? "DNA differences · zoom to inspect" : comparisonView === "changes" ? "Selected loci · DNA differences" : "Source vs Current · Variant Consequences"}</span>
+          </div>
+          <div className="dgw-track-compare-content">{renderComparison?.(comparisonView, () => setOpenVisualizationId(undefined))}</div>
+        </section> : <DeviceRack
           track={selectedTrack}
           tracks={tracks}
+          selectionScope={allAllelesSelected ? "All chromosomes" : selectionExtendsBeyondView ? "Includes alleles outside the visible region" : `Visible region · ${region.contig}`}
+          focusedAlleleLabel={selectedPosition === undefined ? undefined : `${region.contig}:${selectedPosition.toLocaleString()} (1-based)`}
+          regionLabel={`${region.contig}:${region.start.toLocaleString()}–${region.end.toLocaleString()}`}
           selectedAlleleCount={semanticSelectedAlleleCount}
           interactiveAlleleLimit={interactiveAlleleLimit}
           rackDevices={rackDevices}
@@ -2629,17 +2514,12 @@ export function TrackDeviceWorkspace({
           weightControls={weightControls}
           busy={busy}
           onOptimizerChange={(settings) => selectedTrack && onOptimizerChange(selectedTrack.id, settings)}
-          onOptimizerBypass={(bypassed) => selectedTrack && onOptimizerBypass(selectedTrack.id, bypassed)}
           onRegenerate={() => selectedTrack && onRegenerate(selectedTrack.id)}
           onConsolidate={() => selectedTrack && onConsolidate(selectedTrack.id)}
           onRandomizerChange={onRandomizerChange && selectedTrack ? (settings) => onRandomizerChange(selectedTrack.id, settings) : undefined}
-          onRandomizerPreview={onRandomizerPreview && selectedTrack ? () => onRandomizerPreview(selectedTrack.id) : undefined}
-          onRandomizerApply={onRandomizerApply && selectedTrack ? () => onRandomizerApply(selectedTrack.id) : undefined}
-          onRandomizerBypass={onRandomizerBypass && selectedTrack ? (bypassed) => onRandomizerBypass(selectedTrack.id, bypassed) : undefined}
+          onRandomizerGenerate={onRandomizerGenerate && selectedTrack ? () => onRandomizerGenerate(selectedTrack.id) : undefined}
           onMorphChange={onMorphChange && selectedTrack ? (settings) => onMorphChange(selectedTrack.id, settings) : undefined}
-          onMorphPreview={onMorphPreview && selectedTrack ? () => onMorphPreview(selectedTrack.id) : undefined}
           onMorphApply={onMorphApply && selectedTrack ? () => onMorphApply(selectedTrack.id) : undefined}
-          onMorphBypass={onMorphBypass && selectedTrack ? (bypassed) => onMorphBypass(selectedTrack.id, bypassed) : undefined}
           onSelectDevice={onSelectDevice && selectedTrack ? (deviceId) => onSelectDevice(selectedTrack.id, deviceId) : undefined}
           onToggleDevice={onToggleDevice && selectedTrack ? (deviceId, bypassed) => onToggleDevice(selectedTrack.id, deviceId, bypassed) : undefined}
           onRunDevice={onRunDevice && selectedTrack ? (deviceId) => onRunDevice(selectedTrack.id, deviceId) : undefined}

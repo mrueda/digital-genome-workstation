@@ -135,9 +135,22 @@ export interface TrackComparisonPage {
   limit: number;
   totalLoci: number;
   matchingLoci: number;
-  changedLoci?: number;
+  changedLoci?: number | null;
   hasMore: boolean;
   rows: TrackComparisonLocus[];
+}
+
+export interface ComparisonMapStrip {
+  contig: string;
+  start: number;
+  end: number;
+  bins: Array<{ start: number; end: number; total: number; changed: number; sequence: number; altCopies: number; placement: number }>;
+}
+export interface TrackComparisonMap {
+  revision: string;
+  strips: ComparisonMapStrip[];
+  rows: TrackComparisonLocus[];
+  rowTypes: Array<"sequence" | "altCopies" | "placement" | null>;
 }
 
 export interface PredictionComparisonReport { revision: string; deviceIds: string[]; counts: Record<string, number>; total: number }

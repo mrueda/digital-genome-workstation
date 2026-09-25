@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, FileInput, Database, Dna, FlaskConical, ChevronDown } from "lucide-react";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "./api";
 import { refreshedAlleleFocus } from "./alleleFocus";
 import { savedAllele } from "./alleleComparison";
-import { ComparisonWorkspace } from "./ComparisonWorkspace";
 import { WholeTrackComparison } from "./WholeTrackComparison";
-import { TrackPredictionComparison } from "./TrackPredictionComparison";
+import { comparisonKeysFromIds } from "./comparisonSelection";
+import { GenomeDifferenceMap } from "./GenomeDifferenceMap";
+import { TrackPredictionComparison, type ConsequenceViewState } from "./TrackPredictionComparison";
 import type { TrackComparisonLocus } from "./types";
-import { comparisonRows } from "./comparisonRows";
 import { EvidenceCard } from "./EvidenceCard";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId, type WorkspaceMenuCommand } from "./ApplicationChrome";
@@ -346,7 +347,7 @@ function defaultRandomizer(): AlleleRandomizerDevice {
     bypassed: false,
     status: "ready",
     settings: { mode: "randomizer", amount: 100, seed: 42, maximumPositions: 1_000, substitutionPattern: "uniform", transitionProbability: 67 },
-    message: "Select visible VCF alleles, preview the changes, then apply them as reversible blocks.",
+    message: "Select VCF alleles and generate reversible mutations on this track.",
     rackOrder: 5,
     limitation: "Randomization is not a biological prediction. Version 1 changes canonical SNVs only and each result must be evaluated independently."
   };
@@ -359,7 +360,7 @@ function defaultMorph(targetTrackId = ""): GenomeMorphDevice {
     bypassed: false,
     status: "ready",
     settings: { targetTrackId, amount: 50, ordering: "genomic", seed: 42 },
-    message: "Choose another compatible project track and preview a discrete intermediate state.",
+    message: "Choose a target track, set the amount, then apply the morph.",
     rackOrder: 7,
     limitation: "Intermediate states are synthetic editing scenarios, not evolutionary generations, ancestors, descendants, offspring, or predictions of biological viability."
   };
@@ -543,7 +544,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         if (!checkedResources.current && !values.length) setResourceSetup(true);
         checkedResources.current = true;
         setResourcesChecked(true);
-        setStatus(value ? "Choose a reference profile, then select a VCF." : "Open Settings → Resources to install or register genome resources.");
+        setStatus(value ? "Ready to open a project, explore an example or import a VCF." : "Open Settings → Resources to install or register genome resources.");
       })
       .catch((error) => setStatus(`Could not load resources: ${messageOf(error)}`)); };
     refreshResources();
@@ -752,30 +753,36 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
 
       <section className="setup-panel">
         <div className="setup-heading">
-          <div><p className="eyebrow">Start a project</p><h2>Open or create a genome workspace</h2><small>{projectTemplate === "standardEvidence" ? "DGW Starter template" : "Empty template"}</small></div>
-          <button className="button ghost" onClick={openExisting} disabled={busy}>Open .dgw</button>
+          <div><p className="eyebrow">Start a project</p><h2>Get started</h2></div>
+          <button className="button ghost landing-action" onClick={openExisting} disabled={busy}><FolderOpen aria-hidden="true" />Open .dgw</button>
         </div>
 
         <section className="example-projects" aria-label="Example projects">
-          {resourcesChecked && <div className="resource-setup-notice">
-            <p>{bundles.length ? "Need another reference assembly?" : "Genome resources are required before opening examples or importing a VCF."}</p>
-            <button type="button" className="button secondary" disabled={busy} onClick={() => setResourceSetup(true)}>Set up genome resources</button>
+          {resourcesChecked && bundles.length === 0 && <div className="resource-setup-notice">
+            <p>Genome resources are required before opening examples or importing a VCF.</p>
+            <button type="button" className="button secondary landing-action" disabled={busy} onClick={() => setResourceSetup(true)}><Database aria-hidden="true" />Set up genome resources</button>
           </div>}
           <header><b>Open an example</b><small>Start with a fresh, unsaved copy</small></header>
           <div>
             <button type="button" aria-label="Open GRCh37 example project" onClick={() => { void loadExample("alleleEditingB37"); }} disabled={busy}>
+              <FlaskConical className="example-icon b37" aria-hidden="true" />
               <b>Allele Editing</b><span>GRCh37</span><small>{bundles.some(item => item.assembly === "b37") ? "Synthetic · 3 prepared tracks" : "Requires GRCh37 resources · Set up"}</small>
             </button>
             <button type="button" aria-label="Open GRCh38 example project" onClick={() => { void loadExample("alleleEditingHg38"); }} disabled={busy}>
+              <FlaskConical className="example-icon hg38" aria-hidden="true" />
               <b>Allele Editing</b><span>GRCh38</span><small>{bundles.some(item => item.assembly === "hg38") ? "Synthetic · 3 prepared tracks" : "Requires GRCh38 resources · Set up"}</small>
             </button>
             <button type="button" aria-label="Open HG00103 exome example" onClick={() => { void loadExample("hg00103Wes"); }} disabled={busy}>
+              <Dna className="example-icon exome" aria-hidden="true" />
               <b>HG00103 exome</b><span>GRCh37</span><small>{bundles.some(item => item.assembly === "b37") ? "1000 Genomes WES · 19.6K alleles" : "Requires GRCh37 resources · Set up"}</small>
             </button>
           </div>
         </section>
 
-        <div className="start-divider"><span>or import a VCF</span></div>
+        <details className="vcf-import-panel">
+          <summary><FileInput className="import-icon" aria-hidden="true" /><span><b>Import your VCF</b><small>Create a project from your own variants</small></span><ChevronDown className="import-disclosure" aria-hidden="true" /></summary>
+          <div className="vcf-import-fields">
+        <small>{projectTemplate === "standardEvidence" ? "DGW Starter template" : "Empty template"}</small>
 
         <div className="reference-profile-choice">
           <label htmlFor="reference-profile">Reference profile</label>
@@ -831,7 +838,19 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
           </div>
         </div>
 
-        <div className="status-line"><span className={busy ? "pulse" : "status-dot"} />{status}</div>
+        <div className="setup-submit">
+          <button className="button primary wide" onClick={create} disabled={busy || !bundle || !inspection || inspection.supportedRecordCount === 0 || !sample || !projectPath}>
+            {busy ? "Working…" : "Open genome workspace"}
+          </button>
+        </div>
+          </div>
+        </details>
+
+        {resourcesChecked && bundles.length > 0 && <div className="landing-resources">
+          <small>{bundles.map(item => item.assembly === "hg38" ? "GRCh38" : "GRCh37").join(" · ")} resources available</small>
+          <button type="button" className="button ghost landing-action" disabled={busy} onClick={() => setResourceSetup(true)}><Database aria-hidden="true" />Set up genome resources</button>
+        </div>}
+        <div className="status-line" role="status"><span className={busy ? "pulse" : "status-dot"} /><span className="status-message">{status}</span></div>
         {busy && processSteps.length > 0 && <section className="processing-panel" aria-live="polite" aria-label="Processing progress">
           <div className="processing-progress"><i style={{ width: `${Math.min(100, (processSteps.at(-1)!.step / processSteps.at(-1)!.totalSteps) * 100)}%` }} /></div>
           <ol>
@@ -844,11 +863,6 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
         </section>}
         {inputWarnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
         {warnings.map((warning) => <p className="warning" key={warning}>{warning}</p>)}
-        <div className="setup-submit">
-          <button className="button primary wide" onClick={create} disabled={busy || !bundle || !inspection || inspection.supportedRecordCount === 0 || !sample || !projectPath}>
-            {busy ? "Working…" : "Open genome workspace"}
-          </button>
-        </div>
       </section>
     </main>
   );
@@ -1418,9 +1432,6 @@ function Workstation({
   const [notice, setNotice] = useState("Ready");
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [detailMode, setDetailMode] = useState<"devices" | "allele">("devices");
-  const [showComparison, setShowComparison] = useState(false);
-  const [wholeTrackComparison, setWholeTrackComparison] = useState(false);
-  const [showPredictionComparison, setShowPredictionComparison] = useState(false);
   const [transportKind, setTransportKind] = useState<TransportTargetKind>("variants");
   const [transportLoop, setTransportLoop] = useState(false);
   const [transportState, setTransportState] = useState<TransportState>("idle");
@@ -1449,6 +1460,12 @@ function Workstation({
   const transportLoopRef = useRef(false);
   const transportStartRef = useRef<{ context: FocusContext; selected?: EffectiveVariant; selectedEditId?: string } | undefined>(undefined);
   const activeTrack = focus?.activeTrack ?? snapshot.activeTrack;
+  const consequenceViews = useRef(new Map<string, ConsequenceViewState>());
+  const comparisonSelection: VariantSelection = symbolicSelection?.selection.trackId === activeTrack.id
+    ? symbolicSelection.selection
+    : { kind: "explicit", trackId: activeTrack.id, variants: comparisonKeysFromIds(selectedAlleleIds) };
+  const consequenceViewKey = `${projectPath}:${activeTrack.id}:${JSON.stringify(comparisonSelection)}`;
+  const comparisonSelectedCount = symbolicSelection?.selection.trackId === activeTrack.id ? symbolicSelection.total : comparisonSelection.kind === "explicit" ? comparisonSelection.variants.length : 0;
   const focusedSourceVariants = trackDeck.find((lane) => lane.track.readOnly)?.variants;
   const navigationVariantTotal = variantContigs.reduce((total, contig) => total + contig.total, 0);
   const contextMidpoint = context.start + Math.floor((context.end - context.start) / 2);
@@ -1664,7 +1681,7 @@ function Workstation({
         const inputState = scoringInputState(activeScoringObjective, scoringInput, activeBypassedDeviceSet);
         return {
           id: manifest.id,
-          name: manifest.name,
+          name: visualization ? "Track Compare" : manifest.name,
           kind,
           target: visualization ? "focusedRegion" : "selectedAllele",
           order: order.get(manifest.id) ?? 100,
@@ -1677,7 +1694,7 @@ function Workstation({
             : evidenceSummary(evidence),
           limitation: manifest.scientificLimitations[0],
           canRun: visualization || Boolean(selected),
-          runLabel: visualization ? "Open map" : evidence ? "Refresh" : "Run now",
+          runLabel: visualization ? "Open Track Compare" : evidence ? "Refresh" : "Run now",
           scoreInclusion: visualization || activeTrack.readOnly ? undefined : inputState === "excluded" ? "excluded" : "included"
         } satisfies RackDeviceView;
       });
@@ -1708,6 +1725,7 @@ function Workstation({
         sourceVariantTotal: lane.sourceVariantTotal,
         densityMode: lane.variantsTruncated,
         totalEditCount: lane.edits.reduce((total, edit) => total + editMutationCount(edit), 0),
+        activeEditCount: lane.edits.filter(edit => !lane.track.bypassedEditIds.includes(edit.id)).reduce((total, edit) => total + editMutationCount(edit), 0),
         alleles: visibleVariants.map((variant) => {
           const locus = `${variant.key.position}:${variant.key.reference}`;
           const stackIndex = locusIndexes.get(locus) ?? 0;
@@ -2069,8 +2087,10 @@ function Workstation({
     );
     if (!lane) return;
     const selection = symbolicSelection.selection;
+    const explicitKeys = selection.kind === "explicit" ? new Set(selection.variants.map(variantKeyId)) : undefined;
     const excluded = new Set((selection.kind === "explicit" ? [] : selection.exclusions).map(variantKeyId));
     const visibleIds = lane.variants
+      .filter(variant => !explicitKeys || explicitKeys.has(variantKeyId(variant.key)) || Boolean(variant.sourceKey && explicitKeys.has(variantKeyId(variant.sourceKey))))
       .filter((variant) => selection.kind !== "interval"
         || (variant.key.contig === selection.contig
           && variant.key.position <= selection.end
@@ -2091,7 +2111,7 @@ function Workstation({
           ...device,
           preview: undefined,
           status: "stale",
-          message: "The allele selection or track state changed. Preview again before applying."
+          message: "The allele selection or track state changed. Generate mutations from the current track."
         }
       };
     });
@@ -3093,35 +3113,27 @@ function Workstation({
     };
   }
 
-  function randomizerPreview(plan: RandomizerPreviewResult) {
-    return {
-      selectedPositions: plan.selectedPositions,
-      randomizedPositions: plan.randomizedPositions,
-      transitionPositions: plan.transitionPositions,
-      transversionPositions: plan.transversionPositions,
-      generatedEdits: plan.generatedEdits,
-      excludedPositions: plan.excludedPositions,
-      changeCount: plan.changeCount,
-      changes: plan.changes,
-      compoundLayerId: plan.compoundLayerId,
-      message: plan.noOpReason
-    };
-  }
-
   function changeRandomizer(trackId: string, settings: AlleleRandomizerSettings) {
-    setRandomizers((current) => ({
-      ...current,
-      [trackId]: {
-        ...(current[trackId] ?? defaultRandomizer()),
-        settings,
-        status: "stale",
-        preview: undefined,
-        message: "Controls changed. Preview the new deterministic result."
-      }
-    }));
+    setRandomizers((current) => {
+      const device = current[trackId] ?? defaultRandomizer();
+      if (Object.entries(settings).every(([key, value]) => device.settings[key as keyof AlleleRandomizerSettings] === value)) return current;
+      return {
+        ...current,
+        [trackId]: {
+          ...device,
+          settings,
+          status: "stale",
+          preview: undefined,
+          message: "Controls changed. Generate mutations to apply the new result."
+        }
+      };
+    });
   }
 
-  async function previewRandomizer(trackId: string) {
+  const generatingRandomizers = useRef(new Set<string>());
+  async function generateRandomizer(trackId: string) {
+    if (generatingRandomizers.current.has(trackId)) return;
+    generatingRandomizers.current.add(trackId);
     const device = randomizers[trackId] ?? defaultRandomizer();
     const selectionCount = symbolicSelection?.selection.trackId === trackId
       ? symbolicSelection.total
@@ -3133,7 +3145,8 @@ function Workstation({
       [trackId]: {
         ...(current[trackId] ?? device),
         status: "running",
-        message: background ? "Submitting background preview…" : "Building interactive preview…"
+        preview: undefined,
+        message: background ? "Submitting mutation generation…" : "Generating mutations…"
       }
     }));
     try {
@@ -3168,28 +3181,17 @@ function Workstation({
         }
         plan = job.result;
       } else {
-        plan = await api.previewRandomizer(
-          projectPath,
-          trackId,
-          invocation.request,
-          invocation.selection,
-          invocation.selectionLimit
-        );
+        await applyRandomizer(trackId, device);
+        return;
       }
-      setRandomizers((current) => ({
-        ...current,
-        [trackId]: {
-          ...(current[trackId] ?? device),
-          status: "ready",
-          preview: randomizerPreview(plan),
-          message: plan.noOpReason ?? (background
-            ? `Background preview completed for ${plan.randomizedPositions.toLocaleString()} positions.`
-            : `${plan.randomizedPositions} selected positions ready to apply.`)
-        }
-      }));
-      setNotice(plan.noOpReason ?? (background
-        ? `Background preview: ${plan.randomizedPositions.toLocaleString()} positions · ${plan.generatedEdits.toLocaleString()} copy-specific changes`
-        : `Preview: ${plan.randomizedPositions} positions become ${plan.generatedEdits} reversible mutation blocks`));
+      if (plan.generatedEdits === 0) {
+        const message = plan.noOpReason ?? "No mutations generated. The track is unchanged.";
+        setRandomizers(current => ({ ...current, [trackId]: { ...(current[trackId] ?? device), status: "ready", preview: undefined, message } }));
+        setNotice(message);
+        return;
+      }
+      if (!plan.compoundLayerId) throw new Error("Generation did not produce a bulk mutation layer. The track is unchanged.");
+      await applyRandomizer(trackId, device, plan);
     } catch (error) {
       setRandomizers((current) => ({
         ...current,
@@ -3197,21 +3199,19 @@ function Workstation({
       }));
       setNotice(messageOf(error));
     } finally {
+      generatingRandomizers.current.delete(trackId);
       if (!background) setBusy(false);
     }
   }
 
-  async function applyRandomizer(trackId: string) {
-    const device = randomizers[trackId] ?? defaultRandomizer();
-    if (!device.preview || device.preview.generatedEdits === 0) return;
-    const preview = device.preview;
+  async function applyRandomizer(trackId: string, device: AlleleRandomizerDevice, preview?: RandomizerPreviewResult) {
     setBusy(true);
     setRandomizers((current) => ({
       ...current,
-      [trackId]: { ...(current[trackId] ?? device), status: "running", message: "Writing reversible mutation blocks…" }
+      [trackId]: { ...(current[trackId] ?? device), status: "running", message: "Applying changes…" }
     }));
     try {
-      if (preview.compoundLayerId) {
+      if (preview?.compoundLayerId) {
         const applied = await api.applyCompoundMutationLayer(
           projectPath,
           trackId,
@@ -3233,10 +3233,10 @@ function Workstation({
             status: "ready",
             generatedEditIds: [...new Set([...(device.generatedEditIds ?? []), ...generatedEditIds])],
             preview: undefined,
-            message: `${preview.generatedEdits.toLocaleString()} changes applied as one reversible mutation layer.`
+            message: `${preview.generatedEdits.toLocaleString()} changes applied as one reversible mutation layer.`,
+            lastApplied: `${preview.generatedEdits.toLocaleString()} changes in one reversible mutation layer`
           }
         }));
-        resetAlleleSelection([]);
         setSelectedEditId(applied.generatedEditId);
         setEvaluation(undefined);
         setDeviceEvaluations({});
@@ -3271,10 +3271,10 @@ function Workstation({
           status: "ready",
           generatedEditIds: [...new Set([...(device.generatedEditIds ?? []), ...result.generatedEditIds])],
           preview: undefined,
-          message: `${result.generatedEditIds.length} reversible mutation blocks applied.`
+          message: `${result.generatedEditIds.length} reversible mutation blocks applied.`,
+          lastApplied: result.generatedEditIds.length > 0 ? `${result.generatedEditIds.length.toLocaleString()} mutation ${result.generatedEditIds.length === 1 ? "block" : "blocks"}` : undefined
         }
       }));
-      resetAlleleSelection([]);
       setSelectedEditId(result.generatedEditIds.at(-1));
       setEvaluation(undefined);
       setDeviceEvaluations({});
@@ -3308,12 +3308,14 @@ function Workstation({
         status: "ready",
         preview: undefined,
         progress: undefined,
-        message: "Morph controls changed. Preview the new intermediate state."
+        message: "Controls changed. Apply morph to update this track."
       }
     }));
   }
 
-  async function previewMorph(trackId: string) {
+  const applyingMorphs = useRef(new Set<string>());
+  async function applyMorph(trackId: string) {
+    if (applyingMorphs.current.has(trackId)) return;
     const lane = trackDeck.find((candidate) => candidate.track.id === trackId);
     const fallbackTarget = trackDeck.find((candidate) => candidate.track.id !== trackId)?.track.id ?? "";
     const device = morphs[trackId] ?? defaultMorph(fallbackTarget);
@@ -3326,6 +3328,7 @@ function Workstation({
       setNotice("Choose another project track as the Genome Morph target");
       return;
     }
+    applyingMorphs.current.add(trackId);
     setMorphs((current) => ({
       ...current,
       [trackId]: {
@@ -3370,17 +3373,22 @@ function Workstation({
         throw new Error(job.error ?? job.message ?? `Genome Morph preview ${job.status}`);
       }
       const preview = job.result;
-      setMorphs((current) => ({
-        ...current,
-        [trackId]: {
-          ...(current[trackId] ?? device),
-          status: "ready",
-          progress: 100,
-          preview,
-          message: preview.noOpReason ?? `${preview.selectedPositions.toLocaleString()} positions are ready as one reversible layer.`
-        }
-      }));
-      setNotice(preview.noOpReason ?? `Genome Morph preview: ${preview.amount}% · ${preview.selectedPositions.toLocaleString()} positions · ${preview.generatedEdits.toLocaleString()} changes`);
+      if (preview.generatedEdits === 0) {
+        setMorphs((current) => ({
+          ...current,
+          [trackId]: {
+            ...(current[trackId] ?? device),
+            status: "ready",
+            progress: 100,
+            preview: undefined,
+            message: preview.noOpReason ?? "No positions need changing."
+          }
+        }));
+        setNotice(preview.noOpReason ?? "No positions need changing.");
+      } else {
+        if (!preview.compoundLayerId) throw new Error("Genome Morph did not produce a mutation layer.");
+        await attachMorph(trackId, device, preview);
+      }
     } catch (error) {
       setMorphs((current) => ({
         ...current,
@@ -3393,13 +3401,12 @@ function Workstation({
         }
       }));
       setNotice(messageOf(error));
+    } finally {
+      applyingMorphs.current.delete(trackId);
     }
   }
 
-  async function applyMorph(trackId: string) {
-    const fallbackTarget = trackDeck.find((candidate) => candidate.track.id !== trackId)?.track.id ?? "";
-    const device = morphs[trackId] ?? defaultMorph(fallbackTarget);
-    const preview = device.preview;
+  async function attachMorph(trackId: string, device: GenomeMorphDevice, preview: TrackMorphPreviewResult) {
     if (!preview?.compoundLayerId || preview.generatedEdits === 0) return;
     setBusy(true);
     setMorphs((current) => ({
@@ -3408,7 +3415,7 @@ function Workstation({
         ...(current[trackId] ?? device),
         status: "running",
         progress: undefined,
-        message: "Applying the previewed morph state…"
+        message: "Attaching the reversible morph layer…"
       }
     }));
     try {
@@ -3430,7 +3437,8 @@ function Workstation({
           generatedEditIds: [...new Set([...(device.generatedEditIds ?? []), ...generatedEditIds])],
           preview: undefined,
           progress: undefined,
-          message: `${preview.generatedEdits.toLocaleString()} changes applied as one reversible morph layer.`
+          message: `${preview.generatedEdits.toLocaleString()} changes applied as one reversible morph layer.`,
+          lastApplied: `${preview.generatedEdits.toLocaleString()} changes in one reversible morph layer`
         }
       }));
       setSelectedEditId(applied.generatedEditId);
@@ -3454,76 +3462,6 @@ function Workstation({
           message: messageOf(error)
         }
       }));
-      setNotice(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function bypassMorph(trackId: string, bypassed: boolean) {
-    const fallbackTarget = trackDeck.find((candidate) => candidate.track.id !== trackId)?.track.id ?? "";
-    const device = morphs[trackId] ?? defaultMorph(fallbackTarget);
-    if (!device.generatedEditIds?.length) {
-      setMorphs((current) => ({ ...current, [trackId]: { ...(current[trackId] ?? device), bypassed } }));
-      return;
-    }
-    setBusy(true);
-    try {
-      const nextSnapshot = await api.setTrackEditsBypass(projectPath, trackId, device.generatedEditIds, bypassed);
-      setSnapshot(nextSnapshot);
-      setMorphs((current) => ({
-        ...current,
-        [trackId]: { ...(current[trackId] ?? device), bypassed, preview: undefined }
-      }));
-      await refresh(context);
-      setNotice(`${bypassed ? "Bypassed" : "Enabled"} Genome Morph mutation layers`);
-    } catch (error) {
-      setNotice(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function bypassRandomizer(trackId: string, bypassed: boolean) {
-    const device = randomizers[trackId] ?? defaultRandomizer();
-    if (!device.generatedEditIds?.length) {
-      setRandomizers((current) => ({ ...current, [trackId]: { ...(current[trackId] ?? device), bypassed } }));
-      return;
-    }
-    setBusy(true);
-    try {
-      const nextSnapshot = await api.setTrackEditsBypass(projectPath, trackId, device.generatedEditIds, bypassed);
-      setSnapshot(nextSnapshot);
-      setRandomizers((current) => ({ ...current, [trackId]: { ...(current[trackId] ?? device), bypassed } }));
-      await refresh(context);
-      setNotice(`${bypassed ? "Bypassed" : "Enabled"} Mutation Generator mutation blocks`);
-    } catch (error) {
-      setNotice(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function bypassOptimizer(trackId: string, bypassed: boolean) {
-    const device = optimizers[trackId] ?? defaultOptimizer(trackId);
-    if (!device.generatedEditIds?.length) {
-      setOptimizers((current) => ({
-        ...current,
-        [trackId]: { ...(current[trackId] ?? defaultOptimizer(trackId)), bypassed }
-      }));
-      return;
-    }
-    setBusy(true);
-    try {
-      const nextSnapshot = await api.setTrackEditsBypass(projectPath, trackId, device.generatedEditIds, bypassed);
-      setSnapshot(nextSnapshot);
-      setOptimizers((current) => ({
-        ...current,
-        [trackId]: { ...(current[trackId] ?? defaultOptimizer(trackId)), bypassed }
-      }));
-      await refresh(context);
-      setNotice(`${bypassed ? "Bypassed" : "Enabled"} Genome Optimizer edit blocks`);
-    } catch (error) {
       setNotice(messageOf(error));
     } finally {
       setBusy(false);
@@ -3681,6 +3619,7 @@ function Workstation({
             progress: undefined,
             generatedEditIds,
             message: backgroundResult.noOpReason ?? `${backgroundResult.generatedEdits.toLocaleString()} changes applied as one reversible optimizer layer.`,
+            lastApplied: generatedEditIds.length > 0 ? `${backgroundResult.generatedEdits.toLocaleString()} changes in one reversible optimizer layer` : undefined,
             result: {
               generatedEdits: backgroundResult.generatedEdits,
               changedPositions: backgroundResult.changedPositions,
@@ -3752,6 +3691,7 @@ function Workstation({
           progress: undefined,
           generatedEditIds: result.generatedEditIds,
           message: result.plan.noOpReason ?? `${result.generatedEditIds.length} reversible edit blocks generated.`,
+          lastApplied: result.generatedEditIds.length > 0 ? `${result.generatedEditIds.length.toLocaleString()} optimizer mutation blocks` : undefined,
           result: {
             generatedEdits: result.generatedEditIds.length,
             changedPositions,
@@ -4105,14 +4045,14 @@ function Workstation({
   }
 
   const selectedEvidenceKey = selected ? selectionEvidenceKey(selected.key) : "";
-  function focusComparisonLocus(row: TrackComparisonLocus) {
-    setShowComparison(false);
+  function focusComparisonLocus(row: TrackComparisonLocus, preserveSelection = false) {
+    if (preserveSelection) setSymbolicSelection({ selection: comparisonSelection, total: symbolicSelection?.total ?? selectedAlleleIds.length });
     setSelected(undefined); setSelectedEditId(undefined); setDetailMode("devices");
     void refresh({ contig: row.contig, start: Math.max(1, row.position - 40), end: row.position + Math.max(40, row.reference.length) }).then(refreshed => {
       if (!refreshed?.view) return;
       const target = row.current.length === 1 ? refreshed.view.variants.find(variant => sameVariant(variant.key, row.current[0].key)) : undefined;
       setSelected(target); setSelectedEditId(target?.editIds[0]);
-      if (target) { setAlleleSelection([alleleId(target)], "Inspect comparison result"); setDetailMode("allele"); }
+      if (target) { if (!preserveSelection) setAlleleSelection([alleleId(target)], "Inspect comparison result"); setDetailMode("allele"); }
     });
   }
   const selectedOperation = trackDeck.find(lane => lane.track.id === activeTrack.id)?.edits
@@ -4506,6 +4446,7 @@ function Workstation({
   }
 
   function toggleRackDevice(trackId: string, deviceId: string, bypassed: boolean) {
+    if (!alleleDeviceIds.some(id => id === deviceId)) return;
     setBypassedDevicesByTrack((current) => {
       const existing = current[trackId] ?? [];
       return {
@@ -4521,9 +4462,7 @@ function Workstation({
     const scoringInput = optimizerWeights.find((input) => input.sourceDeviceId === deviceId);
     const contributesToObjective = Boolean(scoringInput && objective?.includedWeightIds.includes(scoringInput.id));
     if (contributesToObjective) invalidateOptimizerScoringInputs(trackId, `${name} is ${bypassed ? "bypassed" : "active"}. Generate again to use the updated effective scoring inputs.`);
-    setNotice(contributesToObjective
-      ? `${bypassed ? "Bypassed" : "Enabled"} ${name}; its effective score contribution is ${bypassed ? "0" : "restored"} and existing genome edits are unchanged`
-      : `${bypassed ? "Bypassed" : "Enabled"} ${name}; it is not included in the current objective and genome edits are unchanged`);
+    setNotice(`${bypassed ? "Bypassed" : "Enabled"} ${name}; genome edits are unchanged.${deviceId === DEVICE_IDS.consequence && bypassed ? " Track Monitor's impact score is unavailable while this device is bypassed." : bypassed ? " This evidence is excluded from evaluation." : " This evidence is available for evaluation."}`);
   }
 
   async function renderVcf() {
@@ -4647,7 +4586,7 @@ function Workstation({
 
   return (
     <main
-      className={`workstation${settings.showVariantBrowser ? "" : " hide-variants"}${settings.showEvidenceInspector && !showComparison ? "" : " hide-evidence"}`}
+      className={`workstation${settings.showVariantBrowser ? "" : " hide-variants"}${settings.showEvidenceInspector ? "" : " hide-evidence"}`}
       onMouseOver={(event) => updateContextHelp(event.target)}
       onFocusCapture={(event) => updateContextHelp(event.target)}
     >
@@ -4799,11 +4738,6 @@ function Workstation({
         </section>}
 
         <div className="track-workspace-shell" data-context-help="tracks">
-          <div className="workspace-mode-bar" role="group" aria-label="Workspace mode">
-            <button type="button" aria-pressed={!showComparison} onClick={() => setShowComparison(false)}>Edit</button>
-            <button type="button" aria-label="Compare source and candidate" aria-pressed={showComparison} onClick={() => { interruptTransportForUser(); setShowComparison(true); }} disabled={busy}>Compare</button>
-            <span title={activeTrack.name}>{showComparison ? `Comparing: Source → ${activeTrack.name}` : activeTrack.readOnly ? `Source: ${activeTrack.name} · read-only` : `Editing: ${activeTrack.name}`}</span>
-          </div>
           <TrackDeviceWorkspace
             region={context}
             tracks={trackModels}
@@ -4828,31 +4762,29 @@ function Workstation({
             selectedPosition={selected?.key.contig === context.contig ? selected.key.position : undefined}
             contigLength={focus?.context.contig === context.contig ? focus.contigLength : undefined}
             busy={busy}
-            detailPanelLabel={showComparison ? "Comparison" : "Allele editor"}
-            detailPanel={showComparison ? <div className="dgw-comparison-pane">
-              <div className="comparison-scope-bar" role="group" aria-label="Comparison scope">
-                <button aria-pressed={!wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(false); setShowPredictionComparison(false); }}>Focused region</button>
-                <button aria-pressed={wholeTrackComparison && !showPredictionComparison} onClick={() => { setWholeTrackComparison(true); setShowPredictionComparison(false); }}>Whole track DNA</button>
-                <button aria-pressed={showPredictionComparison} onClick={() => setShowPredictionComparison(true)}>Whole track predictions</button>
+            detailPanelLabel="Allele editor"
+            renderComparison={(view, close) => <div className="dgw-comparison-pane">
+              <div className="comparison-actions" aria-label="Comparison selection">
+                <b>{comparisonSelectedCount.toLocaleString()} alleles selected</b>
+                <span>{comparisonSelection.kind === "allTrack" ? "All chromosomes" : comparisonSelection.kind === "interval" ? "Selected interval" : "Explicit selection"} · shared by all three views</span>
+                <button onClick={close}>{comparisonSelectedCount ? "Change selection in Track view" : "Select variants in Track view"}</button>
               </div>
-              {showPredictionComparison ? <TrackPredictionComparison key={`${projectPath}:${activeTrack.id}`} projectPath={projectPath} trackId={activeTrack.id}
+              {activeTrack.readOnly && <p className="comparison-source-notice" role="status">This is the protected source track. Select a candidate track above to compare its changes with the source.</p>}
+              {!comparisonSelectedCount ? <p>Select variants in Track view to compare them. Browsing or zooming here does not change that selection.</p> : view === "map" ? <GenomeDifferenceMap key={consequenceViewKey} projectPath={projectPath} trackId={activeTrack.id} selection={comparisonSelection}
+                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} region={context}
+                deviceIds={activeAnalyzerDeviceIds} load={collectDeviceEvidence}
+                onFocus={locus => { close(); focusComparisonLocus(locus, true); }} />
+              : view === "evidence" ? <TrackPredictionComparison key={consequenceViewKey} projectPath={projectPath} trackId={activeTrack.id}
+                savedView={consequenceViews.current.get(consequenceViewKey)} onRemember={state => { consequenceViews.current.set(consequenceViewKey, state); if (consequenceViews.current.size > 20) consequenceViews.current.delete(consequenceViews.current.keys().next().value!); }}
+                selection={comparisonSelection} selectedCount={comparisonSelectedCount}
                 revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`} deviceIds={activeAnalyzerDeviceIds}
                 workerThreads={settings.workerThreads === "auto" ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1) : settings.workerThreads}
-                onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : wholeTrackComparison ? <WholeTrackComparison key={activeTrack.id} projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name}
-                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
-                onBack={() => setShowComparison(false)} onFocus={focusComparisonLocus} /> : <ComparisonWorkspace
-                rows={comparisonRows(focusedSourceVariants ?? [], trackDeck.find(lane => lane.track.id === activeTrack.id))}
-                trackName={activeTrack.name} scope={`${context.contig}:${context.start.toLocaleString()}–${context.end.toLocaleString()}`}
-                revision={`${activeTrack.id}:${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}:${context.contig}:${context.start}:${context.end}:${activeAnalyzerSignature}`}
+                onBack={close} onFocus={locus => { close(); focusComparisonLocus(locus, true); }} /> : <WholeTrackComparison key={consequenceViewKey} projectPath={projectPath} trackId={activeTrack.id} trackName={activeTrack.name} selection={comparisonSelection}
                 deviceIds={activeAnalyzerDeviceIds} load={collectDeviceEvidence}
-                onBack={() => setShowComparison(false)}
-                onOpen={row => {
-                  setShowComparison(false);
-                  if (row.editId) void openTrackEdit(activeTrack.id, row.editId);
-                  else if (row.current) void openTrackAllele(activeTrack.id, alleleId(row.current));
-                }}
-              />}
-            </div> : detailMode === "allele" ? <AlleleEditorPane
+                revision={`${activeTrack.headStateId}:${activeTrack.bypassedEditIds.join(",")}`}
+                onBack={close} onFocus={locus => { close(); focusComparisonLocus(locus, true); }} />}
+            </div>}
+            detailPanel={detailMode === "allele" ? <AlleleEditorPane
               variant={selected}
               savedBase={selectedSavedAllele.base}
               restored={selectedSavedAllele.restored}
@@ -4892,17 +4824,12 @@ function Workstation({
             onRedoAction={() => { void redoLastAction(); }}
             onToggleEdit={toggleTrackEdit}
             onOptimizerChange={changeOptimizer}
-            onOptimizerBypass={bypassOptimizer}
             onRegenerate={regenerateOptimizer}
             onConsolidate={consolidateTrack}
             onRandomizerChange={changeRandomizer}
-            onRandomizerPreview={previewRandomizer}
-            onRandomizerApply={applyRandomizer}
-            onRandomizerBypass={bypassRandomizer}
+            onRandomizerGenerate={generateRandomizer}
             onMorphChange={changeMorph}
-            onMorphPreview={previewMorph}
             onMorphApply={applyMorph}
-            onMorphBypass={bypassMorph}
             onSelectDevice={(_trackId, deviceId) => { setSelectedDeviceId(deviceId); setDetailMode("devices"); }}
             onToggleDevice={toggleRackDevice}
             onRunDevice={runRackDevice}

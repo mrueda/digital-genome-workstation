@@ -557,8 +557,8 @@ pub fn genome_morph_device_manifest() -> DeviceManifest {
 pub fn variant_map_device_manifest() -> DeviceManifest {
     built_in_manifest(
         "org.dgw.builtin.variant-map",
-        "Variant Map",
-        "Visualize source-relative molecular-impact changes across the focused track region.",
+        "Track Compare",
+        "Compare source and current track DNA, allele evidence, and source-relative impact changes.",
         DeviceKind::Visualization,
         FOCUSED_TRACK_INPUT_SCHEMA_ID,
         VISUALIZATION_OUTPUT_SCHEMA_ID,

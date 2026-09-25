@@ -201,7 +201,7 @@ export async function installTauriShellMock(page: Page) {
       ["org.dgw.builtin.clinvar", "ClinVar", "evidence", "Look up exact ClinVar records."],
       ["org.dgw.builtin.cosmic", "COSMIC", "evidence", "Look up exact COSMIC records."],
       ["org.dgw.builtin.genome-optimizer", "Genome Optimizer", "analysis", "Generate bounded score-directed edits."],
-      ["org.dgw.builtin.variant-map", "Variant Map", "visualization", "Map source-relative impact changes."]
+      ["org.dgw.builtin.variant-map", "Track Compare", "visualization", "Compare DNA and source-relative impact changes."]
     ].map(([id, name, kind, description]) => ({
       manifestVersion: "1",
       id,
@@ -258,7 +258,7 @@ export async function installTauriShellMock(page: Page) {
       }
       if (commandName === "start_prediction_comparison_job") {
         stalePrediction = false;
-        predictionJob = { id: "prediction-test-job", operation: "trackPredictionComparison", deviceId: "org.dgw.builtin.variant-consequences", trackId: args.trackId, status: "queued", progress: 0, message: "Queued", stage: "queued", workerThreads: args.workerThreads, request: { deviceIds: args.deviceIds }, result: undefined, createdAt: now, updatedAt: now };
+        predictionJob = { id: "prediction-test-job", operation: "trackPredictionComparison", deviceId: "org.dgw.builtin.variant-consequences", trackId: args.trackId, status: "queued", progress: 0, message: "Queued", stage: "queued", workerThreads: args.workerThreads, request: { deviceIds: args.deviceIds, selection: args.selection }, result: undefined, createdAt: now, updatedAt: now };
         return predictionJob;
       }
       if (commandName === "background_job" && args.jobId === predictionJob?.id) {
@@ -281,6 +281,23 @@ export async function installTauriShellMock(page: Page) {
       }
       if (commandName === "test_fail_next_comparison") { failComparison = true; return null; }
       if (commandName === "test_large_comparison") { largeComparison = true; return null; }
+      if (commandName === "track_comparison_map") {
+        const context = args.context as { contig: string; start: number; end: number } | undefined;
+        const contigs = context ? [context.contig] : ["7", "17"];
+        const strips = contigs.map(contig => {
+          const start = context?.start ?? 1000;
+          const end = context?.end ?? 1000000;
+          const width = Math.ceil((end - start + 1) / Number(args.bins ?? 128));
+          return { contig, start, end, bins: Array.from({ length: Math.ceil((end - start + 1) / width) }, (_, i) => ({
+            start: start + i * width, end: Math.min(end, start + (i + 1) * width - 1),
+            total: i === 0 ? 10000 : 0, changed: i === 0 ? 9000 : 0,
+            sequence: i === 0 ? 6000 : 0, altCopies: i === 0 ? 2000 : 0, placement: i === 0 ? 1000 : 0
+          })) };
+        });
+        return { revision: "map-fixture", strips, rowTypes: ["altCopies"], rows: context && context.end - context.start < 10000 ? [{
+          contig: context.contig, position: context.start, reference: "A", source: [sourceVariants[0]], current: [], changed: true
+        }] : [] };
+      }
       if (commandName === "track_comparison_page") {
         if (failComparison) { failComparison = false; throw Error("Synthetic comparison read failure"); }
         const offset = Number(args.offset);
@@ -290,9 +307,14 @@ export async function installTauriShellMock(page: Page) {
             contig: source.key.contig, position: source.key.position, reference: source.key.reference,
             source: [source], current: index === 204 ? [] : [source], changed: index === 204
           }));
-        const matches = args.changedOnly ? rows.filter(row => row.changed) : rows;
+        const query = String(args.search ?? "").trim().replaceAll(",", "");
+        const [chromosome, region] = query.split(":");
+        const [start, end = start] = region?.split("-").map(Number) ?? [];
+        const matches = (args.changedOnly ? rows.filter(row => row.changed) : rows).filter(row => !query || (
+          row.contig.replace(/^chr/, "") === chromosome.replace(/^chr/, "") && (!region || (row.position >= start && row.position <= end))
+        ));
         return { trackId: String(args.trackId), revision: "comparison-fixture-v1", offset, limit, totalLoci: sources.length,
-          matchingLoci: matches.length, changedLoci: args.changedOnly ? rows.filter(row => row.changed).length : undefined,
+          matchingLoci: matches.length, changedLoci: args.changedOnly ? rows.filter(row => row.changed).length : null,
           hasMore: offset + limit < matches.length, rows: matches.slice(offset, offset + limit) };
       }
       if (commandName === "test_fail_next_session_save") { failNextSessionSave = true; return null; }
@@ -378,6 +400,16 @@ export async function installTauriShellMock(page: Page) {
         return now;
       }
       if (commandName === "device_catalog") return deviceCatalog;
+      if (commandName === "run_randomizer") {
+        if (localStorage.getItem("test-randomizer-failure")) throw new Error("Test application failed");
+        return { snapshot: snapshot(), generatedEditIds: ["edit-restored"], plan: { randomizedPositions: 1 } };
+      }
+      if (commandName === "preview_randomizer") return {
+        selectedPositions: 6, randomizedPositions: 1, transitionPositions: 1,
+        transversionPositions: 0, generatedEdits: 1, excludedPositions: 0, changeCount: 1,
+        changes: [{ contig: "7", position: 140453112, from: "A", to: "G", substitutionClass: "transition" }],
+        limitation: "Synthetic preview for UI testing"
+      };
       if (commandName === "list_background_jobs") return predictionJob ? [predictionJob] : [];
       if (commandName === "variant_contigs") return [
         { contig: "7", total: 7, minPosition: positions[0], maxPosition: positions.at(-1) },

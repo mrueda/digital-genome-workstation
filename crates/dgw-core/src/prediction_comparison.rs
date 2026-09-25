@@ -113,6 +113,28 @@ pub fn run<F: FnMut(u8, &str) -> Result<()>>(
     job_id: &str,
     expected_revision: &str,
     ids: &[String],
+    progress: F,
+) -> Result<PredictionComparisonReport> {
+    run_selected(
+        project,
+        service,
+        track_id,
+        job_id,
+        expected_revision,
+        ids,
+        None,
+        progress,
+    )
+}
+
+pub fn run_selected<F: FnMut(u8, &str) -> Result<()>>(
+    project: &Project,
+    service: &EvaluationService,
+    track_id: &str,
+    job_id: &str,
+    expected_revision: &str,
+    ids: &[String],
+    selection: Option<&crate::VariantSelection>,
     mut progress: F,
 ) -> Result<PredictionComparisonReport> {
     if !ids.iter().any(|id| id == CONSEQUENCE_DEVICE_ID) {
@@ -121,7 +143,10 @@ pub fn run<F: FnMut(u8, &str) -> Result<()>>(
         ));
     }
     progress(5, "Indexing changed loci")?;
-    let index = project.build_track_comparison_index(track_id)?;
+    let mut index = project.build_track_comparison_index(track_id)?;
+    if let Some(selection) = selection {
+        filter_selected_loci(&mut index, selection)?;
+    }
     if index.revision != expected_revision {
         return Err(DgwError::Project(
             "Track changed before comparison started".into(),
@@ -203,6 +228,73 @@ pub fn run<F: FnMut(u8, &str) -> Result<()>>(
         resource_fingerprints,
         counts,
         total: rows.len() as u64,
+    })
+}
+
+fn filter_selected_loci(
+    index: &mut crate::TrackComparisonIndex,
+    selection: &crate::VariantSelection,
+) -> Result<()> {
+    let matches = selected_locus_filter(&index.track_id, selection)?;
+    index.changed_keys.retain(matches);
+    Ok(())
+}
+
+pub(crate) fn selected_locus_filter(
+    expected_track: &str,
+    selection: &crate::VariantSelection,
+) -> Result<impl Fn(&VariantKey) -> bool> {
+    use crate::VariantSelection;
+    let locus = |key: &VariantKey| (key.contig.clone(), key.position, key.reference.clone());
+    let (track_id, include, exclude, interval) = match selection {
+        VariantSelection::Explicit { track_id, variants } => (
+            track_id,
+            Some(variants.iter().map(locus).collect::<BTreeSet<_>>()),
+            BTreeSet::new(),
+            None,
+        ),
+        VariantSelection::Interval {
+            track_id,
+            contig,
+            start,
+            end,
+            exclusions,
+        } => {
+            if *start == 0 || start > end {
+                return Err(DgwError::Project("Invalid selected interval".into()));
+            }
+            (
+                track_id,
+                None,
+                exclusions.iter().map(locus).collect(),
+                Some((contig.clone(), *start, *end)),
+            )
+        }
+        VariantSelection::AllTrack {
+            track_id,
+            exclusions,
+        } => (track_id, None, exclusions.iter().map(locus).collect(), None),
+    };
+    if track_id != expected_track {
+        return Err(DgwError::Project(
+            "Selection belongs to a different track".into(),
+        ));
+    }
+    Ok(move |key: &VariantKey| {
+        let key_locus = locus(key);
+        include
+            .as_ref()
+            .is_none_or(|keys| keys.contains(&key_locus))
+            && !exclude.contains(&key_locus)
+            && interval.as_ref().is_none_or(|(contig, start, end)| {
+                &key.contig == contig
+                    && key.position <= *end
+                    && key
+                        .position
+                        .saturating_add(key.reference.len() as u64)
+                        .saturating_sub(1)
+                        >= *start
+            })
     })
 }
 
@@ -291,6 +383,74 @@ pub fn page(
 mod tests {
     use super::*;
     use crate::{EffectiveVariant, VariantOrigin};
+    #[test]
+    fn comparison_selection_filters_before_evaluation() {
+        let first = variant("C", true, false).key;
+        let mut second = first.clone();
+        second.position = 200;
+        let mut third = first.clone();
+        third.contig = "2".into();
+        let index = crate::TrackComparisonIndex {
+            track_id: "track".into(),
+            revision: "r".into(),
+            total_loci: 3,
+            changed_keys: vec![first.clone(), second.clone(), third.clone()],
+            change_types: Default::default(),
+        };
+        let mut selected = index.clone();
+        let mut edited_alt = second.clone();
+        edited_alt.alternate = "T".into();
+        filter_selected_loci(
+            &mut selected,
+            &crate::VariantSelection::Explicit {
+                track_id: "track".into(),
+                variants: vec![edited_alt],
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.changed_keys, vec![second.clone()]);
+        let mut selected = index.clone();
+        filter_selected_loci(
+            &mut selected,
+            &crate::VariantSelection::Interval {
+                track_id: "track".into(),
+                contig: "1".into(),
+                start: 100,
+                end: 200,
+                exclusions: vec![first.clone()],
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.changed_keys, vec![second.clone()]);
+        let mut selected = index.clone();
+        filter_selected_loci(
+            &mut selected,
+            &crate::VariantSelection::AllTrack {
+                track_id: "track".into(),
+                exclusions: vec![second],
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.changed_keys, vec![first, third]);
+        let mut selected = index.clone();
+        filter_selected_loci(
+            &mut selected,
+            &crate::VariantSelection::Explicit {
+                track_id: "track".into(),
+                variants: vec![],
+            },
+        )
+        .unwrap();
+        assert!(selected.changed_keys.is_empty());
+        assert!(filter_selected_loci(
+            &mut selected,
+            &crate::VariantSelection::AllTrack {
+                track_id: "other".into(),
+                exclusions: vec![]
+            }
+        )
+        .is_err());
+    }
     fn variant(alt: &str, one: bool, two: bool) -> EffectiveVariant {
         EffectiveVariant {
             key: VariantKey {

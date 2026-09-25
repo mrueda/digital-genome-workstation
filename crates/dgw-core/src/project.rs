@@ -38,6 +38,69 @@ pub const VARIANT_PAGE_SIZE: u32 = 200;
 pub const VARIANT_DENSITY_BINS: u32 = 256;
 pub const MAX_SEQUENCE_FOCUS_BASES: u64 = 50_000;
 
+struct ComparisonSearch {
+    contig: String,
+    start: i64,
+    end: i64,
+}
+
+impl ComparisonSearch {
+    fn parse(text: &str) -> Result<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(Self {
+                contig: String::new(),
+                start: 1,
+                end: i64::MAX,
+            });
+        }
+        let invalid = || {
+            DgwError::Project(
+                "Use a chromosome, chr:position or chr:start-end (1-based coordinates)".into(),
+            )
+        };
+        let (contig, range) = text
+            .split_once(':')
+            .map_or((text, None), |(c, r)| (c, Some(r)));
+        let contig = contig.trim().strip_prefix("chr").unwrap_or(contig.trim());
+        if contig.is_empty() || contig.chars().any(char::is_whitespace) {
+            return Err(invalid());
+        }
+        let mut filter = Self {
+            contig: contig.into(),
+            start: 1,
+            end: i64::MAX,
+        };
+        if let Some(range) = range {
+            let (start, end) = range.split_once('-').unwrap_or((range, range));
+            let position = |value: &str| -> Result<i64> {
+                let value = value.trim().replace(',', "");
+                if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(invalid());
+                }
+                value
+                    .parse::<i64>()
+                    .ok()
+                    .filter(|v| *v > 0)
+                    .ok_or_else(invalid)
+            };
+            filter.start = position(start)?;
+            filter.end = position(end)?;
+            if filter.start > filter.end {
+                return Err(invalid());
+            }
+        }
+        Ok(filter)
+    }
+
+    fn matches(&self, key: &VariantKey) -> bool {
+        (self.contig.is_empty()
+            || key.contig.strip_prefix("chr").unwrap_or(&key.contig) == self.contig)
+            && key.position >= self.start as u64
+            && key.position <= self.end as u64
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectRequest {
@@ -2377,25 +2440,62 @@ impl Project {
         offset: u64,
         limit: u32,
     ) -> Result<TrackComparisonPage> {
+        self.search_track_comparison_page(track_id, offset, limit, "")
+    }
+
+    pub fn search_track_comparison_page(
+        &self,
+        track_id: &str,
+        offset: u64,
+        limit: u32,
+        search: &str,
+    ) -> Result<TrackComparisonPage> {
+        let filter = ComparisonSearch::parse(search)?;
         let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
         let connection = self.connection()?;
         let total_loci: u64 = connection.query_row(
             "SELECT COUNT(*) FROM (SELECT contig, position, reference FROM root_variants GROUP BY contig, position, reference)", [], |row| row.get(0))?;
+        let matching_loci: u64 = connection.query_row(
+            "SELECT COUNT(*) FROM (SELECT contig, position, reference FROM root_variants
+             WHERE (?1 = '' OR contig = ?1 OR contig = ?2) AND position BETWEEN ?3 AND ?4
+             GROUP BY contig, position, reference)",
+            params![
+                filter.contig,
+                format!("chr{}", filter.contig),
+                filter.start,
+                filter.end
+            ],
+            |row| row.get(0),
+        )?;
         let mut statement = connection.prepare(
             "SELECT contig, position, reference, MIN(alternate) FROM root_variants
+             WHERE (?3 = '' OR contig = ?3 OR contig = ?4) AND position BETWEEN ?5 AND ?6
              GROUP BY contig, position, reference ORDER BY contig, position, reference LIMIT ?1 OFFSET ?2")?;
         let keys = statement
-            .query_map(params![limit, offset], |row| {
-                Ok(VariantKey {
-                    assembly: self.manifest.resource_bundle.assembly.clone(),
-                    contig: row.get(0)?,
-                    position: row.get(1)?,
-                    reference: row.get(2)?,
-                    alternate: row.get(3)?,
-                })
-            })?
+            .query_map(
+                params![
+                    limit,
+                    offset,
+                    filter.contig,
+                    format!("chr{}", filter.contig),
+                    filter.start,
+                    filter.end
+                ],
+                |row| {
+                    Ok(VariantKey {
+                        assembly: self.manifest.resource_bundle.assembly.clone(),
+                        contig: row.get(0)?,
+                        position: row.get(1)?,
+                        reference: row.get(2)?,
+                        alternate: row.get(3)?,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        self.comparison_page_from_keys(track_id, offset, limit, total_loci, keys)
+        let mut page = self.comparison_page_from_keys(track_id, offset, limit, total_loci, keys)?;
+        page.matching_loci = matching_loci;
+        page.has_more = offset.saturating_add(u64::from(limit)) < matching_loci;
+        Ok(page)
     }
 
     pub fn track_comparison_revision(&self, track_id: &str) -> Result<String> {
@@ -2432,12 +2532,19 @@ impl Project {
             after.entry(locus(&variant.key)).or_default().push(variant);
         }
         let total_loci = before.len() as u64;
+        let mut change_types = BTreeMap::new();
         let changed_keys = before
             .into_iter()
             .filter_map(|(key, variants)| {
                 let current = after.remove(&key).unwrap_or_default();
-                (comparison_signature(&variants) != comparison_signature(&current))
-                    .then(|| variants[0].key.clone())
+                if comparison_signature(&variants) == comparison_signature(&current) {
+                    return None;
+                }
+                change_types.insert(
+                    variants[0].key.stable_key(),
+                    genome_change_type(&variants, &current),
+                );
+                Some(variants[0].key.clone())
             })
             .collect();
         if self.track_comparison_revision(track_id)? != revision {
@@ -2450,6 +2557,224 @@ impl Project {
             revision,
             total_loci,
             changed_keys,
+            change_types,
+        })
+    }
+
+    /// Stream distinct imported loci into bounded display bins. Bulk layers are
+    /// already resolved by the revision-checked effective-difference index.
+    pub fn track_comparison_map(
+        &self,
+        index: &TrackComparisonIndex,
+        context: Option<&FocusContext>,
+        bins: u32,
+    ) -> Result<TrackComparisonMap> {
+        self.track_comparison_map_selected(index, context, bins, None)
+    }
+
+    pub fn selected_comparison_page(
+        &self,
+        index: &TrackComparisonIndex,
+        selection: &VariantSelection,
+        offset: u64,
+        limit: u32,
+        changed_only: bool,
+        search: &str,
+    ) -> Result<TrackComparisonPage> {
+        let matches =
+            crate::prediction_comparison::selected_locus_filter(&index.track_id, selection)?;
+        let filter = ComparisonSearch::parse(search)?;
+        let changed: BTreeSet<_> = index
+            .changed_keys
+            .iter()
+            .map(|key| (key.contig.clone(), key.position, key.reference.clone()))
+            .collect();
+        let connection = self.connection()?;
+        let mut statement = connection.prepare("SELECT contig, position, reference, MIN(alternate) FROM root_variants GROUP BY contig, position, reference ORDER BY contig, position, reference")?;
+        let mut cursor = statement.query([])?;
+        let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
+        let (mut total, mut differences, mut matching) = (0_u64, 0_u64, 0_u64);
+        let mut keys = Vec::new();
+        while let Some(row) = cursor.next()? {
+            let key = VariantKey {
+                assembly: self.manifest.resource_bundle.assembly.clone(),
+                contig: row.get(0)?,
+                position: row.get(1)?,
+                reference: row.get(2)?,
+                alternate: row.get(3)?,
+            };
+            if !matches(&key) {
+                continue;
+            }
+            total += 1;
+            let differs =
+                changed.contains(&(key.contig.clone(), key.position, key.reference.clone()));
+            if differs {
+                differences += 1;
+            }
+            if (!changed_only || differs) && filter.matches(&key) {
+                if matching >= offset && keys.len() < limit as usize {
+                    keys.push(key);
+                }
+                matching += 1;
+            }
+        }
+        let mut page =
+            self.comparison_page_from_keys(&index.track_id, offset, limit, total, keys)?;
+        if page.revision != index.revision {
+            return Err(DgwError::Project("comparison index is stale; retry".into()));
+        }
+        page.changed_loci = Some(differences);
+        page.matching_loci = matching;
+        page.has_more = offset.saturating_add(u64::from(limit)) < matching;
+        Ok(page)
+    }
+
+    pub fn track_comparison_map_selected(
+        &self,
+        index: &TrackComparisonIndex,
+        context: Option<&FocusContext>,
+        bins: u32,
+        selection: Option<&VariantSelection>,
+    ) -> Result<TrackComparisonMap> {
+        let matches = selection
+            .map(|s| crate::prediction_comparison::selected_locus_filter(&index.track_id, s))
+            .transpose()?;
+        if self.track_comparison_revision(&index.track_id)? != index.revision {
+            return Err(DgwError::Project(
+                "comparison index is stale; rebuild it".into(),
+            ));
+        }
+        if context.is_some_and(|c| c.start == 0 || c.end < c.start || c.end > i64::MAX as u64) {
+            return Err(DgwError::Project("invalid comparison interval".into()));
+        }
+        let count = u64::from(bins.clamp(1, 512));
+        let mut strips = Vec::new();
+        let connection = self.connection()?;
+        let mut ranges = connection.prepare(
+            "SELECT contig, MIN(position), MAX(position) FROM root_variants GROUP BY contig",
+        )?;
+        let extents = ranges
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut detail_keys = Vec::new();
+        let mut total = 0_u64;
+        let requested_contig = context.map(|c| {
+            extents
+                .iter()
+                .find(|(name, _, _)| name == &c.contig)
+                .or_else(|| {
+                    extents.iter().find(|(name, _, _)| {
+                        name.trim_start_matches("chr") == c.contig.trim_start_matches("chr")
+                    })
+                })
+                .map(|(name, _, _)| name.clone())
+                .unwrap_or_else(|| c.contig.clone())
+        });
+        for (contig, min, max) in extents {
+            if requested_contig
+                .as_ref()
+                .is_some_and(|name| name != &contig)
+            {
+                continue;
+            }
+            let (start, end) = context.map(|c| (c.start, c.end)).unwrap_or((min, max));
+            let width = (end - start + 1).div_ceil(count);
+            let mut strip = ComparisonMapStrip {
+                contig: contig.clone(),
+                start,
+                end,
+                bins: Vec::new(),
+            };
+            let n = (end - start + 1).div_ceil(width);
+            for i in 0..n {
+                let left = start + i * width;
+                strip.bins.push(ComparisonMapBin {
+                    start: left,
+                    end: (left + width - 1).min(end),
+                    total: 0,
+                    changed: 0,
+                    sequence: 0,
+                    alt_copies: 0,
+                    placement: 0,
+                });
+            }
+            let mut statement = connection.prepare(
+                "SELECT position, reference, MIN(alternate) FROM root_variants
+                 WHERE contig = ?1 AND position BETWEEN ?2 AND ?3 GROUP BY position, reference ORDER BY position, reference")?;
+            let mut loci = statement.query(params![contig, start, end])?;
+            while let Some(row) = loci.next()? {
+                let position: u64 = row.get(0)?;
+                let key = VariantKey {
+                    assembly: self.manifest.resource_bundle.assembly.clone(),
+                    contig: contig.clone(),
+                    position,
+                    reference: row.get(1)?,
+                    alternate: row.get(2)?,
+                };
+                if matches.as_ref().is_some_and(|matches| !matches(&key)) {
+                    continue;
+                }
+                strip.bins[((position - start) / width) as usize].total += 1;
+                total += 1;
+                if detail_keys.len() < 80 {
+                    detail_keys.push(VariantKey {
+                        assembly: self.manifest.resource_bundle.assembly.clone(),
+                        contig: contig.clone(),
+                        position,
+                        reference: row.get(1)?,
+                        alternate: row.get(2)?,
+                    });
+                }
+            }
+            for key in &index.changed_keys {
+                if matches.as_ref().is_some_and(|matches| !matches(key)) {
+                    continue;
+                }
+                if key.contig == contig && key.position >= start && key.position <= end {
+                    let bin = &mut strip.bins[((key.position - start) / width) as usize];
+                    bin.changed += 1;
+                    match index.change_types.get(&key.stable_key()).ok_or_else(|| {
+                        DgwError::Project("comparison classification missing; rebuild index".into())
+                    })? {
+                        GenomeChangeType::Sequence => bin.sequence += 1,
+                        GenomeChangeType::AltCopies => bin.alt_copies += 1,
+                        GenomeChangeType::Placement => bin.placement += 1,
+                    }
+                }
+            }
+            strips.push(strip);
+        }
+        strips.sort_by_key(|strip| contig_rank(&strip.contig));
+        let rows = if context.is_some() && total <= 80 {
+            self.comparison_page_from_keys(&index.track_id, 0, 80, index.total_loci, detail_keys)?
+                .rows
+        } else {
+            Vec::new()
+        };
+        if self.track_comparison_revision(&index.track_id)? != index.revision {
+            return Err(DgwError::Project(
+                "track changed while building map; retry comparison".into(),
+            ));
+        }
+        let row_types = rows
+            .iter()
+            .map(|row| {
+                row.changed
+                    .then(|| genome_change_type(&row.source, &row.current))
+            })
+            .collect();
+        Ok(TrackComparisonMap {
+            revision: index.revision.clone(),
+            strips,
+            rows,
+            row_types,
         })
     }
 
@@ -2459,18 +2784,34 @@ impl Project {
         offset: u64,
         limit: u32,
     ) -> Result<TrackComparisonPage> {
+        self.search_changed_comparison_page(index, offset, limit, "")
+    }
+
+    pub fn search_changed_comparison_page(
+        &self,
+        index: &TrackComparisonIndex,
+        offset: u64,
+        limit: u32,
+        search: &str,
+    ) -> Result<TrackComparisonPage> {
+        let filter = ComparisonSearch::parse(search)?;
         if self.track_comparison_revision(&index.track_id)? != index.revision {
             return Err(DgwError::Project(
                 "comparison index is stale; rebuild it".into(),
             ));
         }
         let limit = limit.clamp(1, VARIANT_PAGE_SIZE);
-        let start = usize::try_from(offset)
-            .unwrap_or(usize::MAX)
-            .min(index.changed_keys.len());
-        let keys = index
+        let matching_keys: Vec<_> = index
             .changed_keys
             .iter()
+            .filter(|key| filter.matches(key))
+            .collect();
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(matching_keys.len());
+        let keys = matching_keys
+            .iter()
+            .copied()
             .skip(start)
             .take(limit as usize)
             .cloned()
@@ -2482,8 +2823,8 @@ impl Project {
                 "track changed while comparing; retry comparison".into(),
             ));
         }
-        page.matching_loci = index.changed_keys.len() as u64;
-        page.changed_loci = Some(page.matching_loci);
+        page.matching_loci = matching_keys.len() as u64;
+        page.changed_loci = Some(index.changed_keys.len() as u64);
         page.has_more = offset.saturating_add(u64::from(limit)) < page.matching_loci;
         Ok(page)
     }
@@ -4388,6 +4729,27 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn genome_change_type(before: &[EffectiveVariant], after: &[EffectiveVariant]) -> GenomeChangeType {
+    let content = |variants: &[EffectiveVariant]| {
+        let mut alleles = BTreeMap::<String, u64>::new();
+        for v in variants {
+            *alleles.entry(v.key.alternate.clone()).or_default() += u64::from(v.haplotype1_alt)
+                + u64::from(v.haplotype2_alt)
+                + u64::from(v.unphased_alt);
+        }
+        alleles
+    };
+    let before = content(before);
+    let after = content(after);
+    if before == after {
+        GenomeChangeType::Placement
+    } else if before.values().sum::<u64>() != after.values().sum::<u64>() {
+        GenomeChangeType::AltCopies
+    } else {
+        GenomeChangeType::Sequence
+    }
+}
+
 fn comparison_signature(
     variants: &[EffectiveVariant],
 ) -> BTreeSet<(String, bool, bool, bool, Option<u8>)> {
@@ -5317,6 +5679,19 @@ mod tests {
         let edit_id = state.edit_id.unwrap();
 
         let visible = project.edits_for_track(&working.id).unwrap();
+        let comparison_index = project.build_track_comparison_index(&working.id).unwrap();
+        let map = project
+            .track_comparison_map(&comparison_index, None, 128)
+            .unwrap();
+        assert_eq!(map.strips.len(), 2);
+        assert_eq!(
+            map.strips
+                .iter()
+                .flat_map(|s| &s.bins)
+                .map(|b| b.changed)
+                .sum::<u64>(),
+            2
+        );
         assert_eq!(visible.len(), 1);
         assert!(matches!(
             visible[0].edit,
@@ -5442,6 +5817,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(project.edits_for_track(&working.id).unwrap().len(), 1);
+        let index = project.build_track_comparison_index(&working.id).unwrap();
+        for resolution in [1, 128, 512] {
+            let map = project
+                .track_comparison_map(&index, None, resolution)
+                .unwrap();
+            assert!(map.strips[0].bins.len() <= resolution as usize);
+            assert_eq!(
+                map.strips[0].bins.iter().map(|b| b.total).sum::<u64>(),
+                POSITION_COUNT
+            );
+            assert_eq!(
+                map.strips[0].bins.iter().map(|b| b.changed).sum::<u64>(),
+                POSITION_COUNT
+            );
+            assert!(map.rows.is_empty());
+        }
         assert_eq!(
             project
                 .compound_mutation_layer(&layer.id)
@@ -5918,6 +6309,43 @@ mod tests {
     }
 
     #[test]
+    fn genome_map_classifies_sequence_dosage_and_placement() {
+        let before = observed_effective_variant(&observed_variant("1", 100));
+        let mut after = before.clone();
+        after.key.alternate = "G".into();
+        assert_eq!(
+            genome_change_type(&[before.clone()], &[after.clone()]),
+            GenomeChangeType::Sequence
+        );
+        after.haplotype2_alt = true;
+        assert_eq!(
+            genome_change_type(&[before.clone()], &[after]),
+            GenomeChangeType::AltCopies
+        );
+        assert_eq!(
+            genome_change_type(&[before.clone()], &[]),
+            GenomeChangeType::AltCopies
+        );
+        assert_eq!(
+            genome_change_type(&[], &[before.clone()]),
+            GenomeChangeType::AltCopies
+        );
+        let mut moved = before.clone();
+        moved.haplotype1_alt = false;
+        moved.haplotype2_alt = true;
+        assert_eq!(
+            genome_change_type(&[before.clone()], &[moved.clone()]),
+            GenomeChangeType::Placement
+        );
+        moved.haplotype2_alt = false;
+        moved.unphased_alt = true;
+        assert_eq!(
+            genome_change_type(&[before], &[moved]),
+            GenomeChangeType::Placement
+        );
+    }
+
+    #[test]
     fn comparison_pages_group_multiallelic_loci_and_bound_payloads() {
         let (_temporary, project) = test_project();
         let track = project.active_track().unwrap();
@@ -5942,6 +6370,38 @@ mod tests {
         assert_eq!(next.rows[0].position, 201);
         assert!(!next.has_more);
         assert_eq!(first.revision, next.revision);
+        let searched = project
+            .search_track_comparison_page(&track.id, 0, 2, "chr1:200-205")
+            .unwrap();
+        assert_eq!(searched.total_loci, 205);
+        assert_eq!(searched.matching_loci, 6);
+        assert_eq!(searched.rows[0].position, 200);
+        assert_eq!(searched.rows[0].source.len(), 2);
+        assert!(searched.has_more);
+        let exact = project
+            .search_track_comparison_page(&track.id, 0, 200, "1:205")
+            .unwrap();
+        assert_eq!(exact.matching_loci, 1);
+        assert_eq!(exact.rows[0].position, 205);
+        let missing = project
+            .search_track_comparison_page(&track.id, 0, 200, "2")
+            .unwrap();
+        assert_eq!(missing.matching_loci, 0);
+        for invalid in [
+            "1:0",
+            "1:20-10",
+            "1:abc",
+            "1:1-",
+            "chr",
+            "1:9223372036854775808",
+        ] {
+            assert!(
+                project
+                    .search_track_comparison_page(&track.id, 0, 200, invalid)
+                    .is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]
@@ -6067,11 +6527,119 @@ mod tests {
         let index = project.build_track_comparison_index(&track.id).unwrap();
         assert_eq!(index.total_loci, 250);
         assert_eq!(index.changed_keys.len(), 1);
+        for (selection, total, differences) in [
+            (
+                VariantSelection::Explicit {
+                    track_id: track.id.clone(),
+                    variants: vec![roots[249].key.clone()],
+                },
+                1,
+                1,
+            ),
+            (
+                VariantSelection::Explicit {
+                    track_id: track.id.clone(),
+                    variants: vec![],
+                },
+                0,
+                0,
+            ),
+            (
+                VariantSelection::AllTrack {
+                    track_id: track.id.clone(),
+                    exclusions: vec![roots[249].key.clone()],
+                },
+                249,
+                0,
+            ),
+            (
+                VariantSelection::Interval {
+                    track_id: track.id.clone(),
+                    contig: "1".into(),
+                    start: 245,
+                    end: 300,
+                    exclusions: vec![roots[249].key.clone()],
+                },
+                5,
+                0,
+            ),
+        ] {
+            let page = project
+                .selected_comparison_page(&index, &selection, 0, 200, false, "")
+                .unwrap();
+            let map = project
+                .track_comparison_map_selected(&index, None, 17, Some(&selection))
+                .unwrap();
+            assert_eq!(page.total_loci, total);
+            assert_eq!(page.changed_loci, Some(differences));
+            assert_eq!(
+                map.strips
+                    .iter()
+                    .flat_map(|s| &s.bins)
+                    .map(|b| b.total)
+                    .sum::<u64>(),
+                total
+            );
+            assert_eq!(
+                map.strips
+                    .iter()
+                    .flat_map(|s| &s.bins)
+                    .map(|b| b.changed)
+                    .sum::<u64>(),
+                differences
+            );
+        }
+        for bins in [1, 17, 512, u32::MAX] {
+            let map = project.track_comparison_map(&index, None, bins).unwrap();
+            assert!(map.strips[0].bins.len() <= 512);
+            assert_eq!(map.strips[0].bins.iter().map(|b| b.total).sum::<u64>(), 250);
+            assert_eq!(map.strips[0].bins.iter().map(|b| b.changed).sum::<u64>(), 1);
+            assert_eq!(
+                map.strips[0].bins.iter().map(|b| b.alt_copies).sum::<u64>(),
+                1
+            );
+            assert_eq!(
+                map.strips[0]
+                    .bins
+                    .iter()
+                    .map(|b| b.sequence + b.placement)
+                    .sum::<u64>(),
+                0
+            );
+            assert!(map.rows.is_empty());
+        }
+        let region = FocusContext {
+            contig: "chr1".into(),
+            start: 245,
+            end: 300,
+        };
+        let map = project
+            .track_comparison_map(&index, Some(&region), 56)
+            .unwrap();
+        assert_eq!(map.rows.len(), 6);
+        assert_eq!(map.rows.iter().filter(|row| row.changed).count(), 1);
+        assert_eq!(
+            map.strips[0].bins.iter().filter(|b| b.total == 0).count(),
+            50
+        );
+        assert!(project
+            .track_comparison_map(&index, Some(&FocusContext { start: 0, ..region }), 10)
+            .is_err());
         let page = project.changed_comparison_page(&index, 0, 200).unwrap();
         assert_eq!(page.changed_loci, Some(1));
         assert_eq!(page.matching_loci, 1);
         assert_eq!(page.rows[0].position, 250);
         assert!(!page.has_more);
+        let hit = project
+            .search_changed_comparison_page(&index, 0, 200, "chr1:250")
+            .unwrap();
+        assert_eq!(hit.matching_loci, 1);
+        let miss = project
+            .search_changed_comparison_page(&index, 0, 200, "1:1-200")
+            .unwrap();
+        assert_eq!(miss.matching_loci, 0);
+        assert_eq!(miss.changed_loci, Some(1));
+        assert_eq!(miss.total_loci, 250);
         assert!(project
             .changed_comparison_page(&index, 200, 200)
             .unwrap()
@@ -6081,6 +6649,7 @@ mod tests {
             .toggle_track_edit_bypass(&track.id, &state.edit_id.unwrap(), true)
             .unwrap();
         assert!(project.changed_comparison_page(&index, 0, 200).is_err());
+        assert!(project.track_comparison_map(&index, None, 10).is_err());
         let rebuilt = project.build_track_comparison_index(&track.id).unwrap();
         assert!(rebuilt.changed_keys.is_empty());
         assert_eq!(

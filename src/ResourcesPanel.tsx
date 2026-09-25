@@ -13,6 +13,11 @@ export function ResourcesPanel({ onBusyChange }: { onBusyChange?: (busy: boolean
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [assembly, setAssembly] = useState("b37");
+  const [cosmicProfile, setCosmicProfile] = useState("");
+  const [cosmicPath, setCosmicPath] = useState("");
+  const [cosmicRelease, setCosmicRelease] = useState("");
+  const [cosmicConfirmed, setCosmicConfirmed] = useState(false);
+  const [cosmicSaved, setCosmicSaved] = useState(false);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   async function refresh() {
     try { setInventory(await api.resourceInventory()); }
@@ -46,27 +51,29 @@ export function ResourcesPanel({ onBusyChange }: { onBusyChange?: (busy: boolean
   const downloadBytes = release?.files.reduce((sum, file) => sum + file.bytes, 0) ?? 0;
   const storageBytes = release?.files.reduce((sum, file) => sum + file.bytes + (file.unpackedBytes ?? 0), 0) ?? 0;
   return <section className="resources-panel" aria-label="Resources">
-    <h3>Genome resources</h3>
-    <p>Choose the reference genome used by your VCF. DGW includes the matching tools automatically.</p>
+    <header className="resource-heading"><h3>Genome resources</h3>
+    <p>Reference data and tools for your VCF's assembly.</p></header>
     {!inventory && !error && <p role="status">Checking installed resources…</p>}
     {inventory && <>
       {inventory.issues.map((issue) => <p className="warning" key={issue}>{issue}</p>)}
-      <fieldset disabled={busy} className="resource-genome-choice"><legend>1. Choose genome</legend>
+      <fieldset disabled={busy} className="resource-genome-choice"><legend>Reference genome</legend>
         {(["b37", "hg38"] as const).map(value => <label key={value}>
           <input type="radio" name="resource-genome" value={value} checked={assembly === value} onChange={() => setAssembly(value)} />
           {value === "b37" ? "GRCh37" : "GRCh38"}
         </label>)}
       </fieldset>
-      <h4>2. Choose storage folder</h4>
+      <div className="resource-storage-row"><div><h4>Storage folder</h4>
       <p className="resource-location">{inventory.directory}</p>
+      <small>Existing resources are not moved.</small></div>
       <button type="button" className="button secondary" disabled={busy} onClick={() => void chooseDirectory()}>Choose location</button>
-      <small>You can use another drive. Existing resources are not moved.</small>
-      <h4>3. Install resources</h4>
-      {ready ? <p role="status">{assembly === "b37" ? "GRCh37" : "GRCh38"} is ready to use.</p> : release ? <>
+      </div>
+      <div className="resource-install-status" data-ready={ready}><h4>{assembly === "b37" ? "GRCh37" : "GRCh38"} resources</h4>
+      {ready ? <p role="status"><span className="resource-ready-dot" aria-hidden="true" />{assembly === "b37" ? "GRCh37" : "GRCh38"} is ready to use.</p> : release ? <>
         <p>{size(downloadBytes)} download{release.files.every(file => file.unpackedBytes !== undefined) ? ` · At least ${size(storageBytes)} for archives and installed files, plus temporary working space` : ""}</p>
         <button type="button" className="button primary" disabled={busy} onClick={() => void run(() => api.installResourceRelease(release.id, setProgress))}>Download and install</button>
       </> : <p>Downloads are not available for this genome on this computer. Use existing resources or downloaded files below.</p>}
       {installed.filter(entry => !entry.ready).map(entry => <p className="warning" key={entry.descriptor}>{entry.message}</p>)}
+      </div>
       <details><summary>Other installation options</summary>
         <p>Select one assembly data archive and the tool archive for this computer. DGW verifies them before installation.</p>
         <button type="button" className="button secondary" disabled={busy} onClick={() => void installDownloaded()}>Install downloaded packages</button>
@@ -89,8 +96,27 @@ export function ResourcesPanel({ onBusyChange }: { onBusyChange?: (busy: boolean
     {error && <p role="alert" className="warning">{error}</p>}
     <p><small>Interrupted installations reuse verified complete files. A partially downloaded file restarts when you retry.</small></p>
     <details>
-      <summary>Optional resources</summary>
-      <p>COSMIC is optional and distributed separately. DGW does not need it for editing or consequence prediction. To use it, register a compatible resource bundle containing your separately obtained COSMIC data.</p>
+      <summary>Optional resources · COSMIC</summary>
+      <p>Add your separately obtained COSMIC VCF. It is not required for editing or consequence prediction.</p>
+      <fieldset disabled={busy} className="cosmic-setup">
+        <legend>COSMIC setup</legend>
+        <label>Reference profile<select value={cosmicProfile} onChange={event => { setCosmicProfile(event.target.value); setCosmicConfirmed(false); setCosmicSaved(false); }}>
+          <option value="">Choose an installed profile</option>
+          {inventory?.installed.filter(entry => entry.ready).map(entry => <option key={entry.descriptor} value={entry.descriptor}>{entry.bundle.assembly === "b37" ? "GRCh37" : "GRCh38"} · {entry.bundle.id}</option>)}
+        </select></label>
+        <button type="button" className="button secondary" onClick={() => void (async () => {
+          const path = await open({ multiple: false, title: "Choose COSMIC VCF (.vcf.gz)", filters: [{ name: "Compressed VCF", extensions: ["gz"] }] });
+          if (typeof path === "string") { setCosmicPath(path); setCosmicConfirmed(false); setCosmicSaved(false); }
+        })().catch(reason => setError(String(reason)))}>Choose COSMIC VCF…</button>
+        {cosmicPath && <small className="resource-location">{cosmicPath}</small>}
+        <small>A matching .tbi or .csi index must be beside the VCF. TSV exports are not supported.</small>
+        <label>COSMIC release<input value={cosmicRelease} placeholder="For example, v103" maxLength={120} onChange={event => { setCosmicRelease(event.target.value); setCosmicSaved(false); }} /></label>
+        <label className="cosmic-confirm"><input type="checkbox" checked={cosmicConfirmed} onChange={event => setCosmicConfirmed(event.target.checked)} />I confirm that this COSMIC file uses the same assembly as the selected profile.</label>
+        <small>DGW checks the VCF header and index. These checks cannot establish the assembly; use the build stated by the data provider.</small>
+        <button type="button" className="button primary" disabled={!cosmicProfile || !cosmicPath || !cosmicRelease.trim() || !cosmicConfirmed} onClick={() => void run(async () => { await api.addCosmicResource(cosmicProfile, cosmicPath, cosmicRelease); setCosmicSaved(true); })}>Validate and add COSMIC</button>
+      </fieldset>
+      {cosmicSaved && <p role="status">COSMIC profile added. Select it when creating a new project.</p>}
+      <p><small>Files stay where they are. This creates a new resource profile; existing projects and their recorded evidence resources are unchanged.</small></p>
     </details>
   </section>;
 }

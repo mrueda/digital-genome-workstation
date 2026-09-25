@@ -8,6 +8,7 @@ import {
 import { api } from "./api";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { UpdateDialog } from "./UpdateDialog";
+import { SlidersHorizontal, PanelsTopLeft, Cpu, Database } from "lucide-react";
 import type { BackgroundJob, ProjectResourceHealth, ResourceBundle, ResourceHealthStatus } from "./types";
 
 function closeMenu(event: React.MouseEvent<HTMLElement>) {
@@ -557,7 +558,7 @@ export function SettingsDialog({
   onChange: (settings: UserSettings) => void;
   onClose: () => void;
 }) {
-  const [section, setSection] = useState<"general" | "resources">("general");
+  const [section, setSection] = useState<"general" | "workspace" | "compute" | "resources">("general");
   useEffect(() => {
     if (!open) return;
     function closeOnEscape(event: KeyboardEvent) {
@@ -569,19 +570,26 @@ export function SettingsDialog({
 
   if (!open) return null;
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section className="settings-dialog preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <header>
-        <div><p className="eyebrow">Preferences</p><h2 id="settings-title">User settings</h2></div>
+        <div><h2 id="settings-title">User settings</h2><p className="preferences-caption">Changes are saved automatically.</p></div>
         <button type="button" className="dialog-close" onClick={onClose} aria-label="Close settings">×</button>
       </header>
 
-      <div className="settings-theme-options" role="group" aria-label="Settings section">
-        <button type="button" aria-pressed={section === "general"} onClick={() => setSection("general")}>General</button>
-        <button type="button" aria-pressed={section === "resources"} onClick={() => setSection("resources")}>Resources</button>
-      </div>
-      {section === "resources" ? <ResourcesPanel /> : <>
+      <div className="preferences-layout">
+      <nav className="preferences-nav" aria-label="Settings section">
+        {([
+          ["general", "General", SlidersHorizontal],
+          ["workspace", "Workspace", PanelsTopLeft],
+          ["compute", "Processing", Cpu],
+          ["resources", "Resources", Database]
+        ] as const).map(([id, label, Icon]) => <button key={id} type="button" aria-pressed={section === id} onClick={() => setSection(id)}><Icon aria-hidden="true" />{label}</button>)}
+      </nav>
+      <div className="preferences-content">
+      {section === "resources" && <ResourcesPanel />}
+      {section === "general" && <>
       <div className="settings-section">
-        <div><h3>Interface scale</h3><p>Scale text and controls together. At 140–150%, hide a side panel from View when you need more room for the genome workspace.</p></div>
+        <div><h3>Interface scale</h3><p>Resize text and controls together.</p></div>
         <div className="settings-scale-options" role="group" aria-label="Interface scale">
           {UI_SCALES.map((scale) => <button
             type="button"
@@ -606,7 +614,8 @@ export function SettingsDialog({
         </div>
       </div>
 
-      <div className="settings-section settings-compute">
+      </>}
+      {section === "compute" && <div className="settings-section settings-compute">
         <div><h3>Compute</h3><p>Bulk device operations run as background jobs. Auto reserves one logical CPU for the workstation interface; each engine uses the limit when it supports parallel workers.</p></div>
         <label>
           <span>Worker threads</span>
@@ -634,8 +643,9 @@ export function SettingsDialog({
           />
           <small>Selections above this number of alleles run as background jobs and apply as one compact, reversible mutation layer. This does not limit import or selection size.</small>
         </label>
-      </div>
+      </div>}
 
+      {section === "workspace" && <>
       <label className="settings-check"><input type="checkbox" checked={settings.showVariantBrowser} onChange={(event) => onChange({ ...settings, showVariantBrowser: event.target.checked })} /><span><b>Show Variants panel</b><small>Keep the allele browser visible when a project opens.</small></span></label>
       <label className="settings-check"><input type="checkbox" checked={settings.showEvidenceInspector} onChange={(event) => onChange({ ...settings, showEvidenceInspector: event.target.checked })} /><span><b>Show Evidence panel</b><small>Keep selected-allele results visible at the right.</small></span></label>
       <label className="settings-check"><input type="checkbox" checked={settings.showContextHelp} onChange={(event) => onChange({
@@ -647,6 +657,8 @@ export function SettingsDialog({
       <label className="settings-check"><input type="checkbox" checked={settings.showTrackMonitor} onChange={(event) => onChange({ ...settings, showTrackMonitor: event.target.checked })} /><span><b>Show Track Monitor</b><small>Keep the selected track's additive profile and device coverage at the far right.</small></span></label>
       <label className="settings-check"><input type="checkbox" checked={settings.reduceMotion} onChange={(event) => onChange({ ...settings, reduceMotion: event.target.checked })} /><span><b>Reduce motion</b><small>Disable interface transitions and status animations.</small></span></label>
       </>}
+      </div>
+      </div>
 
       <footer>
         <button type="button" className="button ghost" onClick={() => onChange({ ...DEFAULT_USER_SETTINGS })}>Restore defaults</button>

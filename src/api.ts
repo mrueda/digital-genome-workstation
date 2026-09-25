@@ -31,6 +31,7 @@ import type {
   VariantDensity,
   VariantPage,
   TrackComparisonPage,
+  TrackComparisonMap,
   PredictionComparisonReport,
   PredictionComparisonPage,
   VariantSelection,
@@ -60,6 +61,7 @@ export const api = {
   resourceInventory: () => invoke<ResourceInventory>("resource_inventory"),
   setResourceDirectory: (path: string) => invoke<void>("set_resource_directory", { path }),
   registerResourceBundle: (path: string) => invoke<void>("register_resource_bundle", { path }),
+  addCosmicResource: (descriptor: string, path: string, release: string) => invoke<void>("add_cosmic_resource", { descriptor, path, release }),
   installResourceRelease: (releaseId: string, onProgress: (progress: ResourceInstallProgress) => void) => {
     const channel = new Channel<ResourceInstallProgress>();
     channel.onmessage = onProgress;
@@ -105,6 +107,8 @@ export const api = {
     invoke<CreatedProject>("save_project_copy", { projectPath, destinationPath }),
   focusRegion: (projectPath: string, context: FocusContext) =>
     invoke<FocusView>("focus_region", { projectPath, context }),
+  trackComparisonMap: (projectPath: string, trackId: string, selection: VariantSelection, context?: FocusContext, bins = 128) =>
+    invoke<TrackComparisonMap>("track_comparison_map", { projectPath, trackId, selection, context, bins }),
   searchGenes: (projectPath: string, query: string, limit = 12) =>
     invoke<GeneSearchHit[]>("search_genes", { projectPath, query, limit }),
   exportFocusFasta: (
@@ -122,10 +126,10 @@ export const api = {
     invoke<GenomeTrackLane[]>("track_deck", { projectPath, context }),
   variantPage: (projectPath: string, trackId: string, offset = 0, limit = 200) =>
     invoke<VariantPage>("variant_page", { projectPath, trackId, offset, limit }),
-  trackComparisonPage: (projectPath: string, trackId: string, offset = 0, limit = 200, changedOnly = false) =>
-    invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, offset, limit, changedOnly }),
-  startPredictionComparison: (projectPath: string, trackId: string, deviceIds: string[], workerThreads: number) =>
-    invoke<BackgroundJob<PredictionComparisonReport>>("start_prediction_comparison_job", { projectPath, trackId, deviceIds, workerThreads }),
+  trackComparisonPage: (projectPath: string, trackId: string, selection: VariantSelection, offset = 0, limit = 200, changedOnly = false, search = "") =>
+    invoke<TrackComparisonPage>("track_comparison_page", { projectPath, trackId, selection, offset, limit, changedOnly, search }),
+  startPredictionComparison: (projectPath: string, trackId: string, deviceIds: string[], workerThreads: number, selection: VariantSelection) =>
+    invoke<BackgroundJob<PredictionComparisonReport>>("start_prediction_comparison_job", { projectPath, trackId, deviceIds, workerThreads, selection }),
   predictionComparisonPage: (projectPath: string, jobId: string, deviceIds: string[], outcome: string | undefined, offset: number) =>
     invoke<PredictionComparisonPage>("prediction_comparison_page", { projectPath, jobId, deviceIds, outcome, offset }),
   variantContigs: (projectPath: string) =>

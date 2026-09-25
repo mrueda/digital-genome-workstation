@@ -423,6 +423,45 @@ pub struct TrackComparisonIndex {
     pub revision: String,
     pub total_loci: u64,
     pub changed_keys: Vec<VariantKey>,
+    pub change_types: BTreeMap<String, GenomeChangeType>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GenomeChangeType {
+    Sequence,
+    AltCopies,
+    Placement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparisonMapBin {
+    pub start: u64,
+    pub end: u64,
+    pub total: u64,
+    pub changed: u64,
+    pub sequence: u64,
+    pub alt_copies: u64,
+    pub placement: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComparisonMapStrip {
+    pub contig: String,
+    pub start: u64,
+    pub end: u64,
+    pub bins: Vec<ComparisonMapBin>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackComparisonMap {
+    pub revision: String,
+    pub strips: Vec<ComparisonMapStrip>,
+    pub rows: Vec<TrackComparisonLocus>,
+    pub row_types: Vec<Option<GenomeChangeType>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
