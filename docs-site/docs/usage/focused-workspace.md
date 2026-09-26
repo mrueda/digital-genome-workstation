@@ -13,6 +13,8 @@ DGW centers the interface on the biological question currently being edited. The
 | Select the current interval | **Select visible**. |
 | Select across every chromosome | **Select all variants · all chromosomes**, or Ctrl/Command+A. |
 
+Choosing a result in **Go to gene** filters the left navigator to imported variants in that gene. Clear the gene filter with **×** to show all chromosomes again. This does not change the device selection; use **Select alleles in gene** to select those variants for a device.
+
 :::note[Selection is not the visible window]
 Zooming into one region does not make a whole-track selection local. Read the selected-position count before running a device. Selection refers to VCF alleles, not every FASTA base.
 :::

@@ -1,3 +1,4 @@
+import { LocateFixed } from "lucide-react";
 import type { TransportTarget, TransportTargetKind } from "./types";
 
 export type TransportState = "idle" | "playing" | "paused";
@@ -10,6 +11,8 @@ export function GenomeTransportBar({
   targetKind,
   state,
   loop,
+  readingSeconds,
+  onReadingSecondsChange,
   scopeLabel,
   evidenceDeviceLabel,
   evidenceRunning,
@@ -29,6 +32,8 @@ export function GenomeTransportBar({
   targetKind: TransportTargetKind;
   state: TransportState;
   loop: boolean;
+  readingSeconds: number;
+  onReadingSecondsChange: (seconds: number) => void;
   scopeLabel: string;
   evidenceDeviceLabel: string;
   evidenceRunning: boolean;
@@ -64,6 +69,11 @@ export function GenomeTransportBar({
       <button type="button" data-context-help="transport-stop" title="Stop and return (Shift+Space)" aria-label="Stop and return to review start" disabled={disabled || state === "idle"} onClick={onStop}>■</button>
       <button type="button" data-context-help="transport-step" title="Next (])" aria-label="Next review target" disabled={disabled} onClick={onNext}>▶</button>
       <button type="button" data-context-help="transport-loop" className={loop ? "active loop" : "loop"} title="Loop review scope (L)" aria-pressed={loop} disabled={disabled} onClick={() => onLoopChange(!loop)}>↻</button>
+      <label className="transport-reading-time" title="Time to read each allele after all active Evidence results arrive. Changes apply to the next allele.">Read
+        <select aria-label="Evidence reading time" value={readingSeconds} disabled={disabled} onChange={event => onReadingSecondsChange(Number(event.target.value))}>
+          {[1, 3, 5, 10, 20].map(seconds => <option key={seconds} value={seconds}>{seconds} s</option>)}
+        </select>
+      </label>
     </div>
     <div className="transport-position">
       <b>{target ? `${target.sourceKey.contig}:${target.sourceKey.position.toLocaleString()}` : `${contig}:${start.toLocaleString()}–${end.toLocaleString()}`}</b>
@@ -72,7 +82,7 @@ export function GenomeTransportBar({
         : "VCF positions · 1-based"}</span>
     </div>
     <details className="transport-location" data-context-help="coordinate-jump">
-      <summary title="Go to coordinates">⌖</summary>
+      <summary title="Go to coordinates" aria-label="Go to coordinates"><LocateFixed aria-hidden="true" /></summary>
       <form onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);

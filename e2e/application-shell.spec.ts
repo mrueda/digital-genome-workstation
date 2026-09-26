@@ -7,6 +7,36 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Edit and compare genome variants." })).toBeVisible();
 });
 
+test("gene filter limits the navigator and clearing restores all chromosomes", async ({ page }) => {
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    internals.invoke = async (name, args = {}) => {
+      if (name === "search_genes") return [{ geneId: "ENSG00000157764", symbol: "BRAF", contig: "7", start: 140453100, end: 140453170, strand: "-", biotype: "protein_coding", sourceVariantCount: 5 }];
+      if (name === "variant_navigation_bins" && args.start === 140453100) {
+        localStorage.setItem("test-gene-navigation", JSON.stringify(args));
+        return [{ contig: "7", start: 140453100, end: 140453170, total: 5 }];
+      }
+      return original(name, args);
+    };
+  });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const browser = page.locator(".variant-browser");
+  await expect(browser.locator(".variant-contig-node")).toHaveCount(2);
+  await page.getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
+  await page.getByLabel("Go to gene", { exact: true }).fill("BRAF");
+  await page.locator(".gene-search-results").getByRole("button", { name: /BRAF/ }).click();
+  await expect(browser.locator(".variant-contig-node")).toHaveCount(1);
+  await expect(browser.locator(".section-title")).toContainText("BRAF · 5 alleles");
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("test-gene-navigation") ?? "null")?.end)).toBe(140453170);
+  await expect(browser.locator(".variant-item")).not.toHaveCount(0);
+  const positions = await browser.locator(".variant-item > span").allTextContents();
+  expect(positions.every(value => { const position = Number(value.replaceAll(",", "")); return position >= 140453100 && position <= 140453170; })).toBe(true);
+  await browser.getByRole("button", { name: "Clear gene filter — show all chromosomes" }).click();
+  await expect(browser.locator(".variant-contig-node")).toHaveCount(2);
+  await expect(browser.locator(".section-title")).toContainText("10 selected");
+});
+
 test("landing processing labels do not overlap descriptions at larger text sizes", async ({ page }, testInfo) => {
   await page.evaluate(() => {
     const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
@@ -41,7 +71,7 @@ test("menus support keyboard navigation, nested scale and platform shortcut labe
   await page.keyboard.press("ArrowDown");
   await expect(nav.getByRole("button", { name: /New Project/ })).toBeFocused();
   const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.platform));
-  await expect(nav.getByRole("button", { name: /Open Project/ }).locator("kbd")).toHaveText(mac ? "⌘ O" : "Ctrl O");
+  await expect(nav.getByRole("button", { name: /Open DGW Project/ }).locator("kbd")).toHaveText(mac ? "⌘ O" : "Ctrl O");
   await page.keyboard.press("ArrowRight");
   await expect(nav.locator("summary").filter({ hasText: /^Edit$/ })).toBeFocused();
   await page.keyboard.press("Escape");
@@ -66,6 +96,37 @@ test("Help opens documentation and an accessible shortcuts dialog", async ({ pag
   await expect(dialog).toContainText("all chromosomes");
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+});
+
+test("File opens DGW projects from the workspace and rejects unrelated folders", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    let attempts = 0;
+    internals.invoke = async (name, args) => {
+      if (name === "plugin:dialog|open") {
+        localStorage.setItem("project-picker-options", JSON.stringify(args));
+        return ++attempts === 1 ? "/synthetic/unrelated-folder" : "/synthetic/DGW-Allele-Editing-Demo.dgw";
+      }
+      if (name === "plugin:dialog|message") {
+        localStorage.setItem("project-picker-warning", JSON.stringify(args));
+        return null;
+      }
+      if (name === "open_project") localStorage.setItem("project-picker-opened", JSON.stringify(args));
+      return original(name, args);
+    };
+  });
+  const nav = page.getByRole("navigation", { name: "Application menu" });
+  await nav.getByText("File", { exact: true }).click();
+  await nav.getByRole("button", { name: /Open DGW Project/ }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("project-picker-warning"))).toContain("Select a .dgw project folder");
+  expect(await page.evaluate(() => localStorage.getItem("project-picker-opened"))).toBeNull();
+  await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
+  await nav.getByText("File", { exact: true }).click();
+  await nav.getByRole("button", { name: /Open DGW Project/ }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("project-picker-opened"))).toContain("DGW-Allele-Editing-Demo.dgw");
+  await expect(page.locator(".application-menu-context")).not.toHaveText("Unsaved example");
 });
 
 test("chromosome navigator gives its width to the chromosome with controls on the right", async ({ page }) => {
@@ -350,6 +411,48 @@ test("shows verified downloaded-package installation in resource settings", asyn
   await expect(dialog).toContainText("Relative paths are resolved from its folder");
 });
 
+test("COSMIC setup explains missing inputs and shows validation errors beside the action", async ({ page }) => {
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    let attempts = 0;
+    internals.invoke = async (name, args) => {
+      if (name === "resource_inventory") return { directory: "/synthetic/resources", platform: "linux-aarch64", issues: [], releases: [], installed: [{ descriptor: "/synthetic/bundle.json", ready: true, message: "Ready", bundle: { assembly: "b37", id: "test-b37" } }] };
+      if (name === "plugin:dialog|open") return "/synthetic/cosmic.vcf.gz";
+      if (name === "add_cosmic_resource") {
+        localStorage.setItem("test-cosmic-request", JSON.stringify(args));
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (++attempts === 1) throw new Error("Cannot read the COSMIC index or it contains no contigs");
+        return null;
+      }
+      return original(name, args);
+    };
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "User settings" });
+  await dialog.getByRole("button", { name: "Resources", exact: true }).click();
+  await dialog.getByText("Optional resources · COSMIC", { exact: true }).click();
+  const section = dialog.locator("details").filter({ has: page.locator("summary", { hasText: "Optional resources · COSMIC" }) });
+  const validate = section.getByRole("button", { name: "Validate and add COSMIC", exact: true });
+  await expect(validate).toBeDisabled();
+  await expect(section.getByText(/To enable validation:/)).toContainText("enter the COSMIC release");
+  await section.getByLabel("Reference profile").selectOption("/synthetic/bundle.json");
+  await section.getByRole("button", { name: "Choose COSMIC VCF…" }).click();
+  await section.getByLabel("COSMIC release", { exact: true }).fill("v92");
+  await expect(section.getByText(/To enable validation:/)).toHaveText("To enable validation: confirm the assembly.");
+  await section.getByRole("checkbox").check();
+  await expect(validate).toBeEnabled();
+  await validate.click();
+  await expect(section.getByRole("button", { name: "Validating COSMIC…" })).toBeDisabled();
+  await expect(section.getByRole("status")).toContainText("Checking the COSMIC VCF header");
+  await expect(section.getByRole("alert")).toContainText("Cannot read the COSMIC index");
+  await expect(validate).toBeEnabled();
+  await validate.click();
+  await expect(section.getByRole("alert")).toHaveCount(0);
+  await expect(section.getByRole("status")).toHaveText("COSMIC profile added. Select it when creating a new project.");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("test-cosmic-request")!))).toEqual({ descriptor: "/synthetic/bundle.json", path: "/synthetic/cosmic.vcf.gz", release: "v92" });
+});
+
 test("installs a matching resource release and recovers from an installation error", async ({ page }) => {
   await page.evaluate(() => {
     const internals = (window as unknown as { __TAURI_INTERNALS__: {
@@ -402,21 +505,23 @@ test("opens the synthetic example into the complete genome workspace", async ({ 
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
 
   await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
-  await expect(page.locator(".app-header strong")).toHaveText("DGW Allele Editing Demo");
+  await expect(page).toHaveTitle("DGW Allele Editing Demo — DGW");
+  await expect(page.locator(".project-context strong")).toHaveText("DGW_DEMO");
   await expect(page.getByLabel("Track Monitor")).toBeVisible();
   await expect(page.getByLabel("Mutation Generator", { exact: true })).toBeVisible();
-  await expect(page.locator(".application-menu-context")).toContainText("unsaved example");
+  await expect(page.locator(".application-menu-context")).toHaveText("Unsaved example");
+  await expect(page.locator(".application-menu-context")).not.toContainText("DGW Allele Editing Demo");
 
   await page.getByText("File", { exact: true }).click();
   await expect(page.getByRole("button", { name: /Save Example as Project/ })).toBeVisible();
-  await expect(page.getByText("Changes are retained temporarily")).toBeVisible();
 });
 
 test("opens the public GRCh37 exome example directly from the landing page", async ({ page }) => {
   await page.getByRole("button", { name: "Open HG00103 exome example" }).click();
 
   await expect(page.getByLabel("Genome tracks and device rack")).toBeVisible();
-  await expect(page.locator(".app-header strong")).toHaveText("HG00103 exome — GRCh37");
+  await expect(page).toHaveTitle("HG00103 exome — GRCh37 — DGW");
+  await expect(page.locator(".project-context strong")).toHaveText("SRR1596639");
   await expect(page.getByLabel("Track Monitor").getByText("HG00103 WES · working track", { exact: true })).toBeVisible();
 });
 
@@ -625,6 +730,62 @@ test("failed mutation application shows an error instead of confirmation", async
   await expect(device.getByRole("button", { name: "Generate mutations", exact: true })).toBeEnabled();
 });
 
+for (const scope of ["gene", "allTrack"] as const) {
+  for (const mode of ["saturation", "conservative"] as const) {
+    test(`optimizer runs ${mode} on a small ${scope} selection`, async ({ page }) => {
+      const variants = Array.from({ length: scope === "gene" ? 5 : 10 }, (_, index) => ({
+        contig: scope === "gene" ? "19" : index < 7 ? "7" : "17",
+        position: scope === "gene" ? 11_200_100 + index : 100_000 + index,
+        reference: "A", alternate: "G"
+      }));
+      await page.evaluate(({ variants }) => {
+        const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+        const original = internals.invoke;
+        internals.invoke = async (name, args = {}) => {
+          if (name === "resolve_variant_selection") {
+            localStorage.setItem("test-optimizer-selection", JSON.stringify(args.selection));
+            return { total: variants.length, limit: args.limit, variants, truncated: false };
+          }
+          if (name === "run_optimizer") {
+            localStorage.setItem("test-optimizer-request", JSON.stringify(args.request));
+            if (!(args.request as { selectedVariants: unknown[] }).selectedVariants.length) {
+              throw Error("Select at least one active allele before running Genome Optimizer.");
+            }
+            return {
+              snapshot: await original("open_project", args), generatedEditIds: [],
+              plan: { proposals: [], exclusions: [], candidateComparisons: variants.map(key => ({
+                sourceVariant: key, candidateVariant: key, current: true, selected: true, comparable: true,
+                evidence: { impactLabel: "MODERATE" }, scoreComponents: { objectiveScore: 1 }, exactEvidenceSources: []
+              })), consideredVariants: variants.length,
+                scoreBefore: 0, scoreAfter: 0, scoreDescription: "Test score", limitation: "Test fixture",
+                noOpReason: "Selection evaluated; no improving alternatives." }
+            };
+          }
+          if (name === "start_optimizer_job") throw Error("Small selections should use the interactive optimizer");
+          return original(name, args);
+        };
+      }, { variants });
+      await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+      if (scope === "gene") {
+        await page.getByLabel("Go to gene", { exact: true }).fill("LDLR");
+        await page.locator(".gene-search-results").getByRole("button", { name: /LDLR/ }).click();
+        await page.getByRole("button", { name: "Select 5 alleles in gene", exact: true }).click();
+      } else {
+        await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Maximize Genome Optimizer", exact: true }).click();
+      const optimizer = page.locator(".dgw-optimizer");
+      await optimizer.getByRole("combobox", { name: "Mode", exact: true }).selectOption(mode);
+      await optimizer.getByRole("button", { name: mode === "saturation" ? "Run saturation" : "Generate edits", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("test-optimizer-request") ?? "null")?.selectedVariants)).toEqual(variants);
+      await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("test-optimizer-selection") ?? "null")?.kind)).toBe(scope === "gene" ? "interval" : "allTrack");
+      await expect(optimizer).toContainText("Selection evaluated; no improving alternatives.");
+      if (mode === "saturation") await expect(optimizer.getByText(`Candidate comparison · ${variants.length} alleles`, { exact: true })).toBeVisible();
+      await expect(optimizer.getByRole("alert")).toHaveCount(0);
+    });
+  }
+}
+
 test("optimizer scoring labels stay above the knob controls", async ({ page }) => {
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   for (const expanded of [false, true]) {
@@ -657,7 +818,19 @@ test("maximized devices keep their actual input scope visible", async ({ page })
   await expect(page.locator(".dgw-track-deck")).toBeVisible();
   await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
   await expect(page.getByLabel("Device input scope")).toContainText("No alleles selected");
-  await expect(page.getByRole("button", { name: "Predict selection", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create report", exact: true })).toBeDisabled();
+});
+
+test("compact predictor keeps its description small and its open action accessible", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const card = page.getByRole("region", { name: "Consequence Predictor device", exact: true });
+  const summary = card.locator(".dgw-compact-prediction-summary");
+  await expect(summary).toContainText("Automatic prediction");
+  await expect(summary).toContainText("Used by focused alleles and Track Monitor.");
+  expect(await summary.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeLessThanOrEqual(12);
+  await card.getByRole("button", { name: "Selection report", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Create report", exact: true })).toBeVisible();
+  await expect(page.locator(".dgw-compact-prediction-summary")).toHaveCount(0);
 });
 
 test("offers device bypass only for database Evidence devices", async ({ page }) => {
@@ -1090,7 +1263,134 @@ test("runs a whole-track prediction job, filters saved results and marks stale i
   await expect(view.getByRole("region", { name: "source prediction evidence" })).toHaveCount(0);
 });
 
-test("makes every transcript evidence record accessible without changing the allele", async ({ page }) => {
+test("formats ClinVar consistently in Evidence and Track Compare without losing annotation values", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    internals.invoke = async (name, args) => {
+      if (name === "evaluate_device" && args?.deviceId === "org.dgw.builtin.cosmic") return {
+        source: "v92", status: "found", records: [{ id: "COSV_TEST", GENE: "BRAF_ENST_TEST", HGVSC: "ENST_TEST:c.123A>G", HGVSP: "p.Test", CNT: "7", FUTURE: "keep_this|value,unchanged", raw: "Synthetic COSMIC raw record" }]
+      };
+      if (name === "evaluate_device" && args?.deviceId === "org.dgw.builtin.clinvar") return {
+        source: "ClinVar test fixture", status: "found", records: [{
+          id: "123", CLNSIG: "Conflicting_classifications_of_pathogenicity",
+          CLNSIGCONF: "Uncertain_significance(2)|Likely_benign(1)",
+          CLNREVSTAT: "criteria_provided,_conflicting_classifications",
+          CLNDN: "Synthetic_condition,_type_1|Another_condition|not_provided|Fourth_condition",
+          MC: "SO:0001583|missense_variant,SO:0001627|intron_variant",
+          GENEINFO: "BRAF:673", FUTURE_FIELD: "keep_this|value,unchanged",
+          raw: "Synthetic ClinVar raw record"
+        }, { id: "456", CLNSIG: "Pathogenic/Likely_pathogenic", CLNREVSTAT: "unrecognised_status" }]
+      };
+      return original(name, args);
+    };
+  });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByText("View", { exact: true }).click();
+  const evidenceMenu = page.getByRole("button", { name: /Evidence panel$/ });
+  if (!(await evidenceMenu.getAttribute("class"))?.includes("is-selected")) await evidenceMenu.click();
+  await page.keyboard.press("Escape");
+  const card = page.locator(".inspector").getByRole("article", { name: "ClinVar test fixture evidence" });
+  const cosmic = page.locator(".inspector").getByRole("article", { name: "v92 evidence" });
+  await expect(cosmic.getByText("BRAF_ENST_TEST", { exact: true })).toBeVisible();
+  await expect(cosmic.getByText("Reported samples", { exact: true })).toBeVisible();
+  await expect(cosmic.locator(".annotation-label", { hasText: /^7$/ })).toBeVisible();
+  await expect(cosmic.locator(".annotation-stars, .annotation-pathogenic")).toHaveCount(0);
+  await cosmic.getByText("Additional annotations · 1", { exact: true }).click();
+  await expect(cosmic.getByText("keep_this|value,unchanged", { exact: true })).toBeVisible();
+  await expect(card.locator(".annotation-conflicting")).toHaveText("Conflicting classifications of pathogenicity");
+  await expect(card.getByRole("img", { name: "1 of 4 review stars" })).toBeVisible();
+  await expect(card.getByText("missense variant · SO:0001583", { exact: true })).toBeVisible();
+  await expect(card.getByText("Synthetic condition, type 1", { exact: true })).toBeVisible();
+  await card.getByText("+1 more", { exact: true }).click();
+  await expect(card.getByText("Fourth condition", { exact: true })).toBeVisible();
+  await card.getByText("Additional annotations · 1", { exact: true }).click();
+  await expect(card.getByText("keep_this|value,unchanged", { exact: true })).toBeVisible();
+  await card.getByText("Raw matched record", { exact: true }).click();
+  await expect(card.getByText("Synthetic ClinVar raw record", { exact: true })).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.locator("html").evaluate((node, theme) => node.setAttribute("data-dgw-theme", theme), theme);
+    await card.screenshot({ path: testInfo.outputPath(`clinvar-${theme}.png`) });
+    await cosmic.screenshot({ path: testInfo.outputPath(`cosmic-${theme}.png`) });
+  }
+  await card.getByRole("combobox").selectOption("1");
+  await expect(card.locator(".annotation-pathogenic")).toHaveText("Pathogenic/Likely pathogenic");
+  await expect(card.locator(".annotation-stars")).toHaveCount(0);
+  await expect(card).toContainText("unrecognised status");
+  await page.evaluate(async () => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    await internals.invoke("test_large_comparison");
+  });
+  await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
+  await page.getByRole("button", { name: "Open Track Compare", exact: true }).click();
+  await page.getByRole("button", { name: "DNA changes", exact: true }).click();
+  const comparison = page.getByRole("region", { name: "Whole track DNA comparison" });
+  await comparison.getByRole("button", { name: /Inspect difference/ }).click();
+  const compared = comparison.getByRole("article", { name: "ClinVar test fixture evidence" });
+  await expect(compared.locator(".annotation-conflicting")).toHaveText("Conflicting classifications of pathogenicity");
+  await expect(compared.getByRole("img", { name: "1 of 4 review stars" })).toBeVisible();
+  const cosmicCompared = comparison.getByRole("article", { name: "v92 evidence" });
+  await expect(cosmicCompared.getByText("BRAF_ENST_TEST", { exact: true })).toBeVisible();
+  await expect(cosmicCompared.getByText("Reported samples", { exact: true })).toBeVisible();
+});
+
+test("automatic review waits for evidence then the chosen reading interval and pauses safely", async ({ page }) => {
+  await page.evaluate(() => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string, args?: Record<string, unknown>) => Promise<any> } }).__TAURI_INTERNALS__;
+    const original = internals.invoke;
+    let nextCalls = 0;
+    internals.invoke = async (name, args) => {
+      if (name === "transport_target") {
+        const snapshot = await original("open_project", { path: "/synthetic/DGW-Allele-Editing-Demo.dgw" });
+        const request = args?.request as { action: string };
+        if (request.action === "next") { nextCalls++; localStorage.setItem("review-next-calls", String(nextCalls)); }
+        const variant = snapshot.variants[nextCalls + 1];
+        if (!variant) return { total: 2 };
+        return { total: 2, target: { cursor: { sourceKey: variant.key }, sourceKey: variant.key, currentVariant: variant, locusStatus: "alternate", ordinal: nextCalls + 1, total: 2, wrapped: false } };
+      }
+      if (name === "evaluate_device" && localStorage.getItem("slow-review")) {
+        await new Promise(resolve => setTimeout(resolve, 900));
+        localStorage.setItem("review-evidence-ready", String(Date.now()));
+      }
+      return original(name, args);
+    };
+  });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const bar = page.getByRole("region", { name: "Genome transport", exact: true });
+  await expect(bar.getByLabel("Evidence reading time")).toHaveValue("5");
+  await bar.getByLabel("Evidence reading time").selectOption("3");
+  await page.evaluate(() => localStorage.setItem("slow-review", "1"));
+  await bar.getByRole("button", { name: "Start automatic variant and Evidence review" }).click();
+  await expect(page.locator(".evidence-loading").first()).toBeVisible();
+  await expect(page.locator(".evidence-slot[aria-busy=true]")).toHaveCount(3);
+  await expect(page.locator(".evidence-loading")).toHaveCount(0);
+  const ready = Number(await page.evaluate(() => localStorage.getItem("review-evidence-ready")));
+  expect(await page.evaluate(() => localStorage.getItem("review-next-calls"))).toBeNull();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("review-next-calls")), { timeout: 6000 }).toBe("1");
+  expect(Date.now() - ready).toBeGreaterThanOrEqual(2900);
+  await bar.getByRole("button", { name: "Pause automatic review" }).click();
+  await expect(bar.getByRole("button", { name: "Start automatic variant and Evidence review" })).toBeVisible();
+  await page.waitForTimeout(3300);
+  expect(await page.evaluate(() => localStorage.getItem("review-next-calls"))).toBe("1");
+});
+
+test("keeps transport coordinates inside the canvas at narrow window sizes", async ({ page }) => {
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  const bar = page.getByRole("region", { name: "Genome transport", exact: true });
+  const position = bar.locator(".transport-position");
+  const coordinates = bar.locator(".transport-location > summary");
+  const [barBox, positionBox, coordinatesBox] = await Promise.all([
+    bar.boundingBox(), position.boundingBox(), coordinates.boundingBox()
+  ]);
+  expect(barBox).not.toBeNull(); expect(positionBox).not.toBeNull(); expect(coordinatesBox).not.toBeNull();
+  expect(coordinatesBox!.x + coordinatesBox!.width).toBeLessThanOrEqual(barBox!.x + barBox!.width + 0.5);
+  expect(positionBox!.x + positionBox!.width).toBeLessThanOrEqual(coordinatesBox!.x - 4);
+  await expect(position).toContainText("1-based");
+});
+
+test("makes every transcript evidence record accessible without changing the allele", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   await page.getByText("View", { exact: true }).click();
@@ -1101,13 +1401,17 @@ test("makes every transcript evidence record accessible without changing the all
   const card = page.getByRole("article", { name: "Consequence Predictor predictions" });
   const selector = card.getByLabel("Consequence Predictor record");
   await expect(selector).toHaveCount(1);
+  await expect(card.locator(".impact-high")).toHaveText("HIGH");
+  await expect(card.locator(".prediction-effect .prediction-term")).toHaveText("Stop gained");
+  await card.screenshot({ path: testInfo.outputPath("evidence-labels-preview.png") });
   await selector.selectOption("1");
-  await expect(card.locator("dl")).toContainText("ENST00000479537");
-  await expect(card.locator("dl")).toContainText("synonymous");
+  await expect(card.locator(":scope > dl")).toContainText("ENST00000479537");
+  await expect(card.locator(".prediction-effect .prediction-term")).toHaveText("Synonymous");
+  await expect(card.locator(".impact-low")).toHaveText("LOW");
   await card.getByText("Raw matched record", { exact: true }).click();
   await expect(card).toContainText("Synthetic second transcript record");
   await selector.selectOption("0");
-  await expect(card.locator("dl")).toContainText("ENST00000288602");
+  await expect(card.locator(":scope > dl")).toContainText("ENST00000288602");
 });
 
 test("shows compact prediction progress and a working cancel control", async ({ page }) => {
@@ -1115,15 +1419,15 @@ test("shows compact prediction progress and a working cancel control", async ({ 
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select visible", exact: true }).click();
   await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
-  const results = page.getByRole("region", { name: "Selected allele predictions" });
-  await results.getByRole("button", { name: "Predict selection", exact: true }).click();
+  const results = page.getByRole("region", { name: "Consequence selection report" });
+  await results.getByRole("button", { name: "Create report", exact: true }).click();
   await expect(results.getByRole("progressbar", { name: "Prediction progress", exact: true })).toHaveAttribute("value", "20");
   const cancel = results.getByRole("button", { name: "Cancel prediction", exact: true });
   await expect(cancel).toHaveText("Cancel");
   await page.screenshot({ path: "/tmp/dgw-prediction-progress.png" });
   await cancel.click();
   await expect(cancel).toHaveCount(0);
-  await expect(results.getByRole("button", { name: "Predict selection", exact: true })).toBeEnabled();
+  await expect(results.getByRole("button", { name: "Create report", exact: true })).toBeEnabled();
 });
 
 test("predicts the track selection with paged current-only results", async ({ page }) => {
@@ -1131,8 +1435,8 @@ test("predicts the track selection with paged current-only results", async ({ pa
   await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
   await page.getByLabel("Allele selection controls").getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
   await page.getByRole("button", { name: "Maximize Consequence Predictor", exact: true }).click();
-  const results = page.getByRole("region", { name: "Selected allele predictions" });
-  await results.getByRole("button", { name: "Predict selection", exact: true }).click();
+  const results = page.getByRole("region", { name: "Consequence selection report" });
+  await results.getByRole("button", { name: "Create report", exact: true }).click();
   await expect(results.getByRole("columnheader", { name: "REF → ALT", exact: true })).toBeVisible();
   await expect(results.getByRole("columnheader", { name: "Source ALTs" })).toHaveCount(0);
   await expect(results.getByRole("button", { name: "Transcripts", exact: true })).toHaveCount(200);

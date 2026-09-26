@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop capability for DGW",
   "windows": ["main"],
-  "permissions": ["core:default", "core:webview:allow-set-webview-zoom", "dialog:default", "dialog:allow-confirm"]
+  "permissions": ["core:default", "core:window:allow-set-title", "core:webview:allow-set-webview-zoom", "dialog:default", "dialog:allow-confirm"]
 }

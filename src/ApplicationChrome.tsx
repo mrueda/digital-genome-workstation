@@ -93,6 +93,7 @@ export function ApplicationMenu({
   onCloseProject: () => void;
 }) {
   const navRef = useRef<HTMLElement>(null);
+  const propertiesRef = useRef<HTMLDialogElement>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [updatesOpen, setUpdatesOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -268,14 +269,9 @@ export function ApplicationMenu({
       <details onToggle={keepSingleMenuOpen} onPointerEnter={switchOpenMenu}>
         <summary>File</summary>
         <div className="application-menu-popover file-menu-popover">
-          {projectOpen
-            ? <div className="file-menu-project"><b>{projectName}</b>{projectNeedsSaveAs
-              ? <><span>Unsaved example</span><small>Changes are retained temporarily. Save the example as a project to keep them.</small></>
-              : <><span title={projectPath}>{projectPath}</span><small>All changes are saved automatically in this .dgw project folder.</small></>}</div>
-            : <p>No project open</p>}
           <button type="button" onClick={(event) => { closeMenu(event); onNewProject(); }}><span>New Project…</span><small>Default setup</small></button>
           <button type="button" onClick={(event) => { closeMenu(event); onNewFromTemplate(); }}><span>New from Template…</span><small>Choose setup</small></button>
-          <button type="button" onClick={(event) => { closeMenu(event); onOpenProject(); }}><span>Open Project…</span><kbd>{commandKey} O</kbd></button>
+          <button type="button" onClick={(event) => { closeMenu(event); onOpenProject(); }}><span>Open DGW Project…</span><kbd>{commandKey} O</kbd></button>
           <details className="file-menu-submenu">
             <summary><span>Open Example Project</span><small>›</small></summary>
             <div className="file-menu-submenu-options">
@@ -303,6 +299,7 @@ export function ApplicationMenu({
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onExportTrackVcf(); }}><span>Export VCF…</span><small>Current genome track</small></button>
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onExportFocusFasta(); }}><span>Export FASTA…</span><small>Focused region</small></button>
           <hr />
+          <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); propertiesRef.current?.showModal(); }}>Properties…</button>
           <button type="button" disabled={!projectOpen} onClick={(event) => { closeMenu(event); onCloseProject(); }}>Close project</button>
         </div>
       </details>
@@ -395,8 +392,28 @@ export function ApplicationMenu({
           <button type="button" onClick={(event) => { closeMenu(event); setUpdatesOpen(true); }}>Check for updates</button>
         </div>
       </details>
-      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen ? `${projectName} · ${saveStatus === "error" ? saveMessage ?? "Save failed" : projectNeedsSaveAs ? "unsaved example" : saveMessage ?? "autosaved"}` : "Project setup"}</span>
+      <span className={`application-menu-context${saveStatus ? ` is-${saveStatus}` : ""}`}>{projectOpen
+        ? saveStatus === "error"
+          ? saveMessage ?? "Save failed"
+          : projectNeedsSaveAs
+            ? "Unsaved example"
+            : saveMessage ?? "Autosaved"
+        : "Project setup"}</span>
     </nav>
+    <dialog ref={propertiesRef} className="settings-dialog project-properties-dialog" aria-labelledby="project-properties-title">
+      <header>
+        <h2 id="project-properties-title">Project properties</h2>
+        <button type="button" className="dialog-close" aria-label="Close project properties" onClick={() => propertiesRef.current?.close()}>×</button>
+      </header>
+      <dl>
+        <div><dt>Name</dt><dd>{projectName}</dd></div>
+        <div><dt>{projectNeedsSaveAs ? "Temporary location" : "Location"}</dt><dd className="project-properties-path">{projectPath}</dd></div>
+        <div><dt>Save status</dt><dd>{saveStatus === "error" ? saveMessage ?? "Save failed" : saveStatus === "saving" ? saveMessage ?? "Saving…" : projectNeedsSaveAs ? "Unsaved example" : saveMessage ?? "Autosaved"}</dd></div>
+      </dl>
+      <p>{projectNeedsSaveAs
+        ? "Changes are retained temporarily. Use File → Save Example as Project to keep them."
+        : "Changes are saved automatically in this .dgw project folder."}</p>
+    </dialog>
     {helpError && <div role="alert" className="help-error">{helpError}<button onClick={() => setHelpError(undefined)}>Dismiss</button></div>}
     {shortcutsOpen && <ShortcutsDialog commandKey={commandKey} onClose={() => setShortcutsOpen(false)} />}
     {updatesOpen && <UpdateDialog onClose={() => setUpdatesOpen(false)} />}

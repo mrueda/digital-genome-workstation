@@ -21,23 +21,23 @@ Click a variant mark or edit block, then read the Evidence Inspector. Use the Tr
 
 In the Device Browser, Consequence Predictor belongs to **Analyze**: it computes transcript effects using bcftools csq. ClinVar and COSMIC belong to **Evidence**: they retrieve submitted interpretations and reported variant records. Only those database devices have Bypass. DGW Starter applies all three. Their code is separate from the models and database snapshots in the resource pack.
 
-## Predict the selection
+## Inspect a selection report
 
-Select positions in Track view, open Consequence Predictor, then choose **Predict selection**. The same selection controls work here and in Track Compare, including all chromosomes. **Change selection** returns to Track view.
+Applied Consequence Predictor already supplies predictions for the focused allele and Track Monitor. A report is optional: select positions in Track view, open **Selection report** in Consequence Predictor, then choose **Create report** for the full transcript table. The same selection controls work here and in Track Compare, including all chromosomes. **Change selection** returns to Track view.
 
 The predictor evaluates current ALTs at every selected locus, including unchanged variants on the source track. It does not require edits or compare against Source. A selected multiallelic locus includes all its current ALTs; a locus restored to REF is listed as having no current ALT, not as benign.
 
 Results are saved by a background job and displayed in pages of at most 200 loci. Position, REF/ALT, gene, consequences and impact classes appear in the table; **Transcripts** opens the detailed records inline. A single-locus result opens its details automatically. Multiple impact classes refer to different transcript/allele records, not a combined effect. The report is marked outdated if track or resource inputs change. Cancel is checked between stages, not inside a running bcftools process.
 
-With DGW Starter, the selected track's Rack initially shows the complete seven-device workflow, including the read-only Variant Map after Genome Optimizer. A missing optional resource leaves its Evidence card unavailable and inert; the other cards, visualization, and genome editing continue to work. Selecting an allele automatically runs the applied, non-bypassed Evidence cards after a short debounce. Stable cached results appear first and DGW requests only missing device results. **Refresh active Evidence devices** and each card's manual action remain available. Bypassing an Evidence card hides and excludes its result for that track without changing any allele or edit block. Applied-chain and card-bypass choices persist in the `.dgw` workstation session.
+With DGW Starter, the selected track's Rack initially shows the seven-device workflow, including Track Compare. A missing optional resource leaves its Evidence card unavailable; the other devices and genome editing continue to work. Selecting an allele automatically runs the applied prediction and non-bypassed database devices after a short debounce. Compatible cached results appear first, and DGW requests missing results. **Refresh** remains available. Bypassing a database Evidence card excludes its result for that track without changing any allele or edit block. Rack and bypass choices persist in the `.dgw` workstation session. See the illustrated [Device Guide](device-guide.md).
 
 ## Consequence layer
 
 Use the **Consequence** and **Impact** chips above the prediction table separately or together. You can select several labels in each group: any selected consequence and any selected impact must match the same transcript record. **All** removes that group's restriction; **Clear filters** resets both groups. Filters search the complete saved report before pagination; other records at a matching locus remain available in its details. Filtering does not rerun bcftools or change the track.
 
 <figure>
-  <img src={useBaseUrl('/img/dgw-evidence-inspector.png')} alt="Evidence Inspector with transcript predictions and explicit no-exact-match database results" width="360" loading="lazy" />
-  <figcaption>Current interface with controlled test responses, not a biological validation result. Predictions and database matches are shown separately.</figcaption>
+  <a href={useBaseUrl('/img/devices/evidence.png')}><img src={useBaseUrl('/img/devices/evidence.png')} alt="Evidence Inspector with transcript predictions for one exact allele" width="360" loading="lazy" /></a>
+  <figcaption>Native DGW v0.1, light mode, synthetic example with local calculations. This is an interface demonstration, not a biological validation result.</figcaption>
 </figure>
 
 DGW sends each request as a VCF batch to the registered `bcftools csq --local-csq` engine. It reports effect, impact, gene, transcript, strand, amino-acid change, DNA change, bcftools version, and Ensembl annotation release. A no-feature result is shown explicitly rather than treated as missing database evidence.

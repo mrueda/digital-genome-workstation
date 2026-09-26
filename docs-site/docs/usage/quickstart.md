@@ -65,11 +65,13 @@ Use **Settings** to change interface scale and the colour theme. **View** contro
 | --- | --- |
 | File → Save Example as Project | Creates your named `.dgw` package at a chosen location. |
 | File → Save Project | Flushes pending session changes; named projects also autosave. |
-| File → Open Project / Open Recent | Resumes the saved project. |
+| File → Open DGW Project / Open Recent | Resumes the saved project. |
 | File → Save a Copy | Creates a separate snapshot and keeps the original project open. |
 | File → Export VCF / Export FASTA | Exports the selected track's VCF or the focused reference interval as FASTA. |
 
-Open **File** to see the project path and save status. A `.dgw` package is your editable project; an exported VCF or FASTA is not a replacement for it. The input VCF is never modified.
+Open **File → Properties** to see the project path and save status. A `.dgw` package is a folder: in the Open dialog, select the folder ending in `.dgw`, rather than a file inside it. Other folders remain visible so you can navigate to your projects. DGW checks the project's contents before opening it.
+
+An exported VCF or FASTA is not a replacement for the editable project. The input VCF is never modified.
 
 ## Next: genes and multiple positions
 

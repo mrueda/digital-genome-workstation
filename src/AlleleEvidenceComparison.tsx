@@ -2,13 +2,21 @@ import { useEffect, useState } from "react";
 import type { EvidenceResult, VariantKey } from "./types";
 import { selectionEvidenceKey } from "./selectedAlleleEvidence";
 import { evidencePresentation } from "./evidencePresentation";
+import { PredictionTerms } from "./PredictionTerms";
+import { EvidenceFieldValue } from "./EvidenceFieldValue";
+import { evidenceProvider } from "./evidenceFields";
 
 type Evidence = Record<string, EvidenceResult>;
-function summary(result?: EvidenceResult, deviceId?: string): string {
+function summary(result?: EvidenceResult, deviceId?: string) {
   if (!result) return "Not evaluated";
   if (result.status !== "found") return result.status === "noExactMatch" ? "No exact match (unknown)" : evidencePresentation(result, deviceId).message || result.status;
-  const values = [...new Set(result.records.map(row => [row.impact, row.effect, row.CLNSIG].filter(Boolean).join(" · ")).filter(Boolean))];
-  return values.join(" / ") || "Matched records available";
+  const values = (field: string) => result.records.map(row => row[field]).filter(Boolean);
+  if (!values("impact").length && !values("effect").length && !values("CLNSIG").length) return "Matched records available";
+  return <div className="evidence-comparison-labels">
+    {values("impact").length > 0 && <PredictionTerms kind="impact" values={values("impact")} />}
+    {values("effect").length > 0 && <PredictionTerms kind="effect" values={values("effect")} />}
+    {[...new Set(values("CLNSIG"))].map(value => <EvidenceFieldValue key={value} provider={evidenceProvider(result.source, deviceId)} field="CLNSIG" value={value} />)}
+  </div>;
 }
 
 export function AlleleEvidenceComparison({ source, current, restored, deviceIds, revision, load }: {

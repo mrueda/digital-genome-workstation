@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderOpen, FileInput, Database, Dna, FlaskConical, ChevronDown } from "lucide-react";
+import { FolderOpen, FileInput, Database, Dna, FlaskConical, ChevronDown, RefreshCw } from "lucide-react";
 import { DeviceSelectionScope } from "./DeviceSelectionScope";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { refreshedAlleleFocus } from "./alleleFocus";
 import { savedAllele } from "./alleleComparison";
@@ -12,6 +13,7 @@ import { GenomeDifferenceMap } from "./GenomeDifferenceMap";
 import { TrackPredictionComparison, type ConsequenceViewState } from "./TrackPredictionComparison";
 import type { TrackComparisonLocus } from "./types";
 import { EvidenceCard } from "./EvidenceCard";
+import { EvidenceSlot } from "./EvidenceSlot";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { ApplicationMenu, JobsDialog, ProjectTemplateDialog, SettingsDialog, type ExampleProjectId, type ProjectTemplateId, type WorkspaceMenuCommand } from "./ApplicationChrome";
 import {
@@ -93,6 +95,25 @@ import { focusViewport, viewportSpan } from "./genomeViewport";
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function chooseDgwProjectFolder(): Promise<string | undefined> {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Open DGW Project — select a .dgw folder",
+    canCreateDirectories: false
+  });
+  if (typeof selected !== "string") return;
+  const path = selected.replace(/[\\/]+$/, "");
+  if (!path.toLowerCase().endsWith(".dgw")) {
+    await messageDialog("Select the project folder whose name ends in .dgw, for example My project.dgw. Select the folder itself, rather than a file inside it.", {
+      title: "Select a .dgw project folder",
+      kind: "warning"
+    });
+    return;
+  }
+  return path;
 }
 
 const DEVICE_IDS = {
@@ -230,6 +251,7 @@ interface WorkstationSessionV1 {
   redoActions: WorkstationAction[];
   transportKind?: TransportTargetKind;
   transportLoop?: boolean;
+  transportReadingSeconds?: number;
 }
 
 interface ProjectSaveState {
@@ -710,7 +732,7 @@ function Onboarding({ projectTemplate, onOpened }: { projectTemplate: ProjectTem
   }
 
   async function openExisting() {
-    const selected = await open({ directory: true, multiple: false });
+    const selected = await chooseDgwProjectFolder();
     if (typeof selected !== "string") return;
     setBusy(true);
     try {
@@ -1435,6 +1457,8 @@ function Workstation({
   const [detailMode, setDetailMode] = useState<"devices" | "allele">("devices");
   const [transportKind, setTransportKind] = useState<TransportTargetKind>("variants");
   const [transportLoop, setTransportLoop] = useState(false);
+  const [transportReadingSeconds, setTransportReadingSeconds] = useState(5);
+  const transportReadingSecondsRef = useRef(5);
   const [transportState, setTransportState] = useState<TransportState>("idle");
   const [transportTarget, setTransportTarget] = useState<TransportTarget>();
   const [contextHelpKey, setContextHelpKey] = useState(DEFAULT_CONTEXT_HELP_KEY);
@@ -1473,7 +1497,9 @@ function Workstation({
   const navigationVariants = (focusedSourceVariants ?? snapshot.variants)
     .filter((variant) => variant.key.contig === context.contig
       && variant.key.position >= context.start
-      && variant.key.position <= context.end)
+      && variant.key.position <= context.end
+      && (!activeGene || (variant.key.contig === activeGene.contig
+        && variant.key.position >= activeGene.start && variant.key.position <= activeGene.end)))
     .slice(0, VARIANT_NAVIGATION_ALLELE_LIMIT);
   const selectedAlleleIdSet = useMemo(() => new Set(selectedAlleleIds), [selectedAlleleIds]);
   const allTrackSelectionActive = symbolicSelection?.selection.kind === "allTrack"
@@ -1520,8 +1546,9 @@ function Workstation({
     undoActions,
     redoActions,
     transportKind,
-    transportLoop
-  }), [activeGene, appliedDevicesByTrack, bypassedDevicesByTrack, context, detailMode, hiddenTrackIds, morphs, optimizers, randomizers, redoActions, selected, selectedEditId, selectedAlleleIds, selectedDeviceId, symbolicSelection, transportKind, transportLoop, undoActions]);
+    transportLoop,
+    transportReadingSeconds
+  }), [activeGene, appliedDevicesByTrack, bypassedDevicesByTrack, context, detailMode, hiddenTrackIds, morphs, optimizers, randomizers, redoActions, selected, selectedEditId, selectedAlleleIds, selectedDeviceId, symbolicSelection, transportKind, transportLoop, transportReadingSeconds, undoActions]);
   const workstationSessionJson = useMemo(() => JSON.stringify(workstationSession), [workstationSession]);
   const saveSequenceRef = useRef<Promise<unknown>>(Promise.resolve());
   const persistWorkstationSession = useCallback(async () => {
@@ -1619,8 +1646,9 @@ function Workstation({
     setExpandedVariantContigs((current) => current.includes(context.contig)
       ? current
       : [...current, context.contig]);
-    let start: number | undefined;
-    let end: number | undefined;
+    if (activeGene && context.contig !== activeGene.contig) return;
+    let start: number | undefined = activeGene?.start;
+    let end: number | undefined = activeGene?.end;
     while (true) {
       const scope = variantNavigationScope(context.contig, start, end);
       const bins = variantBinsByScope[scope];
@@ -1639,7 +1667,7 @@ function Workstation({
       start = active.start;
       end = active.end;
     }
-  }, [context.contig, contextMidpoint, variantContigs, variantBinsByScope, variantNavigationLoading]);
+  }, [activeGene, context.contig, contextMidpoint, variantContigs, variantBinsByScope, variantNavigationLoading]);
   const evidenceByDevice = useMemo<Record<string, EvidenceResult | undefined>>(() => ({
     [DEVICE_IDS.consequence]: deviceEvaluations[DEVICE_IDS.consequence] ?? evaluation?.consequence,
     [DEVICE_IDS.clinvar]: deviceEvaluations[DEVICE_IDS.clinvar] ?? evaluation?.clinvar,
@@ -1697,7 +1725,7 @@ function Workstation({
             : evidenceSummary(evidence),
           limitation: manifest.scientificLimitations[0],
           canRun: visualization || Boolean(selected),
-          runLabel: visualization ? "Open Track Compare" : manifest.id === DEVICE_IDS.consequence ? evidence ? "Refresh prediction" : "Predict allele" : evidence ? "Refresh" : "Run now",
+          runLabel: visualization ? "Open Track Compare" : manifest.id === DEVICE_IDS.consequence ? "Selection report" : evidence ? "Refresh" : "Run now",
           scoreInclusion: visualization || activeTrack.readOnly ? undefined : inputState === "excluded" ? "excluded" : "included"
         } satisfies RackDeviceView;
       });
@@ -2120,6 +2148,11 @@ function Workstation({
     });
   }, [activeTrack.id, selectedAlleleIds, trackDeck]);
 
+  // For a gene/all-track scope, visible allele IDs are only its viewport
+  // projection. Refreshing that projection does not change the user's scope.
+  const optimizerSelectionIdentity = symbolicSelection?.selection.trackId === activeTrack.id
+    ? symbolicSelection.selection
+    : selectedAlleleIds;
   useEffect(() => {
     if (suppressOptimizerSelectionStaleRef.current) {
       suppressOptimizerSelectionStaleRef.current = false;
@@ -2138,7 +2171,7 @@ function Workstation({
         }
       };
     });
-  }, [activeTrack.id, selectedAlleleIds]);
+  }, [activeTrack.id, optimizerSelectionIdentity]);
 
   function sameAlleleSelection(left: string[], right: string[]) {
     return left.length === right.length && left.every((id, index) => id === right[index]);
@@ -2532,6 +2565,9 @@ function Workstation({
           const restoredLoop = stored.transportLoop === true;
           setTransportLoop(restoredLoop);
           transportLoopRef.current = restoredLoop;
+          const seconds = [1, 3, 5, 10, 20].includes(stored.transportReadingSeconds ?? 0) ? stored.transportReadingSeconds! : 5;
+          setTransportReadingSeconds(seconds);
+          transportReadingSecondsRef.current = seconds;
         }
         const restored = await refresh(restoredContext);
         if (cancelled) return;
@@ -3485,9 +3521,12 @@ function Workstation({
       setNotice(`${selectedCount.toLocaleString()} positions are selected. Raise Genome Optimizer's Maximum positions to at least ${selectedCount.toLocaleString()}, or narrow the selection.`);
       return;
     }
+    const background = selectedCount > Math.min(settings.interactiveAlleleLimit, OPTIMIZER_INTERACTIVE_POSITION_LIMIT);
     let selectedVariants: VariantKey[];
     try {
-      selectedVariants = selection
+      // Background jobs resolve symbolic selections in core. Interactive runs
+      // accept explicit keys, including selected loci outside the viewport.
+      selectedVariants = selection && background
         ? []
         : await selectedVariantKeysForDevice(trackId, maximumPositions, "Genome Optimizer");
     } catch (error) {
@@ -3507,7 +3546,7 @@ function Workstation({
       selectedVariants = selectedVariants.map((key) => previousReplacements.get(variantKeyId(key)) ?? key);
     }
     const activeEvidenceDeviceIds = trackEvidenceDeviceIds(trackId);
-    if (selectedCount === 0 || (!selection && selectedVariants.length === 0)) {
+    if (selectedCount === 0 || (!(selection && background) && selectedVariants.length === 0)) {
       setNotice("Select at least one active allele before running Genome Optimizer.");
       return;
     }
@@ -3520,7 +3559,6 @@ function Workstation({
       setNotice("This optimizer run requires an applied, active ClinVar device for the fixed Pathogenic/Likely pathogenic guard.");
       return;
     }
-    const background = selectedCount > Math.min(settings.interactiveAlleleLimit, OPTIMIZER_INTERACTIVE_POSITION_LIMIT);
     setOptimizers((current) => ({
       ...current,
       [trackId]: {
@@ -3654,7 +3692,7 @@ function Workstation({
       }
       const result = await api.runOptimizer(projectPath, trackId, context, request);
       setSnapshot(result.snapshot);
-      if (optimizerSettings.mode === "saturation") {
+      if (optimizerSettings.mode === "saturation" && !selection) {
         const appliedReplacements = new Map(
           result.plan.proposals
             .filter((proposal) => proposal.edit.kind === "setAllele")
@@ -4063,15 +4101,15 @@ function Workstation({
   const selectedSavedAllele = savedAllele(selected, focus?.variants ?? [], selectedOperation);
   const activeAnalyzerSignature = activeAnalyzerDeviceIds.join("|");
   useEffect(() => {
+    // Playback owns evaluation while it is running; selection effects must not
+    // invalidate the request it just started for the new target.
+    if (transportState === "playing") return;
     const generation = ++evaluationGeneration.current;
     if (automaticEvaluationTimer.current !== undefined) {
       window.clearTimeout(automaticEvaluationTimer.current);
       automaticEvaluationTimer.current = undefined;
     }
     setEvaluation(undefined);
-    if (transportState === "playing") {
-      return;
-    }
     if (!selected || activeAnalyzerDeviceIds.length === 0) {
       setDeviceEvaluations({});
       setRunningDeviceId(undefined);
@@ -4189,6 +4227,11 @@ function Workstation({
   }
 
   async function showTransportTarget(target: TransportTarget) {
+    ++evaluationGeneration.current;
+    if (automaticEvaluationTimer.current !== undefined) window.clearTimeout(automaticEvaluationTimer.current);
+    setRunningDeviceId("all");
+    setEvaluation(undefined);
+    setDeviceEvaluations({});
     const span = viewportSpan(context);
     const nextContext = target.sourceKey.contig === context.contig
       ? focusViewport(context, target.sourceKey.position, focus?.contigLength, span)
@@ -4207,7 +4250,7 @@ function Workstation({
   }
 
   async function evaluateTransportTarget(target: TransportTarget, playbackGeneration: number) {
-    if (!target.currentVariant || activeAnalyzerDeviceIds.length === 0) return;
+    if (!target.currentVariant || activeAnalyzerDeviceIds.length === 0) { setRunningDeviceId(undefined); return; }
     const generation = ++evaluationGeneration.current;
     const deviceIds = [...activeAnalyzerDeviceIds];
     setRunningDeviceId("all");
@@ -4285,7 +4328,7 @@ function Workstation({
         if (generation !== transportGeneration.current) return;
         await evaluateTransportTarget(result.target, generation);
         if (generation !== transportGeneration.current) return;
-        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        await new Promise((resolve) => window.setTimeout(resolve, transportReadingSecondsRef.current * 1_000));
         if (generation !== transportGeneration.current) return;
         cursor = result.target.cursor;
         const next = await api.transportTarget(projectPath, {
@@ -4520,8 +4563,7 @@ function Workstation({
     : evidenceByDevice[DEVICE_IDS.consequence];
   const visibleEvidence = alleleDeviceIds
     .filter((deviceId) => activeAppliedDeviceSet.has(deviceId) && !activeBypassedDeviceSet.has(deviceId))
-    .map((deviceId) => evidenceByDevice[deviceId])
-    .filter((result): result is EvidenceResult => Boolean(result));
+    .flatMap((deviceId) => evidenceByDevice[deviceId] ? [{ deviceId, evidence: evidenceByDevice[deviceId] }] : []);
   const activeGeneVisible = Boolean(activeGene
     && activeGene.contig === context.contig
     && activeGene.start <= context.end
@@ -4560,7 +4602,8 @@ function Workstation({
             {!loading && renderVariantNavigationBins(children)}
           </div>}
           {leaf && containsFocus && <div className="variant-bin-alleles">
-            {navigationVariants.map((variant) => {
+            {navigationVariants.filter((variant) => variant.key.contig === bin.contig
+              && variant.key.position >= bin.start && variant.key.position <= bin.end).map((variant) => {
               const id = alleleId(variant);
               const selectedByScope = allTrackSelectionActive
                 ? !allTrackSelectionExclusions.has(id)
@@ -4594,8 +4637,11 @@ function Workstation({
       onFocusCapture={(event) => updateContextHelp(event.target)}
     >
       <header className="app-header">
-        <div className="mini-brand"><img src="/dgw-mark.svg" alt="" /></div>
-        <div><strong title={projectPath}>{snapshot.manifest.name}</strong><span>{snapshot.manifest.selectedSample} · {snapshot.manifest.assembly}</span></div>
+        <div className="project-context" title={projectPath}>
+          <span>Sample</span>
+          <strong>{snapshot.manifest.selectedSample}</strong>
+          <i>{snapshot.manifest.assembly}</i>
+        </div>
         <div className="header-spacer" />
         <div className={`worker-state${busy || runningDeviceId ? " processing" : ""}`}>
           <span className={busy || runningDeviceId ? "pulse" : "status-dot"} />
@@ -4606,7 +4652,7 @@ function Workstation({
       <aside className="variant-browser" data-context-help="source-variants">
         <div className="section-title">
           <span>Source Variants</span>
-          <small>{allTrackSelectionActive
+          <small>{activeGene ? `${activeGene.symbol} · ${activeGene.sourceVariantCount.toLocaleString()} alleles` : allTrackSelectionActive
             ? `✓ ${symbolicSelection?.total.toLocaleString()} selected`
             : `${variantContigs.length.toLocaleString()} contigs · ${navigationVariantTotal.toLocaleString()}`}</small>
         </div>
@@ -4631,7 +4677,7 @@ function Workstation({
               }}
             />
             {geneSearchLoading && <span className="gene-search-spinner" aria-label="Searching genes" />}
-            {activeGene && <button type="button" title="Clear the active gene" onClick={() => { setActiveGene(undefined); setGeneQuery(""); }}>×</button>}
+            {activeGene && <button type="button" title="Clear gene filter — show all chromosomes" aria-label="Clear gene filter — show all chromosomes" onClick={() => { setActiveGene(undefined); setGeneQuery(""); }}>×</button>}
           </div>
           {geneResults.length > 0 && <div className="gene-search-results">
             {geneResults.map((gene) => <button
@@ -4647,25 +4693,28 @@ function Workstation({
           {!geneSearchLoading && geneQuery.trim() && geneResults.length === 0 && !activeGene && <small className={geneSearchError ? "gene-search-error" : "gene-search-empty"}>{geneSearchError ?? "No matching genes"}</small>}
         </div>
         <div className="variant-list variant-tree">
-          {variantContigs.map((summary) => {
-            const expanded = expandedVariantContigs.includes(summary.contig);
-            const loading = variantNavigationLoading.includes(summary.contig);
-            const bins = variantBinsByScope[summary.contig] ?? [];
+          {variantContigs.filter((summary) => !activeGene || summary.contig === activeGene.contig).map((summary) => {
+            const expanded = Boolean(activeGene) || expandedVariantContigs.includes(summary.contig);
+            const scope = variantNavigationScope(summary.contig, activeGene?.start, activeGene?.end);
+            const loading = variantNavigationLoading.includes(scope);
+            const bins = (variantBinsByScope[scope] ?? []).map((bin) => activeGene
+              ? { ...bin, end: Math.min(bin.end, activeGene.end) } : bin);
             return (
               <section className={`variant-contig-node${allTrackSelectionActive ? " selected" : ""}${context.contig === summary.contig ? " active" : ""}`} key={summary.contig}>
                 <button
                   type="button"
                   className="variant-contig-toggle"
                   aria-expanded={expanded}
-                  onClick={() => toggleVariantContig(summary.contig)}
+                  onClick={() => { if (!activeGene) toggleVariantContig(summary.contig); }}
                 >
                   <span className="disclosure-mark">{expanded ? "▾" : "▸"}</span>
                   <b>{chromosomeLabel(summary.contig).toUpperCase()}</b>
-                  <small>{summary.total.toLocaleString()}</small>
+                  <small>{(activeGene?.sourceVariantCount ?? summary.total).toLocaleString()}</small>
                 </button>
                 {expanded && <div className="variant-bin-list">
                   {loading && <div className="variant-navigation-status">Loading occupied regions…</div>}
                   {!loading && renderVariantNavigationBins(bins)}
+                  {activeGene?.sourceVariantCount === 0 && <div className="variant-navigation-status">No imported variants in this gene</div>}
                 </div>}
               </section>
             );
@@ -4684,6 +4733,8 @@ function Workstation({
             targetKind={transportKind}
             state={transportState}
             loop={transportLoop}
+            readingSeconds={transportReadingSeconds}
+            onReadingSecondsChange={seconds => { setTransportReadingSeconds(seconds); transportReadingSecondsRef.current = seconds; }}
             scopeLabel={currentTransportSelection().label}
             evidenceDeviceLabel={activeAnalyzerDeviceIds
               .map((deviceId) => deviceManifests.find((device) => device.id === deviceId)?.name ?? deviceId)
@@ -4754,7 +4805,7 @@ function Workstation({
             objectives={optimizerObjectives}
             weightControls={optimizerWeights}
             rackDevices={rackDevices.map(device => device.id !== DEVICE_IDS.consequence ? device : {
-              ...device, status: "ready" as const, canRun: true, runLabel: "Open predictions",
+              ...device, status: "ready" as const, canRun: true, runLabel: "Selection report",
               result: `${comparisonSelectedCount.toLocaleString()} alleles selected`,
               renderPredictions: close => <TrackPredictionComparison currentOnly key={`predict:${consequenceViewKey}`} projectPath={projectPath} trackId={activeTrack.id}
                 savedView={consequenceViews.current.get(`predict:${consequenceViewKey}`)} onRemember={state => { consequenceViews.current.set(`predict:${consequenceViewKey}`, state); if (consequenceViews.current.size > 20) consequenceViews.current.delete(consequenceViews.current.keys().next().value!); }}
@@ -4851,18 +4902,25 @@ function Workstation({
 
       <aside className="inspector" data-context-help="evidence-panel">
         <div className="evidence-inspector-content">
-          <div className="section-title"><span>Evidence</span><small>selected allele only</small></div>
-          {symbolicSelection && <div className="selection-scope-summary">
-            <b>{symbolicSelection.total.toLocaleString()} active variant alleles selected {symbolicSelection.selection.kind === "interval" && activeGeneSelection ? `in ${activeGene?.symbol}` : "across every contig"}</b>
-            <span>{selectedAlleleIds.length.toLocaleString()} are currently shown. Devices receive the complete symbolic selection; Evidence below remains specific to one focused allele.</span>
+          <div className="section-title"><span>Evidence</span><small>focused allele only</small></div>
+          {symbolicSelection && <div className="evidence-selection-context">
+            <div className="evidence-selection-labels">
+              <span><b>{symbolicSelection.total.toLocaleString()}</b> selected</span>
+              <span>{symbolicSelection.selection.kind === "interval" && activeGeneSelection ? activeGene?.symbol : "All chromosomes"}</span>
+              <span><b>{selectedAlleleIds.length.toLocaleString()}</b> in view</span>
+            </div>
+            <details>
+              <summary>Selection details</summary>
+              <p>{symbolicSelection.total.toLocaleString()} active variant alleles selected {symbolicSelection.selection.kind === "interval" && activeGeneSelection ? `in ${activeGene?.symbol}` : "across every contig"}. {selectedAlleleIds.length.toLocaleString()} are currently shown. Devices receive the complete symbolic selection; Evidence below remains specific to one focused allele.</p>
+            </details>
           </div>}
           {selected ? <>
             <div className="selected-variant"><p>{selected.key.contig}:{selected.key.position.toLocaleString()}</p><h3>{selected.key.reference}<i>›</i>{selected.key.alternate}</h3><span>{selected.origin} · {variantPhaseLabel(selected)}</span></div>
             {!selectedSavedAllele.base || selectedSavedAllele.restored ? <p className="phase-notice">{selectedSavedAllele.restored ? "Reference is restored on the edited copy. " : "This ALT is not active in the current track view. "}Evidence below describes the selected ALT, not a reference call or an unsaved proposal.</p> : null}
             <p className="evaluation-scope">Active devices run automatically for this exact allele. Imported VCF annotations are not used.</p>
-            <button className="button secondary evidence-refresh" title="Evidence updates automatically when you focus an allele. Refresh to evaluate it again." onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}>{runningDeviceId ? "Evaluating…" : "Refresh evidence"}</button>
-            {visibleEvidence.length > 0 ? <div className="evidence-stack">
-              {visibleEvidence.map((evidence, index) => <EvidenceCard evidence={evidence} key={`${selectedEvidenceKey}-${evidence.source}-${index}`} />)}
+            <button className="button secondary evidence-refresh" aria-label={runningDeviceId ? "Evaluating evidence" : "Refresh evidence"} title="Evidence updates automatically when you focus an allele. Refresh to evaluate it again." onClick={evaluate} disabled={busy || Boolean(runningDeviceId) || activeAnalyzerDeviceIds.length === 0}><RefreshCw size={13} aria-hidden="true" />{runningDeviceId ? "Evaluating…" : "Refresh"}</button>
+            {visibleEvidence.length > 0 || Boolean(runningDeviceId) ? <div className="evidence-stack">
+              {activeAnalyzerDeviceIds.map(deviceId => <EvidenceSlot key={deviceId} alleleKey={selectedEvidenceKey} deviceId={deviceId} title={deviceManifests.find(device => device.id === deviceId)?.name ?? deviceId} evidence={evidenceByDevice[deviceId]} loading={Boolean(runningDeviceId)} />)}
               <p className="limitation">{evaluation?.limitation ?? "Consequences and evidence are evaluated independently for one exact allele. Compound and phase-dependent effects are not calculated."}</p>
             </div> : <div className="empty-inspector"><span>◇</span><p>{runningDeviceId ? "Evaluating this exact allele…" : "Select an active Evidence device or refresh to evaluate this exact allele."}</p></div>}
           </> : <div className="empty-inspector"><span>⌖</span><p>Select an allele in the focused region.</p></div>}
@@ -4938,6 +4996,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(RECENT_PROJECTS_STORAGE_KEY, JSON.stringify(recentProjects));
   }, [recentProjects]);
+
+  useEffect(() => {
+    const title = snapshot ? `${snapshot.manifest.name} — DGW` : "Digital Genome Workstation";
+    document.title = title;
+    void getCurrentWindow().setTitle(title).catch((error) => {
+      console.error("Unable to update the native project title", error);
+    });
+  }, [snapshot?.manifest.name]);
 
   useEffect(() => {
     void getCurrentWebview().setZoom(settings.uiScale).catch((error) => {
@@ -5050,11 +5116,12 @@ export default function App() {
       enterProject(path, opened, false);
     } catch (error) {
       setProjectSaveState({ status: "error", message: `Open failed: ${messageOf(error)}` });
+      await messageDialog(messageOf(error), { title: "Could not open DGW project", kind: "error" });
     }
   }
 
   async function chooseExistingProject() {
-    const selected = await open({ directory: true, multiple: false, title: "Open DGW Project" });
+    const selected = await chooseDgwProjectFolder();
     if (typeof selected === "string") await openProjectAt(selected);
   }
 
@@ -5073,6 +5140,7 @@ export default function App() {
       await messageDialog(detail, { title: `Could not open ${assemblyLabel} example`, kind: "error" });
     }
   }
+
 
   async function saveProjectCopy() {
     if (!snapshot || !projectPath) return;

@@ -245,6 +245,7 @@ export async function installTauriShellMock(page: Page) {
     let predictionJob: JsonObject | undefined;
     let stalePrediction = false;
     async function command(commandName: string, args: JsonObject = {}) {
+      if (commandName === "plugin:window|set_title") return null;
       if (commandName === "test_stale_prediction") { stalePrediction = true; return null; }
       if (commandName === "user_setup_info") return { platform: "linux", version: "0.1.0", suggestedParent: "/synthetic/user/apps" };
       if (commandName === "install_for_user") {

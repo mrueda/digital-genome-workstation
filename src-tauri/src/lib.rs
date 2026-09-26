@@ -2,6 +2,8 @@ mod resource_archive;
 mod resources;
 mod updates;
 #[cfg(target_os = "linux")]
+mod window_title;
+#[cfg(target_os = "linux")]
 mod user_setup;
 use dgw_core::evaluation::normalize_variant;
 use dgw_core::{
@@ -2332,6 +2334,13 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                window_title::sync_header_title(&window.gtk_window()?);
+            }
+            Ok(())
+        })
         .manage(resources::ResourceInstaller(Mutex::new(())))
         .manage(AppState {
             evaluation: Arc::new(EvaluationService::new()),

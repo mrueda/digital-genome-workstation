@@ -651,6 +651,7 @@ dependencies = [
  "chrono",
  "dgw-core",
  "flate2",
+ "gtk",
  "hex",
  "rayon",
  "reqwest",

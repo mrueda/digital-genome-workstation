@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
         {type: 'doc', id: 'usage/input-vcf', label: 'Choose a VCF & Sample'},
         {type: 'doc', id: 'usage/focused-workspace', label: 'Focused Track Workspace'},
         {type: 'doc', id: 'usage/edit-and-compare', label: 'Tracks, Devices & Edits'},
+        {type: 'doc', id: 'usage/device-guide', label: 'Device Guide'},
         {type: 'doc', id: 'usage/evaluate-alleles', label: 'Evaluate Alleles'},
         {type: 'doc', id: 'usage/render-state', label: 'Consolidate & Export'},
       ],

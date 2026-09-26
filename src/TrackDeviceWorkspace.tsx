@@ -1068,17 +1068,20 @@ function CompactDeviceCard({
       </div>
 
       {expanded && device.renderPredictions ? device.renderPredictions(onClose ?? (() => undefined)) : <>
-      <div className="dgw-compact-result" aria-live="polite">
+      {!device.renderPredictions && <div className="dgw-compact-result" aria-live="polite">
         <b>{running ? "Running…" : device.result ?? "No result yet"}</b>
-      </div>
+      </div>}
 
-      {device.renderPredictions ? <p>Predict current alleles at the selected positions. Open to run and inspect transcript results.</p> : device.id === CONSEQUENCE_DEVICE_ID && <section className="dgw-predictor-results" aria-label="Focused allele predictions">
+      {device.renderPredictions ? <div className="dgw-compact-prediction-summary">
+        <strong>Automatic prediction</strong>
+        <span>Used by focused alleles and Track Monitor.</span>
+      </div> : device.id === CONSEQUENCE_DEVICE_ID && <section className="dgw-predictor-results" aria-label="Focused allele predictions">
         <p>{device.alleleLabel ?? "Focus an allele on the track to predict its effects."}</p>
         {device.bypassed ? <p>Predictor bypassed. Enable it to evaluate this allele.</p>
           : running ? <p role="status">Predicting transcript effects…</p>
           : expanded && device.evidence ? <EvidenceCard key={device.alleleLabel} evidence={device.evidence} deviceId={device.id} />
           : device.evidence ? <p>Expand to inspect transcript predictions and protein changes.</p>
-          : device.alleleLabel ? <p>No prediction yet. Choose Predict allele.</p> : null}
+          : device.alleleLabel ? <p>Prediction starts automatically for the focused allele.</p> : null}
         {expanded && device.evidence?.status === "found" && <p className="muted">Each transcript is evaluated independently. Track Monitor uses the strongest impact across transcripts; choosing a transcript here does not change the score.</p>}
       </section>}
 
@@ -1096,6 +1099,7 @@ function CompactDeviceCard({
       </>}
       <details className="dgw-device-details">
         <summary>Details</summary>
+        {device.renderPredictions && <p className="dgw-device-limitation">Runs automatically for focused alleles and Track Monitor. The optional selection report retains full transcript details for the selected positions.</p>}
         <dl className="dgw-device-metadata">
           <div><dt>Target</dt><dd>{rackTargetLabel(device.target)}</dd></div>
           <div><dt>Resource</dt><dd title={resource}>{resource}</dd></div>
@@ -1849,6 +1853,8 @@ function DeviceRack({
   const [deviceBrowserOpen, setDeviceBrowserOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string>();
   const expandInvoker = useRef<HTMLButtonElement | null>(null);
+  const deviceBrowserInvoker = useRef<HTMLElement | null>(null);
+  const deviceBrowserCloseButton = useRef<HTMLButtonElement>(null);
   const backButton = useRef<HTMLButtonElement>(null);
   const savedScroll = useRef(0);
   useEffect(() => { setExpandedId(undefined); }, [track?.id]);
@@ -1856,6 +1862,7 @@ function DeviceRack({
     if (expandedId && !appliedDeviceIds.includes(expandedId)) setExpandedId(undefined);
   }, [expandedId, appliedDeviceIds]);
   useEffect(() => { if (expandedId) backButton.current?.focus(); }, [expandedId]);
+  useEffect(() => { if (deviceBrowserOpen) deviceBrowserCloseButton.current?.focus(); }, [deviceBrowserOpen]);
   function collapseDevice() {
     setExpandedId(undefined);
     requestAnimationFrame(() => {
@@ -1935,7 +1942,12 @@ function DeviceRack({
   const expandedItem = rackItems.find(item => item.device.id === expandedId);
 
   function openDeviceBrowser() {
+    deviceBrowserInvoker.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setDeviceBrowserOpen(true);
+  }
+  function closeDeviceBrowser() {
+    setDeviceBrowserOpen(false);
+    requestAnimationFrame(() => deviceBrowserInvoker.current?.focus({ preventScroll: true }));
   }
 
   function renderRackItem(item: RackItem) {
@@ -2031,6 +2043,10 @@ function DeviceRack({
   return (
     <aside className={`dgw-device-rack${rackItems.length === 0 ? " is-empty" : ""}${expandedItem ? " is-expanded" : ""}`} data-context-help="device-rack"
       onKeyDown={event => {
+        if (deviceBrowserOpen && event.key === "Escape" && !event.defaultPrevented) {
+          event.preventDefault(); event.stopPropagation(); closeDeviceBrowser();
+          return;
+        }
         if (expandedItem && event.key === "Escape" && !event.defaultPrevented && !deviceMenu && !(event.target instanceof HTMLSelectElement)) {
           event.preventDefault(); event.stopPropagation(); collapseDevice();
         }
@@ -2095,15 +2111,15 @@ function DeviceRack({
             }}>
             <span className="dgw-device-scrollbar-thumb" style={{ left: `${100 * rackScroll.left / rackScroll.total}%`, width: `${100 * rackScroll.width / rackScroll.total}%` }} />
           </div>
-          {deviceBrowserOpen && <section className="dgw-device-browser" aria-label="Device Browser">
-            <header><div><span>Device Browser</span><small>Available devices · adding one does not change an objective automatically</small></div><button type="button" onClick={() => setDeviceBrowserOpen(false)}>Close</button></header>
+          {deviceBrowserOpen && <section className="dgw-device-browser" role="dialog" aria-label="Add a device">
+            <header><div><span>Add a device</span><small>Choose a device for {track.name}</small></div><button ref={deviceBrowserCloseButton} type="button" onClick={closeDeviceBrowser}>Close</button></header>
             <div className="dgw-device-browser-content">
               <div className="dgw-device-browser-groups">{browserGroups.map((group) => <section className={`group-${group.id}`} key={group.id}>
               <header><b>{group.label}</b><small>{group.description}</small></header>
               <div>{group.items.map((item) => <DeviceBrowserItem
                 item={item}
                 applied={appliedSet.has(item.device.id)}
-                onAdd={!busy && onAddDevice ? () => { onAddDevice(item.device.id); setDeviceBrowserOpen(false); } : undefined}
+                onAdd={!busy && onAddDevice ? () => { onAddDevice(item.device.id); closeDeviceBrowser(); } : undefined}
                 key={item.device.id}
               />)}</div>
               </section>)}</div>

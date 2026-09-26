@@ -1,21 +1,13 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "./api";
 import { EvidenceCard } from "./EvidenceCard";
+import { PredictionTerms } from "./PredictionTerms";
 import { PredictionOutcomeSummary } from "./PredictionOutcomeSummary";
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Play, LoaderCircle, MousePointer2, Square } from "lucide-react";
 import type { BackgroundJob, PredictionComparisonReport, PredictionComparisonPage, PredictionComparisonRow, TrackComparisonLocus, VariantKey, VariantSelection } from "./types";
 
 const labels: Record<string, string> = { different: "Different predictions", same: "Same predictions", missing: "Missing evidence", referenceRestoration: "REF restorations" };
 const PAGE_SIZE = 200;
-function PredictionTerms({ values, kind }: { values: string[]; kind: "gene" | "effect" | "impact" }) {
-  const unique = [...new Set(values.filter(Boolean))];
-  if (!unique.length) return <span className="prediction-unknown">—</span>;
-  const readable = (value: string) => kind === "effect" ? value.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()) : value;
-  return <div className={`prediction-terms prediction-${kind}`}>
-    {unique.slice(0, 3).map(value => <span key={value} className={`prediction-term${kind === "impact" ? ` impact-${value.toLowerCase()}` : ""}`} title={value}>{readable(value)}</span>)}
-    {unique.length > 3 && <details><summary>+{unique.length - 3} more</summary>{unique.slice(3).map(value => <span className="prediction-term" key={value}>{readable(value)}</span>)}</details>}
-  </div>;
-}
 function ResultPagination({ total, offset, onPage, position }: { total: number; offset: number; onPage: (offset: number) => void; position: "top" | "bottom" }) {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.floor(offset / PAGE_SIZE) + 1;
@@ -92,9 +84,9 @@ export function TrackPredictionComparison({ projectPath, trackId, revision, devi
     try { setJob(await api.startPredictionComparison(projectPath, trackId, deviceIds, workerThreads, selection, currentOnly)); setOffset(0); setSelected(undefined); }
     catch (err) { setError(String(err)); } finally { setSubmitting(false); }
   }
-  return <section className={`comparison-workspace${currentOnly ? " selection-predictor" : ""}`} aria-label={currentOnly ? "Selected allele predictions" : "Selected consequences comparison"}>
+  return <section className={`comparison-workspace${currentOnly ? " selection-predictor" : ""}`} aria-label={currentOnly ? "Consequence selection report" : "Selected consequences comparison"}>
     {!currentOnly && <header className="prediction-intro"><div><h2>Did the edits change predicted consequences?</h2><p>Source → Current · selected positions only</p></div></header>}
-    <div className="prediction-run-row"><div>{currentOnly ? <span className="prediction-engine-label">bcftools csq</span> : <><b>{selectedCount.toLocaleString()} alleles selected</b><p>Compares changed loci within your selection using Consequence Predictor, not a new track score.</p></>}</div><button className="button primary" disabled={!selectedCount || running || submitting || !deviceIds.includes("org.dgw.builtin.variant-consequences")} onClick={() => { void start(); }}>{running || submitting ? <LoaderCircle size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}{submitting ? "Submitting…" : running ? currentOnly ? "Predicting…" : "Comparing consequences…" : currentOnly ? "Predict selection" : "Compare consequences"}</button></div>
+    <div className="prediction-run-row"><div>{currentOnly ? <><b>Detailed selection report</b><p>Full transcript details for current ALT alleles at the selected positions.</p></> : <><b>{selectedCount.toLocaleString()} alleles selected</b><p>Compares changed loci within your selection using Consequence Predictor, not a new track score.</p></>}</div><button className="button primary" disabled={!selectedCount || running || submitting || !deviceIds.includes("org.dgw.builtin.variant-consequences")} onClick={() => { void start(); }}>{running || submitting ? <LoaderCircle size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}{submitting ? "Submitting…" : running ? currentOnly ? "Creating report…" : "Comparing consequences…" : currentOnly ? page ? "Rebuild report" : "Create report" : "Compare consequences"}</button></div>
     {!currentOnly && <p className="prediction-coverage">{selection.kind === "allTrack" ? "All-track selection" : selection.kind === "interval" ? "Selected interval" : "Explicit selection"} · results group all alleles at each selected locus.</p>}
     {!currentOnly && <button className="dgw-change-selection" title="Return to Track view to select variants" onClick={onBack}><MousePointer2 size={14} aria-hidden="true" />Change selection</button>}
     {!selectedCount && <p className="prediction-empty">Select positions on the track first. Selecting all variants includes every chromosome.</p>}
