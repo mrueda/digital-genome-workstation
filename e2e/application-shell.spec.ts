@@ -931,7 +931,8 @@ test("keeps the project open when saving its session fails", async ({ page }) =>
   });
   await page.getByText("File", { exact: true }).click();
   await page.getByRole("button", { name: "Close project", exact: true }).click();
-  await expect(page.getByText(/Close failed because the project could not be saved/)).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Application menu", exact: true })
+    .getByText(/Close failed because the project could not be saved/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Edit and compare genome variants." })).toHaveCount(0);
   await page.getByText("File", { exact: true }).click();
   await page.getByRole("button", { name: "Close project", exact: true }).click();
