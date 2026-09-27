@@ -16,3 +16,9 @@ __pycache__/
 !fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz
 !fixtures/1000G-HG00103.SRR1596639.wes.b37.public.vcf.gz.csi
 *.log
+
+# Local working notes; never publish these files.
+README
+NOTES
+NOTES.md
+SESSION*.md
