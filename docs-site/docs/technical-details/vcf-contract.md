@@ -3,7 +3,7 @@
 ## Import invariants
 
 - BGZF VCF in production; VCF 4.1+ header.
-- b37 assembly and exact hs37d5 contigs.
+- assembly matched to the registered reference: supplied profiles cover GRCh37 (b37/hs37d5) and GRCh38 (hg38).
 - 1-based `POS` coordinates at the file, project, and user-interface boundaries.
 - only records with `FILTER=PASS` enter the project; failed filters and `FILTER=.` are excluded and counted before projection.
 - reference-consistent records; the source need not already be left-aligned, minimal, or sorted.

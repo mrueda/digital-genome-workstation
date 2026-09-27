@@ -1,21 +1,44 @@
-# Origin and Development
+# Origin and development
 
-Digital Genome Workstation grew from [mrueda](https://github.com/mrueda)'s idea of applying the non-destructive working model of digital audio workstations to human genome variation.
+DGW grew from Manuel Rueda's experience with music workstations and genome analysis. Music software makes it natural to keep an original, try changes on separate tracks and compare alternatives. DGW brings that workflow to genome variants.
 
-The central analogy is operational. The selected individual is a read-only source genome track. A user duplicates that track, applies devices, sees persistent edit blocks, bypasses changes, compares tracks, and consolidates only by explicit choice. Homologous chromosome copies A and B remain inside each complete diploid track; the labels do not imply parental origin. The immutable state DAG stays behind the interface as provenance.
+## DAW and DGW side by side
 
-## DAW behaviour and DGW architecture
+| Familiar DAW concept | In DGW | What it lets you do |
+| --- | --- | --- |
+| Tracks and alternative takes | Genome tracks | Keep different versions of the same sample alongside a read-only source. Each track is a genome scenario, not one chromosome copy. |
+| Piano roll | Allele Roll | Inspect and stage base changes in A/C/G/T lanes at imported SNV positions. The horizontal axis is genomic position, not time. |
+| Selecting notes or events | Variant selection | Click individual alleles, drag a selection box, or select across the track before applying a batch operation. |
+| Timeline zoom and track height | Genomic zoom, panning and resizable tracks | Move between a region overview and individual alleles, or make room by minimizing tracks. Broad views do not draw every allele separately. |
+| Non-destructive edits | Mutation blocks and bulk layers | Keep changes visible and reversible without rewriting the source VCF. |
+| Undo and redo | Workstation action history | Undo supported actions such as selection, track renaming and applied mutation batches. This session history is separate from the saved ancestry of genome edits. |
+| Bypass | Mutation-block and database-device bypass | Temporarily exclude an edit, or exclude ClinVar/COSMIC evidence. Editing and Analyze devices do not have device-level Bypass. |
+| Effects and instrument rack | Device Rack | Keep editing, evidence, analysis and visualization tools together on a track. |
+| Selection-based MIDI generators | Mutation Generator | Generate changes for selected positions using controls such as amount, seed and substitution pattern, rather than editing each allele manually. |
+| Output meter | Track Monitor | See evaluated changes relative to the source, including score direction and evaluation coverage. It measures a defined model output, not sound or health. |
+| Transport controls | Variant review controls | Step through alleles or advance through them automatically for inspection. Playback does not simulate evolution or generate mutations. |
+| Consolidate or bounce | Consolidation and export | Consolidation makes the effective track its new visual baseline while retaining ancestry. Export writes a VCF or regional FASTA for use elsewhere. |
+| Project files rather than finished audio alone | Saved DGW projects | Reopen tracks, edits and device settings, rather than keeping only the exported sequence file. |
+| Demo songs and project templates | Example projects and rack templates | Inspect prepared experiments, or start with a chosen set of devices. Opening an example creates a fresh working copy. |
 
-DGW borrows documented workstation behaviour, not an assumed internal DAW database design. Ableton Live represents audio or MIDI as clips arranged on tracks and supports selection-based, non-destructive editing. Logic Pro provides track and project alternatives that can share underlying assets while preserving different edits. Reason keeps recordings on separate comp rows and combines them only when the user explicitly bounces the result. These behaviours informed DGW's source track, duplicated experimental tracks, persistent mutation blocks, bypass, and consolidation. See the official documentation for [Ableton Arrangement editing](https://www.ableton.com/en/live-manual/12/arrangement-view/), [Logic Track Alternatives](https://support.apple.com/en-gb/101922), [Logic Project Alternatives](https://support.apple.com/guide/logicpro/use-project-alternatives-and-backups-lgcpa158ef77/mac), and [Reason non-destructive audio editing](https://docs.reasonstudios.com/reason12/audio-editing-in-the-sequencer).
+## What the analogy means
 
-The explicit persistent edit graph is DGW's engineering choice. Public DAW documentation describes user-visible clips, alternatives, undo, comping, and bounce operations; it does not establish that Ableton, Logic, or Reason stores projects as an equivalent DAG. DGW combines the workstation interaction model with ideas familiar from version control and event-sourced systems: immutable states, parent-linked edits, shared ancestry, cheap branches, and reproducible materialization.
+A track represents one diploid scenario for the selected sample. Chromosome copies A and B are inside each track; they are not separate experiments or parental labels. Several edits can coexist, but predictions remain independent per allele.
 
-The current DGW graph is specifically a **tree-shaped directed acyclic graph**. Every generated genome state has one parent, while several tracks may point to and share the same existing state. Editing one track creates a new child branch. Genome Morph writes a new edit layer rather than creating a two-parent merge, so DGW should not be described as implementing Git-like merge commits.
+Devices use DGW's own structured contract. They are not audio VST binaries, and their rack order does not imply a biological signal chain. External plug-in installation is not yet supported.
 
-The device-rack idea also provides a home for bounded generative tools. The implemented experimental Genome Optimizer can weight live predicted consequence impact and exact source-allele membership, with fixed ClinVar candidate screening and controls that limit positions and changes. Its output remains discrete alleles represented by individual reversible blocks or one indexed reversible bulk layer. DGW is not an attempt to make sequence behave like audio or to reproduce a music application's appearance.
+## The edit history is DGW's design
 
-The rack extends beyond editing: Consequence Predictor, ClinVar, and COSMIC are Evidence devices, while objective-driven track models such as Genome Optimizer belong to Analyze. “VST-like” is only the conceptual inspiration for a compatible device rack. DGW compatibility will come from a versioned structured Device API under host control, not from an audio plug-in format. Device code and biological resource packs remain separate so community software can evolve without bundling or relicensing large external databases.
+DGW stores parent-linked edits in a tree-shaped directed acyclic graph. Tracks can share a starting state and diverge; consolidation preserves ancestry. Genome Morph writes a new edit on its receiving track rather than merging two parents.
 
-This is an **independent side project developed by mrueda in his free time**. Human genomes come first. The first working version uses b37/hs37d5 and hg38 references, Ensembl gene annotations, ClinVar, and COSMIC resources already maintained for related bioinformatics work. Runtime consequence prediction uses `bcftools csq`.
+This is DGW's implementation choice, not a claim about how DAWs store their projects. See [DGW's state model](../technical-details/state-model.md).
 
-The project is created and maintained by [mrueda](https://github.com/mrueda).
+## Musical inspiration
+
+DGW draws on the wider music-workstation ecosystem, rather than one application. Examples include [Reason](https://www.reasonstudios.com/), [Ableton Live](https://www.ableton.com/en/live/), [Logic Pro](https://www.apple.com/logic-pro/), [FL Studio (Fruity Loops)](https://www.image-line.com/fl-studio) and [Pro Tools](https://www.avid.com/pro-tools).
+
+## Author
+
+Created and maintained by [Manuel Rueda](https://github.com/mrueda) as an independent project developed in his free time. The supplied resources currently support human GRCh37 and GRCh38; the track and device model is not inherently species-specific.
+
+[Citation](citation.md) · [License](license.md) · [Roadmap](roadmap.md)

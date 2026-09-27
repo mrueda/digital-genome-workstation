@@ -5014,16 +5014,16 @@ export default function App() {
   useEffect(() => {
     if (!jobsOpen || !projectPath) return;
     let disposed = false;
-    async function refreshJobs() {
-      setJobsLoading(true);
+    async function refreshJobs(showLoading = false) {
+      if (showLoading) setJobsLoading(true);
       try {
         const next = await api.listBackgroundJobs(projectPath);
         if (!disposed) setJobs(next);
       } finally {
-        if (!disposed) setJobsLoading(false);
+        if (!disposed && showLoading) setJobsLoading(false);
       }
     }
-    void refreshJobs();
+    void refreshJobs(true);
     const timer = window.setInterval(() => { void refreshJobs(); }, 750);
     return () => {
       disposed = true;

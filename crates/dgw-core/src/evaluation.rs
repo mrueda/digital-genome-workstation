@@ -61,6 +61,10 @@ pub fn device_resource_fingerprint(
     hash_field(&mut hasher, device_id);
     match device_id {
         CONSEQUENCE_DEVICE_ID => {
+            // The parser and impact mapping are part of the scientific result.
+            // Change this value whenever their semantics change so projects do
+            // not reuse evidence produced under an older mapping.
+            hash_field(&mut hasher, "bcftools-csq-impact-v2");
             hash_field(&mut hasher, bundle_fingerprint);
             hash_field(&mut hasher, &bundle.bcftools_version);
             hash_path_identity(&mut hasher, "bcftools", &bundle.bcftools_path);
@@ -629,41 +633,44 @@ pub(crate) fn evidence_status_label(status: &EvidenceStatus) -> &'static str {
 }
 
 fn consequence_impact_signal(evidence: &EvidenceResult) -> Option<f64> {
-    if evidence.status != EvidenceStatus::Found {
+    if evidence.status != EvidenceStatus::Found || evidence.records.is_empty() {
         return None;
     }
     evidence
         .records
         .iter()
         .map(
-            |record| match record.get("impact").map(|value| value.to_ascii_uppercase()) {
-                Some(value) if value == "HIGH" => 1.0,
-                Some(value) if value == "MODERATE" => 0.67,
-                Some(value) if value == "LOW" => 0.33,
-                Some(value) if value == "MODIFIER" => 0.1,
-                _ => 0.0,
+            |record| match record.get("impact")?.to_ascii_uppercase().as_str() {
+                "HIGH" => Some(1.0),
+                "MODERATE" => Some(0.67),
+                "LOW" => Some(0.33),
+                "MODIFIER" => Some(0.1),
+                _ => None,
             },
         )
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
         .reduce(f64::max)
 }
 
 fn consequence_impact_label(evidence: &EvidenceResult) -> Option<String> {
+    if evidence.status != EvidenceStatus::Found || evidence.records.is_empty() {
+        return None;
+    }
     evidence
         .records
         .iter()
-        .filter_map(|record| record.get("impact").or_else(|| record.get("IMPACT")))
-        .flat_map(|value| value.split([',', '|', '/', '&']))
-        .filter_map(|label| {
-            let normalized = label.trim().to_ascii_uppercase();
-            let score = match normalized.as_str() {
-                "HIGH" => 4,
-                "MODERATE" => 3,
-                "LOW" => 2,
-                "MODIFIER" => 1,
-                _ => return None,
-            };
-            Some((score, normalized))
+        .map(|record| {
+            let normalized = record
+                .get("impact")
+                .or_else(|| record.get("IMPACT"))?
+                .trim()
+                .to_ascii_uppercase();
+            let rank = consequence_impact_rank(&normalized);
+            (rank > 0).then_some((rank, normalized))
         })
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
         .max_by_key(|(score, _)| *score)
         .map(|(_, label)| label)
 }
@@ -902,11 +909,18 @@ fn parse_bcsq_record(
             );
         }
     }
-    let impact = record
+    if let Some(impact) = record
         .get("effect")
-        .map(|effect| strongest_consequence_impact(effect))
-        .unwrap_or("MODIFIER");
-    record.insert("impact".into(), impact.into());
+        .and_then(|effect| strongest_consequence_impact(effect))
+    {
+        record.insert("impact".into(), impact.into());
+    } else {
+        record.insert("impactStatus".into(), "unavailable".into());
+        record.insert(
+            "impactUnavailableReason".into(),
+            "bcftools returned an unrecognized consequence term".into(),
+        );
+    }
     record.insert("engine".into(), "bcftools csq".into());
     record.insert("engineVersion".into(), bundle.bcftools_version.clone());
     record.insert("annotationRelease".into(), resource.release.clone());
@@ -931,31 +945,31 @@ fn no_transcript_feature_record(
     ])
 }
 
-fn strongest_consequence_impact(effect: &str) -> &'static str {
+fn strongest_consequence_impact(effect: &str) -> Option<&'static str> {
     effect
         .split('&')
         .map(consequence_term_impact)
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
         .max_by_key(|impact| consequence_impact_rank(impact))
-        .unwrap_or("MODIFIER")
 }
 
-fn consequence_term_impact(term: &str) -> &'static str {
-    match term.to_ascii_lowercase().as_str() {
-        "transcript_ablation"
-        | "splice_acceptor"
-        | "splice_donor"
-        | "stop_gained"
-        | "frameshift"
-        | "stop_lost"
-        | "start_lost"
-        | "transcript_amplification" => "HIGH",
-        "inframe_insertion" | "inframe_deletion" | "missense" | "protein_altering" => "MODERATE",
-        "splice_region"
-        | "incomplete_terminal_codon"
-        | "start_retained"
-        | "stop_retained"
-        | "synonymous" => "LOW",
-        _ => "MODIFIER",
+fn consequence_term_impact(term: &str) -> Option<&'static str> {
+    // bcftools prefixes consequences downstream from a newly introduced stop
+    // with `*`; the underlying consequence category remains the same.
+    let normalized = term.trim().trim_start_matches('*').to_ascii_lowercase();
+    match normalized.as_str() {
+        "splice_acceptor" | "splice_donor" | "stop_gained" | "frameshift" | "stop_lost"
+        | "start_lost" => Some("HIGH"),
+        "inframe_altering" | "inframe_insertion" | "inframe_deletion" | "missense" => {
+            Some("MODERATE")
+        }
+        "splice_region" | "start_retained" | "stop_retained" | "synonymous" => Some("LOW"),
+        "3_prime_utr" | "5_prime_utr" | "coding_sequence" | "feature_elongation"
+        | "feature_truncation" | "intergenic" | "intron" | "nmd_transcript" | "non_coding" => {
+            Some("MODIFIER")
+        }
+        _ => None,
     }
 }
 
@@ -1470,6 +1484,78 @@ mod tests {
             parsed.get("aminoAcidChange").map(String::as_str),
             Some("600V>E")
         );
+    }
+
+    #[test]
+    fn classifies_every_consequence_type_supported_by_bcftools_1_24() {
+        let expected = [
+            ("3_prime_utr", "MODIFIER"),
+            ("5_prime_utr", "MODIFIER"),
+            ("coding_sequence", "MODIFIER"),
+            ("feature_elongation", "MODIFIER"),
+            ("feature_truncation", "MODIFIER"),
+            ("frameshift", "HIGH"),
+            ("inframe_altering", "MODERATE"),
+            ("inframe_deletion", "MODERATE"),
+            ("inframe_insertion", "MODERATE"),
+            ("intergenic", "MODIFIER"),
+            ("intron", "MODIFIER"),
+            ("missense", "MODERATE"),
+            ("NMD_transcript", "MODIFIER"),
+            ("non_coding", "MODIFIER"),
+            ("splice_acceptor", "HIGH"),
+            ("splice_donor", "HIGH"),
+            ("splice_region", "LOW"),
+            ("start_lost", "HIGH"),
+            ("start_retained", "LOW"),
+            ("stop_gained", "HIGH"),
+            ("stop_lost", "HIGH"),
+            ("stop_retained", "LOW"),
+            ("synonymous", "LOW"),
+        ];
+        for (term, impact) in expected {
+            assert_eq!(consequence_term_impact(term), Some(impact), "{term}");
+        }
+        assert_eq!(consequence_term_impact("*missense"), Some("MODERATE"));
+    }
+
+    #[test]
+    fn unrecognized_consequence_is_not_silently_classified_as_modifier() {
+        let bundle = resource_bundle();
+        let resource = bundle.consequence_annotation.as_ref().unwrap();
+        let record = parse_bcsq_record(
+            "future_consequence|BRAF|ENST1|protein_coding|+||1799T>A",
+            &bundle,
+            resource,
+        );
+        assert!(!record.contains_key("impact"));
+        assert_eq!(
+            record.get("impactStatus").map(String::as_str),
+            Some("unavailable")
+        );
+        let evidence = EvidenceResult {
+            source: "Consequence Predictor".into(),
+            status: EvidenceStatus::Found,
+            records: vec![record],
+            message: None,
+        };
+        assert_eq!(consequence_impact_signal(&evidence), None);
+        assert_eq!(consequence_impact_label(&evidence), None);
+    }
+
+    #[test]
+    fn one_unrecognized_transcript_makes_the_allele_impact_unavailable() {
+        let evidence = EvidenceResult {
+            source: "Consequence Predictor".into(),
+            status: EvidenceStatus::Found,
+            records: vec![
+                BTreeMap::from([("impact".into(), "HIGH".into())]),
+                BTreeMap::from([("impactStatus".into(), "unavailable".into())]),
+            ],
+            message: None,
+        };
+        assert_eq!(consequence_impact_signal(&evidence), None);
+        assert_eq!(consequence_impact_label(&evidence), None);
     }
 
     #[test]

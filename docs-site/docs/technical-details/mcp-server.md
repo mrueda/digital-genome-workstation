@@ -1,23 +1,29 @@
-# Agent Access (MCP)
+# MCP: use DGW through an agent
 
-DGW includes a local Model Context Protocol server so an agent can operate on DGW projects through commands instead of clicking the interface. The server is a separate executable called `dgw-mcp`. It calls `dgw-core` directly; it does not drive the desktop interface and does not expose an HTTP service.
+**MCP (Model Context Protocol) lets an agent operate DGW through structured commands.** The agent can inspect a saved project, generate edits, evaluate a track and export the result.
 
-The server exposes bounded inspection plus a small set of controlled project changes. It can select, duplicate, and rename tracks, and it can preview and apply one manual allele edit at a time. Mutation Generator, Genome Morph, and Genome Optimizer run previews as persistent background jobs and apply a completed result as one reversible mutation layer. Track Profiler evaluates active mutations with selected Evidence devices and persists the result read by Track Monitor. An agent can export a captured track as VCF or export a region of at most 50 kb as FASTA. The server cannot create projects, consolidate, archive tracks, or delete anything. Opening a project uses DGW's normal `Project::open` path, including the same idempotent schema maintenance used by the desktop for older compatible packages.
+DGW's MCP interface is a separate executable, `dgw-mcp`. It calls the same `dgw-core` Rust functions as the desktop app. You do not need the desktop window open, and the agent does not reproduce DGW's algorithms.
 
-## Build the server
+<div className="dgw-flow" role="group" aria-label="An MCP client launches dgw-mcp over standard input and output; dgw-mcp calls dgw-core to operate a saved project">
+  <div><strong>Agent / MCP client</strong><span>Requests an operation</span></div>
+  <span className="dgw-flow-arrow" aria-hidden="true">→</span>
+  <div><strong>dgw-mcp</strong><span>Structured tools over stdio</span></div>
+  <span className="dgw-flow-arrow" aria-hidden="true">→</span>
+  <div><strong>dgw-core</strong><span>Project, resources and calculations</span></div>
+</div>
 
-From the repository root:
+## Set up
+
+First create and save a `.dgw` project in the desktop app. Its registered resource paths must be accessible to the account running the MCP server.
+
+Build the server from the repository root using the Rust toolchain:
 
 ```bash
 cargo build --release -p dgw-mcp
 ./target/release/dgw-mcp --version
 ```
 
-The release executable is self-contained apart from the operating-system and project/resource permissions already required by DGW. Do not run it directly without `--help` or `--version`: in normal use it waits for an MCP client on standard input.
-
-## Connect an MCP client
-
-MCP clients differ in where they store server configuration, but the server entry has this shape:
+Add a server entry to your MCP client's configuration. The client launches the executable and communicates over standard input/output; DGW does not open an HTTP port.
 
 ```json
 {
@@ -29,9 +35,45 @@ MCP clients differ in where they store server configuration, but the server entr
 }
 ```
 
-Restart or reload the client after adding the entry. The client should report a server named `dgw-mcp` with 22 tools.
+On Windows, point to `dgw-mcp.exe`. Client configuration locations vary. Restart or reload your client after adding the entry; DGW currently exposes **22 tools**.
 
-## Available tools
+:::tip[The process appears to wait]
+Running `dgw-mcp` alone in a terminal starts the protocol server, which waits for a client. Use `--help` or `--version` for a terminal check.
+:::
+
+## Try a read-only request
+
+Ask your connected agent:
+
+> Open /data/example.dgw, summarize the assembly and sample, list the tracks, find LDLR, and show the first 20 effective variants on the active track. Do not edit anything.
+
+The agent uses `open_project`, `project_summary`, `list_tracks`, `search_genes` and `list_variants`. Results are structured project data, not screenshots.
+
+Most tools accept an optional `project_path`; otherwise they use the last opened project. Genomic coordinates are **1-based**. Variant-page offsets are **0-based**, with at most 200 records per page.
+
+## Make and evaluate changes
+
+MCP keeps **preview and apply as separate commands**, even where the desktop presents one action button.
+
+| Stage | Agent action | What changes |
+| --- | --- | --- |
+| Inspect | Read track ID, current `headStateId` and variant selection. | No allele changes. |
+| Preview | Start a Generator, Optimizer or Morph preview; poll `get_job`. | A candidate result is saved; the track's alleles stay unchanged. |
+| Apply | Inspect the completed result, then call its matching apply tool. | One reversible mutation layer is attached to the explicit track. |
+| Evaluate | Start Track Profiler using the new head; poll `get_job`. | Predictions, coverage and the Monitor profile are saved. |
+| Export | Start VCF export or request a regional FASTA. | New files are written at the requested destination. |
+
+For example:
+
+> Duplicate the source as “TTN randomized”. Select the imported TTN variants, preview Uniform randomization at 100% with seed 42, and show the counts. Apply the result to that duplicate, then profile the track and report coverage and the impact delta.
+
+A single manual edit uses `preview_allele_edit` and `apply_allele_edit`. Copy the exact source allele and copy placement from the variant result; the preview returns normalized before/after states.
+
+:::note[An old preview cannot overwrite a newer track]
+Apply checks the captured track state and bypass choices. If the track changed, read its current state and make a fresh preview. Morph checks both participating tracks. The protected source is never an edit target.
+:::
+
+## Supported operations
 
 | Tool | Purpose |
 | --- | --- |
@@ -58,32 +100,38 @@ Restart or reload the client after adding the entry. The client should report a 
 | `list_jobs` | Return bounded summaries of recent persistent background jobs and their progress. |
 | `get_job` | Return one complete persistent job, including its request and any result, by identifier. |
 
-Most calls accept an optional `project_path`. If it is omitted, the server uses the project most recently opened with `open_project`. `list_variants` returns at most 200 records per call and uses a zero-based result offset; genomic positions remain one-based VCF coordinates.
+## Selection, jobs and results
 
-For example, an agent can be asked:
+| Operation | Scope and controls |
+| --- | --- |
+| Mutation Generator | Explicit alleles, an interval, an exact gene or the whole track; amount, seed and substitution pattern. |
+| Genome Optimizer | The same selection forms; Saturation or Conservative mode, direction and maximum changes. |
+| Genome Morph | Differences between two tracks in the same project; percentage and genomic or seeded-random order. |
+| Track Profiler | Active mutations and a specified set of prediction/database devices. |
+| VCF export | Explicit track head, all chromosomes. |
+| FASTA export | Explicit track and reference interval, at most 50 kb. |
 
-> Open `/data/example.dgw`, summarize it, find LDLR, list its tracks, and show the first 20 effective variants on the active track.
+The selection run limit defaults to 100,000 for Generator and Optimizer and fails explicitly when exceeded. A no-op preview is a valid completed result; applying it changes nothing.
 
-The agent receives structured JSON derived from the project SQLite state. It does not need to infer state from screenshots or reproduce DGW's algorithms.
+Jobs run away from protocol handling, through one local compute slot in this MCP process. Poll `get_job` for progress and the result. Optional `worker_threads` is bounded to 1–256 and defaults to available processors minus one. Supported engines use the same bounded parallel coordinator as the desktop.
 
-For an allele edit, first call `list_tracks` and `list_variants`. Use an editable track's exact `id` and `headStateId`, and copy the complete source allele plus its chromosome-copy placement from the variant result. Call `preview_allele_edit`; inspect its normalized edit and `effectiveBefore`/`effectiveAfter` values; then pass the same request and returned `previewId` to `apply_allele_edit`. If the track changed between those calls, DGW rejects the apply and asks for a new preview. The read-only source track is never an edit target.
+Track Profiler saves the profile used by Track Monitor; applying an MCP mutation alone does not perform that profiling step. Reopen the project in the desktop to inspect saved tracks and results. Avoid simultaneous edits to the same track from two interfaces; state checks reject stale requests.
 
-For Mutation Generator, call `start_mutation_generator_preview` with the editable track ID, its current `headStateId`, Amount, Seed, substitution pattern, and one selection. Gene selection requires an exact symbol or stable identifier; interval coordinates are one-based and inclusive. Whole-track and interval selections remain compact in the request. `max_positions` defaults to 100,000 and fails explicitly instead of truncating a larger selection. Poll `get_job` until it reports `completed`, inspect the aggregate result, and pass that job and captured head to `apply_mutation_generator_preview`. Preview may persist a candidate layer, but it does not move the track head. Apply moves the head once and returns the active mutation count. A no-op preview has no layer and returns `applied: false`.
+<details>
+<summary>Evidence, scoring and export details</summary>
 
-Genome Morph also follows preview and apply. Give `start_genome_morph_preview` an editable source track, a different target track, both current `headStateId` values, an amount from 0 to 100, and `genomic` or `seeded_random` ordering. DGW compares effective genotypes and chooses whole differing positions; it does not copy edit-history records or alter the target. The job result reports the total differences, selected positions, generated allele changes, and the staged layer. Apply succeeds only while both tracks retain the captured heads and bypass sets. At 100%, the source becomes state-equivalent to the target across their editable VCF positions.
+Saturation uses live independent-allele consequence predictions and the fixed ClinVar Pathogenic/Likely pathogenic guard. Conservative optimizes ALT-copy distance from reference. These are the same [scoring models](scoring-methods.md) used by the desktop.
 
-Genome Optimizer follows the same preview/apply sequence. `start_genome_optimizer_preview` accepts the same four selection forms, a `minimize` or `maximize` direction, and a maximum number of changed positions. `saturation` evaluates every canonical non-reference SNV base with live Consequence Predictor and uses ClinVar Pathogenic/Likely pathogenic classifications as a fixed exclusion guard. `conservative` only adds or removes alleles already present in the immutable source genome and optimizes ALT-copy distance from the reference; that mode is not a biological burden score. `impact_weight` defaults to 1 for Saturation. Results state how many positions were considered, evaluated, excluded, improved, unchanged or tied, deferred by the change limit, and staged. The change limit is clamped to the number of resolved positions. A completed no-op remains inspectable and applies nothing.
+For profiling, omit `device_ids` to request Consequence Predictor, ClinVar and COSMIC, or provide a non-empty subset. Results capture the resource identities and report unavailable resources explicitly.
 
-The MCP process executes device work away from protocol handling and serializes its own jobs through one local compute slot. Jobs and terminal device-run provenance are saved in the project, so the desktop Jobs view can inspect them. Applying a mutation layer returns its immediate mutation count. Call `start_track_profiler` with that new `headStateId`, then poll `get_job` for the evidence-based Track Monitor result. Omit `device_ids` to run Consequence Predictor, ClinVar, and COSMIC, or provide a non-empty subset of those identifiers. `worker_threads` is bounded to 1–256 and defaults to the available processors minus one.
+VCF export is a background job; FASTA export is synchronous and bounded to 50 kb. Exports reject existing destinations and paths inside the project package. Results identify the generated files and sidecars. [Export contents](../usage/render-state.md).
 
-Track Profiler captures the track head, bypass state, Evidence-device order, and scientific input fingerprint before queueing. It rejects a result if any of those inputs change before or during analysis. Desktop and MCP use the same bounded Rayon coordinator, exact-allele evaluation functions, result merge, cache, and profile schema. The score remains the documented additive evidence signal; it is not a joint biological-effect or disease model.
+</details>
 
-Whole-track VCF export is a persistent background job because a large project may take time to stream, compress, and index. Call `start_track_vcf_export` with a track ID, its current `headStateId`, and a new absolute `.vcf.gz` destination, then poll `get_job`. The result names the VCF, CSI index, evidence snapshot, device-run ledger, and provenance JSON. `export_region_fasta` is synchronous because its interval is capped at 50 kb; it returns the FASTA path and any phase-uncertainty TSV. Both commands capture the current visible bypass set, reject a changed track, refuse destinations inside the `.dgw` package, and never overwrite an existing artifact. If generation fails, DGW removes only files newly created by that failed call.
+## Current limits
 
-## Boundary
+MCP cannot create projects, consolidate or archive tracks, or delete project data. Use the desktop for those actions. It does not expose Track Compare's views or the selection-based Consequence Predictor report.
 
-`dgw-mcp` is a transport adapter. Project opening, gene coordinate translation, track access, variant paging, job persistence, track changes, allele normalization, validation, preview projection, and edit persistence remain in `dgw-core`. The MCP crate defines tool schemas, maintains the active-project choice for the current process, runs blocking SQLite work away from the protocol executor, and formats bounded structured responses.
+The server runs with its operating-system account's file permissions. It is a local command interface, not a network service or sandbox. If you use a cloud-hosted agent, the project information returned to that client may be sent to its model provider.
 
-Tool execution errors are returned as MCP tool errors so an agent can correct a path or identifier. A failed operation does not silently return an empty result. The process can access only files allowed by the operating-system account that launched it.
-
-Preview identifiers bind a manual edit to the project, track, head state, bypass state, chromosome copy, and normalized allele change. Mutation Generator and Genome Optimizer jobs capture the track head in their persistent request, and their staged layers retain that source state. Optimizer computation also rejects a changed bypass state before staging. Genome Morph captures the heads and bypass sets of both tracks and checks them before staging and applying. Apply operations use conditional track and layer updates, so another writer cannot silently move the head after validation. Exports are external artifacts and do not add a genome state. Resulting states and edits use the same immutable DAG and source-track protection as desktop edits. MCP has no direct write access to project SQLite files.
+Opening a project performs the same compatible schema maintenance as the desktop. Changes pass through core validation and persistence; the MCP adapter does not independently edit SQLite. See [Architecture](architecture.md) and [Project format](project-format.md).

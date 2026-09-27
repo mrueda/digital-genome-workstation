@@ -63,7 +63,7 @@ Consolidation sets `baseStateId = headStateId`, so `edits_for_track` returns no 
 
 ## Device boundary
 
-The Device Browser has four user-facing functional groups. Mutation Generator belongs to Edit; Consequence Predictor, ClinVar, and COSMIC belong to Evidence; objective-driven track models such as Genome Optimizer belong to Analyze; and Variant Map belongs to Visualize. A track's Rack contains only applied instances in order, while Genome Optimizer still returns reviewable edit proposals through the host protocol. Device code is distinct from the reference/model/database resource packs it consumes.
+The Device Browser has four groups: Mutation Generator and Genome Morph belong to Edit; ClinVar and COSMIC to Evidence; Consequence Predictor and Genome Optimizer to Analyze; and Track Compare to Visualize. A track's Rack contains only its applied instances. The host validates and applies device-generated changes. Device code is distinct from the reference, model and database resources it consumes.
 
 The compatibility boundary is a versioned, structured DGW Device API. “VST-like” describes the rack interaction only; it is not an audio plug-in ABI. A device receives host-prepared genomic input and returns structured proposals or results. It never receives authority to mutate project SQLite or files directly. The host validates proposed edits, owns caching and persistence, and records accepted results.
 

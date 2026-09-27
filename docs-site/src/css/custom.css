@@ -45,4 +45,17 @@
 .button--primary { --ifm-button-background-color: #65c5d8; --ifm-button-border-color: #65c5d8; color: #141516; }
 .button--primary:hover { color: #141516; }
 .button--secondary { border-color: #596064; color: #e5e6e6; }
-.admonition research-note { border-color: #f4bd68; }
+.dgw-guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.dgw-guide-card { display: flex; flex-direction: column; gap: .5rem; padding: 1.15rem; border: 1px solid var(--ifm-color-emphasis-300); border-radius: 10px; background: var(--ifm-background-surface-color); }
+.dgw-guide-card:hover { text-decoration: none; border-color: var(--ifm-color-primary); }
+.dgw-guide-card span { color: var(--ifm-color-emphasis-700); font-size: .95rem; }
+.dgw-guide-card:focus-visible { outline: 3px solid var(--ifm-color-primary); outline-offset: 3px; }
+.theme-doc-markdown details { margin: 1rem 0; }
+.theme-doc-markdown summary { cursor: pointer; font-weight: 600; }
+.theme-doc-markdown a > img { max-width: 100%; height: auto; border: 1px solid var(--ifm-color-emphasis-300); border-radius: 8px; }
+.dgw-flow { display: flex; align-items: center; justify-content: center; gap: 1rem; padding: 1.5rem; margin: 1.5rem 0; border: 1px solid #cbd5dc; border-radius: 12px; background: #f6f8fa; color: #24333d; }
+.dgw-flow > div { flex: 1; padding: 1rem; background: #fff; border: 1px solid #97b8c3; border-radius: 8px; text-align: center; }
+.dgw-flow strong, .dgw-flow span { display: block; }
+.dgw-flow > div span { margin-top: .4rem; font-size: .9rem; color: #4b5d69; }
+.dgw-flow-arrow { color: #247f92; font-size: 1.5rem; }
+@media (max-width: 600px) { .dgw-flow { flex-direction: column; } .dgw-flow > div { width: 100%; } .dgw-flow-arrow { transform: rotate(90deg); } }

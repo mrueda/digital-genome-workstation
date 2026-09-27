@@ -2,81 +2,41 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
   docsSidebar: [
-    {type: 'doc', id: 'overview', label: 'Overview'},
-    {
-      type: 'category',
-      label: 'Use',
-      items: [
-        {type: 'doc', id: 'usage/installation', label: 'Install DGW'},
-        {type: 'doc', id: 'usage/quickstart', label: 'Quick Start'},
-        {type: 'doc', id: 'usage/input-vcf', label: 'Choose a VCF & Sample'},
-        {type: 'doc', id: 'usage/focused-workspace', label: 'Focused Track Workspace'},
-        {type: 'doc', id: 'usage/edit-and-compare', label: 'Tracks, Devices & Edits'},
-        {type: 'doc', id: 'usage/device-guide', label: 'Device Guide'},
-        {type: 'doc', id: 'usage/evaluate-alleles', label: 'Evaluate Alleles'},
-        {type: 'doc', id: 'usage/render-state', label: 'Consolidate & Export'},
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Technical Details',
-      link: {type: 'doc', id: 'technical-details/index'},
-      items: [
-        {
-          type: 'category',
-          label: 'Core Model',
-          collapsed: false,
-          items: [
-            {type: 'doc', id: 'technical-details/architecture', label: 'Architecture'},
-            {type: 'doc', id: 'technical-details/device-api', label: 'Device API & Resource Packs'},
-            {type: 'doc', id: 'technical-details/state-model', label: 'Track, State & Edit Model'},
-            {type: 'doc', id: 'technical-details/evaluation-engine', label: 'Evaluation Engine'},
-            {type: 'doc', id: 'technical-details/scoring-methods', label: 'Scoring & Evidence Methods'},
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Data Contracts',
-          items: [
-            {type: 'doc', id: 'technical-details/vcf-contract', label: 'VCF Contract'},
-            {type: 'doc', id: 'technical-details/resource-bundle', label: 'Resource Bundle'},
-            {type: 'doc', id: 'technical-details/project-format', label: 'Project Format'},
-            {type: 'doc', id: 'technical-details/mcp-server', label: 'Agent Access (MCP)'},
-          ],
-        },
-        {
-          type: 'category',
-          label: 'Development',
-          items: [
-            {type: 'doc', id: 'technical-details/developer-guide', label: 'Developer Guide'},
-            {type: 'doc', id: 'usage/test-installation', label: 'Installer Validation'},
-            {type: 'doc', id: 'technical-details/testing', label: 'Testing'},
-          ],
-        },
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Reference',
-      items: [
-        {type: 'doc', id: 'reference/faq', label: 'FAQ'},
-        {type: 'doc', id: 'reference/evidence-statuses', label: 'Evidence Statuses'},
-        {type: 'doc', id: 'reference/performance', label: 'Performance'},
-        {type: 'doc', id: 'reference/troubleshooting', label: 'Troubleshooting'},
-      ],
-    },
-    {
-      type: 'category',
-      label: 'About',
-      items: [
-        {type: 'doc', id: 'about/origin-and-development', label: 'Origin & Development'},
-        {type: 'doc', id: 'about/roadmap', label: 'Roadmap'},
-        {type: 'doc', id: 'about/citation', label: 'Citation'},
-        {type: 'doc', id: 'about/disclaimer', label: 'Disclaimer'},
-        {type: 'doc', id: 'about/license', label: 'License'},
-      ],
-    },
+    {type: 'doc', id: 'overview', label: 'Start here'},
+    {type: 'category', label: 'Get started', collapsed: false, items: [
+      'usage/installation', 'usage/quickstart', 'usage/input-vcf', 'usage/resources',
+    ]},
+    {type: 'category', label: 'Work with variants', collapsed: false, items: [
+      {type: 'doc', id: 'usage/focused-workspace', label: 'Navigate and select'},
+      {type: 'doc', id: 'usage/edit-and-compare', label: 'Edit and compare'},
+      'usage/device-guide',
+      {type: 'doc', id: 'usage/evaluate-alleles', label: 'Understand results'},
+      {type: 'doc', id: 'usage/render-state', label: 'Save and export'},
+    ]},
+    {type: 'category', label: 'Advanced use', items: ['usage/paper-examples']},
+    {type: 'category', label: 'Help', items: [
+      'reference/troubleshooting', 'reference/faq', 'reference/evidence-statuses',
+    ]},
+  ],
+  developerSidebar: [
+    {type: 'doc', id: 'technical-details/index', label: 'Developers and advanced use'},
+    'technical-details/developer-guide', 'technical-details/mcp-server',
+    {type: 'category', label: 'How DGW works', items: [
+      'technical-details/architecture', 'technical-details/state-model',
+      'technical-details/device-api', 'technical-details/evaluation-engine',
+      'technical-details/scoring-methods',
+    ]},
+    {type: 'category', label: 'Data and resources', items: [
+      'technical-details/vcf-contract', 'technical-details/project-format',
+      'technical-details/resource-bundle',
+    ]},
+    {type: 'category', label: 'Validation', items: [
+      'technical-details/testing', 'usage/test-installation', 'reference/performance',
+    ]},
+  ],
+  projectSidebar: [
+    'about/origin-and-development', 'about/roadmap', 'about/citation',
+    'about/license', 'about/disclaimer',
   ],
 };
-
 export default sidebars;

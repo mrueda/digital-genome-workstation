@@ -5,7 +5,7 @@ DGW uses **device** as a general workstation concept, not only for tools that ed
 | Device kind | Built-in example | Structured output |
 | --- | --- | --- |
 | Editing | Mutation Generator, Genome Morph, Genome Optimizer | Proposed normalized edit operations and planning details |
-| Evidence | Consequence Predictor | Predicted transcript consequences for one exact allele |
+| Analyze | Consequence Predictor | Independent transcript predictions and selection reports |
 | Evidence | ClinVar, COSMIC | Exact-match database records with explicit status |
 | Visualization | Track Compare | Read-only presentation of focused track state and available model results |
 
@@ -74,14 +74,14 @@ These are built into DGW and exposed through the same host catalog. The app vali
 
 Consequence Predictor, ClinVar, and COSMIC can be applied as ordered rack cards on the selected track. Each optional resource-backed card can run independently for the selected allele. Selection automatically requests missing active-device results and shows stable cached results first; unapplied, bypassed, or unavailable devices are excluded from the current evidence view. **Track Profiler** is host orchestration over that same allele-level API. Ordinary blocks and compound layers use the same persistent aggregate background job with batched consequence prediction and database adapters. A fingerprint of active mutations, devices, and resources permits safe reuse across unchanged duplicates; stale or missing selected-track profiles start automatically. The profiler is not yet a separately installable device or a joint-effect protocol. Mutation Generator and both Genome Optimizer modes target explicit selected VCF positions; Saturation requires active Consequence Predictor and host-evaluates three non-REF candidates per canonical SNV. Both devices are available only to editable tracks and must be applied explicitly. Randomizer is currently the Mutation Generator's only mode; its request includes amount, seed, substitution pattern, and transition probability, and its plan reports transition/transversion counts plus explicit exclusions.
 
-The Device Browser groups available devices by function: **Edit**, **Evidence**, **Analyze**, and **Visualize**. Mutation Generator and Genome Morph are Edit; Consequence Predictor, ClinVar, and COSMIC are Evidence; Genome Optimizer is Analyze; and Track Compare is Visualize. There is no separate Score group because the objective-driven operation is an analysis. A visualization reads bounded host state and existing device results but contributes no score and proposes no edits. The per-track Device Rack is different: it contains only applied device instances in order. Group membership is presentation metadata, not an implied biological pipeline, audio-style signal chain, or replacement for the lower-level protocol capability declared by a manifest.
+The Device Browser groups devices as **Edit** (Mutation Generator, Genome Morph), **Evidence** (ClinVar, COSMIC), **Analyze** (Consequence Predictor, Genome Optimizer), and **Visualize** (Track Compare). The per-track Rack contains applied instances. Categories describe their role in the interface, not a sequential biological pipeline or a replacement for the manifest's protocol capabilities. Only database Evidence devices have device-level Bypass.
 
-The file-level DGW Starter project template applies Mutation Generator, Genome Morph, all three Evidence devices, Genome Optimizer, and Track Compare in functional order; the Empty project template applies none. Neither is a Device Browser action. Applied Edit and Analyze devices remain inert until their explicit Preview/Apply or Run action, while Track Compare is read-only. Duplicating a track copies its applied device IDs and session bypass state. The workstation session stores applied chains and device controls within the existing project schema.
+DGW Starter applies Mutation Generator, Genome Morph, Consequence Predictor, ClinVar, COSMIC, Genome Optimizer and Track Compare; the Empty template applies none. Editing devices change the track only when explicitly run. Consequence Predictor automatically supplies focused-allele and Monitor predictions; its selection report is an explicit action. Duplicating a track copies its applied devices and session settings.
 
 Scoring has two independent control axes:
 
 - the selected objective explicitly includes or excludes named device outputs; and
-- the user can activate or bypass an installed device.
+- the user can bypass applied database Evidence devices; editing, analysis and visualization devices have no device-level Bypass.
 
 An included, applied, active device contributes according to its configured weight. An included device that is bypassed or not applied has effective weight `0`, but DGW retains its source data and configured weight and distinguishes **Bypassed** from **Not in rack**. An excluded device can still run and display results when applied. Unknown and newly installed devices default to unapplied and excluded from existing objectives, so installation cannot silently change a score. Unavailable and failed devices remain distinguishable from deliberate bypass. Current controls persist in the workstation session; terminal runs retain their declared execution inputs independently.
 

@@ -33,7 +33,7 @@ The allele inspector can display these fields. The current numerical model uses 
 
 ### Impact value
 
-DGW maps consequence terms to four categories. HIGH contains transcript ablation/amplification, splice acceptor/donor, stop gained/lost, start lost, and frameshift. MODERATE contains missense, in-frame insertion/deletion, and protein-altering consequences. LOW contains splice-region, incomplete-terminal-codon, start/stop-retained, and synonymous consequences. Other reported transcript terms map to MODIFIER.
+DGW explicitly maps the consequence types supported by the bundled bcftools version to four categories. HIGH contains splice acceptor/donor, stop gained/lost, start lost, and frameshift. MODERATE contains missense and in-frame altering/insertion/deletion consequences. LOW contains splice-region, start/stop-retained, and synonymous consequences. UTR, coding-sequence, feature-elongation/truncation, intergenic, intron, non-coding, and `NMD_transcript` consequences or qualifiers map to MODIFIER. A consequence term that the installed engine does not recognize is left unavailable rather than silently treated as MODIFIER.
 
 When `csq` reports no overlapping transcript feature, DGW creates an explicit `no_transcript_feature` MODIFIER record. This keeps all three candidate bases comparable without claiming that a database contained the allele. The four categories map to a number:
 
@@ -55,7 +55,7 @@ $$
 
 Here, $T(v)$ is the set of bcftools transcript consequences returned for allele $v$. This is a worst-category transcript rule. It does not select a canonical transcript and does not average across transcripts.
 
-If the consequence engine fails or returns an unrecognized impact category, the allele has no comparable score. It is not assigned zero.
+If the consequence engine fails or returns an unrecognized consequence term or impact category, the allele has no comparable score. It is not assigned zero. When one transcript record contains an unrecognized term, DGW treats the whole allele impact as unavailable instead of ignoring that transcript.
 
 ## Saturation Scan
 
@@ -127,7 +127,7 @@ $$
 \overline{\Delta I} = \frac{\Delta I_{\mathrm{track}}}{|M|}
 $$
 
-These values are shown only when the required Consequence Predictor evaluations are complete. Bypassed mutation blocks and a bypassed Consequence Predictor device do not contribute.
+These values are shown only when the required Consequence Predictor evaluations are complete. Bypassed mutation blocks do not contribute. Consequence Predictor has no device-level Bypass; removing it from the rack makes the impact readout unavailable.
 
 The optimizer score and Track Monitor use the same consequence category mapping but different scales. Genome Optimizer applies $w_I$; Track Monitor reports the unweighted source-relative change.
 

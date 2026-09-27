@@ -1,62 +1,40 @@
-# Digital Genome Workstation
+# Start here
 
-**What would change if this sample had a different allele?** DGW lets you edit genome variants, inspect predicted consequences and database evidence, and compare alternatives without changing the source VCF.
+**What would change if this sample had a different allele?** Digital Genome Workstation lets you edit variants, inspect predictions and database records, and compare alternatives while keeping the source VCF intact.
 
-Its organization comes from the mature digital audio workstation (DAW) ecosystem: keep a source, duplicate tracks, apply reversible edits through devices, and compare the results. You do not need to know music software to use it.
+import Link from '@docusaurus/Link';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 
-[Install DGW](usage/installation.md) · [Try an example](usage/quickstart.md) · [DGW and music workstations](reference/faq.md)
+<div className="dgw-guide-grid">
+  <Link className="dgw-guide-card" to="/docs/usage/installation"><strong>Install DGW</strong><span>Linux, macOS or Windows, then genome resources.</span></Link>
+  <Link className="dgw-guide-card" to="/docs/usage/quickstart"><strong>Try an example</strong><span>Make one edit and see what changes.</span></Link>
+  <Link className="dgw-guide-card" to="/docs/usage/device-guide"><strong>Explore the devices</strong><span>Generate mutations, optimize, morph and compare.</span></Link>
+</div>
 
-![DGW interface showing genome tracks above the Device Rack, with navigation on the left and evidence and monitoring on the right](/img/dgw-workspace.png)
+<figure>
+  <a href={useBaseUrl('/img/devices/workspace.png')}><img src={useBaseUrl('/img/devices/workspace.png')} alt="DGW workspace with source and candidate tracks, devices, Track Monitor and the Evidence panel" /></a>
+  <figcaption>DGW v0.1 with synthetic example data. Click the image for full resolution.</figcaption>
+</figure>
 
-*Current interface, captured with controlled demonstration data. These screenshots illustrate the controls, not a validated biological result.*
+## The workflow
 
-## One source, several alternatives
+![Import a sample, create alternative tracks, edit, evaluate, compare and save or export](/img/dgw-workstation-workflow.svg)
 
-DGW is an **editing workstation, not a new variant-effect predictor or prediction atlas**. Resources such as AlphaGenome Atlas provide predictions; DGW keeps editable scenarios, the operations that produced them and their evaluated results. See [how these roles differ](reference/faq.md#how-does-dgw-differ-from-alphagenome-atlas). AlphaGenome integration is not currently implemented.
+The source track keeps the imported calls. DGW also creates an editable **Working track**. Duplicate tracks whenever you want another alternative; each track contains both chromosome copies of the same sample.
 
-The imported sample becomes a read-only **source track**. Duplicate it to make an editable scenario. Edits belong to that track; the original VCF stays untouched.
+The layout is inspired by music production software: tracks hold alternatives, devices provide tools, and edits remain reversible. You do not need musical experience. [See the DAW parallels](reference/faq.md#why-is-dgw-inspired-by-digital-audio-workstations).
 
-![Workflow from sample import through duplication, editing, evaluation and comparison to saving or export](/img/dgw-workstation-workflow.svg)
+## What would you like to do?
 
-A track contains both chromosome copies. **A/B does not mean maternal/paternal**, and unphased alleles remain copy-unknown. Several edits can coexist on a track without implying that DGW predicts their combined biological effect.
-
-## Find your way around
-
-| Area | Use it to… |
+| Task | Start with |
 | --- | --- |
-| Source Variants, on the left | Find an input allele or navigate between chromosomes. |
-| Genome tracks, in the centre | Duplicate a scenario, select positions and see where edits lie. |
-| Allele editor, below the tracks | Stage a base change in Allele Roll or inspect reconstructed sequence. |
-| Device Rack, below the tracks | Configure tools on the selected track. **Show devices** returns here from the editor. |
-| Evidence Inspector | Read predictions and exact database matches for the selected allele. |
-| Track Monitor | Compare aggregate independent-allele signals with the source. |
-| Genome Transport | Step through alleles for review. Play navigates; it does not mutate. |
+| Change one allele manually | [Edit and compare](usage/edit-and-compare.md) |
+| Work on a gene or thousands of variants | [Navigate and select](usage/focused-workspace.md) |
+| Generate or search for alternative ALTs | [Device guide](usage/device-guide.md) |
+| Understand a prediction or Monitor score | [Understand results](usage/evaluate-alleles.md) |
+| Keep the experiment or use its output elsewhere | [Save and export](usage/render-state.md) |
+| Automate DGW or modify its code | [Developers and advanced use](technical-details/index.md) |
 
-See [Focused Track Workspace](usage/focused-workspace.md) for selection, zoom and navigation.
-
-## Devices have different jobs
-
-| Role | Built-in examples | What they do |
-| --- | --- | --- |
-| Edit | Mutation Generator | Propose reversible allele changes. |
-| Evidence | ClinVar, COSMIC | Retrieve reported variant records and submitted clinical interpretations. |
-| Analyze | Consequence Predictor, Genome Optimizer | Predict transcript effects or propose changes under a named, bounded scoring model. |
-| Visualize | Track Compare | Display available results without editing or scoring. |
-
-Use **Create → Add Device** to browse devices. The rack shows those applied to the selected track, not every available tool. Devices are built into DGW today; third-party plug-in installation is not yet supported. Grouping by role does not imply an audio-style signal chain.
-
-The experimental Optimizer offers **Conservative** mode (REF restoration or original-source ALT reintroduction) and **Saturation scan** (comparison of all three non-REF bases at selected imported SNV positions). Read [the optimizer rules](usage/edit-and-compare.md#optimizer-behavior) before interpreting its output.
-
-:::caution[A lower score is not a healthier genome]
-Scores sum independently evaluated allele-copy contributions. They do not model interactions, combined transcript/protein effects, penetrance or disease probability. REF is a reference sequence, not a benign classification. Missing database evidence is not evidence of safety.
+:::note[Input and interpretation]
+DGW accepts one diploid sample from a VCF, with SNVs and short indels. Supplied resources support GRCh37 and GRCh38. It evaluates alleles independently: a lower score does not establish restored function or a healthier genome. [Scope and limitations](about/disclaimer.md).
 :::
-
-## What you can load and keep
-
-- **Input:** one sample from a VCF, including multiallelic calls and phased or unphased genotypes. DGW keeps strict `FILTER=PASS` records and normalizes a project copy. Imported INFO annotations are ignored.
-- **Resources:** supplied profiles for GRCh37 and GRCh38, installed separately from the app. Current small-variant support does not include BAM/CRAM, read pileups or general structural-variant editing.
-- **Output:** reopenable `.dgw` projects, single-sample VCF and focused-region FASTA. Consolidation is optional and retains recorded ancestry.
-
-The model is not inherently human-specific, but the supplied resources are human. Large projects use paged navigation, density views and background jobs rather than drawing every allele at once.
-
-Continue with [Quick Start](usage/quickstart.md), [input requirements](usage/input-vcf.md), or [scoring and evidence methods](technical-details/scoring-methods.md). DGW is research software, not a diagnostic tool.

@@ -1,72 +1,62 @@
-# Evaluate Alleles
+# Understand results
 
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
-Each prediction or database lookup targets an exact normalized allele. Consequence Predictor can evaluate a selection in one background run, but effects remain independent per allele. DGW does not infer evidence from a nearby position or a different representation of the same unnormalized indel.
+DGW offers four ways to inspect results. Choose by the question you want to answer.
 
-## Which result answers your question?
-
-| Result | Question it answers | What it does not establish |
+| Where | Scope | When to use it |
 | --- | --- | --- |
-| Consequence Predictor | What transcript effect is predicted for this exact allele? | Its clinical significance or the joint effect of nearby edits. |
-| ClinVar | Does this exact allele have a record in the configured snapshot? | That an absent record means benign. |
-| COSMIC, optional | Is this exact allele in the supplied local snapshot? | Disease probability for this sample. |
-| Track Monitor | How do the track's independent-allele signals compare with its source? | A combined biological effect or whole-genome risk. |
+| **Evidence panel** | One focused allele | Read transcript predictions and exact ClinVar/COSMIC records. |
+| **Consequence Predictor → Selection report** | Current ALTs at selected loci, including unchanged loci | Browse and filter transcript effects. Choose **Create report**. |
+| **Track Compare → Consequence changes** | DNA-different loci within the selection | Compare source/current transcript predictions. Choose **Compare consequences**. |
+| **Track Monitor** | Active mutations on the selected track | Read the aggregate impact change and evaluation coverage. |
 
-:::tip[Start with one allele]
-Click a variant mark or edit block, then read the Evidence Inspector. Use the Track Monitor for the aggregate view; changing which record is displayed in the Inspector does not change the track score.
-:::
+The Evidence panel and Monitor use the applied Consequence Predictor automatically. Creating a selection report is only needed when you want its table.
 
-## Run the applied evidence devices
-
-In the Device Browser, Consequence Predictor belongs to **Analyze**: it computes transcript effects using bcftools csq. ClinVar and COSMIC belong to **Evidence**: they retrieve submitted interpretations and reported variant records. Only those database devices have Bypass. DGW Starter applies all three. Their code is separate from the models and database snapshots in the resource pack.
-
-## Inspect a selection report
-
-Applied Consequence Predictor already supplies predictions for the focused allele and Track Monitor. A report is optional: select positions in Track view, open **Selection report** in Consequence Predictor, then choose **Create report** for the full transcript table. The same selection controls work here and in Track Compare, including all chromosomes. **Change selection** returns to Track view.
-
-The predictor evaluates current ALTs at every selected locus, including unchanged variants on the source track. It does not require edits or compare against Source. A selected multiallelic locus includes all its current ALTs; a locus restored to REF is listed as having no current ALT, not as benign.
-
-Results are saved by a background job and displayed in pages of at most 200 loci. Position, REF/ALT, gene, consequences and impact classes appear in the table; **Transcripts** opens the detailed records inline. A single-locus result opens its details automatically. Multiple impact classes refer to different transcript/allele records, not a combined effect. The report is marked outdated if track or resource inputs change. Cancel is checked between stages, not inside a running bcftools process.
-
-With DGW Starter, the selected track's Rack initially shows the seven-device workflow, including Track Compare. A missing optional resource leaves its Evidence card unavailable; the other devices and genome editing continue to work. Selecting an allele automatically runs the applied prediction and non-bypassed database devices after a short debounce. Compatible cached results appear first, and DGW requests missing results. **Refresh** remains available. Bypassing a database Evidence card excludes its result for that track without changing any allele or edit block. Rack and bypass choices persist in the `.dgw` workstation session. See the illustrated [Device Guide](device-guide.md).
-
-## Consequence layer
-
-Use the **Consequence** and **Impact** chips above the prediction table separately or together. You can select several labels in each group: any selected consequence and any selected impact must match the same transcript record. **All** removes that group's restriction; **Clear filters** resets both groups. Filters search the complete saved report before pagination; other records at a matching locus remain available in its details. Filtering does not rerun bcftools or change the track.
+## Read the Monitor
 
 <figure>
-  <a href={useBaseUrl('/img/devices/evidence.png')}><img src={useBaseUrl('/img/devices/evidence.png')} alt="Evidence Inspector with transcript predictions for one exact allele" width="360" loading="lazy" /></a>
-  <figcaption>Native DGW v0.1, light mode, synthetic example with local calculations. This is an interface demonstration, not a biological validation result.</figcaption>
+  <a href={useBaseUrl('/img/devices/monitor.png')}><img src={useBaseUrl('/img/devices/monitor.png')} alt="Track Monitor showing completed mutation coverage, mean impact delta and total delta" width="360" loading="lazy" /></a>
+  <figcaption>Check completion and coverage before interpreting the score.</figcaption>
 </figure>
 
-DGW sends each request as a VCF batch to the registered `bcftools csq --local-csq` engine. It reports effect, impact, gene, transcript, strand, amino-acid change, DNA change, bcftools version, and Ensembl annotation release. A no-feature result is shown explicitly rather than treated as missing database evidence.
+| Readout | Meaning |
+| --- | --- |
+| **Mutations evaluated** | How many active mutation contributions have results. This need not equal the number of distinct changed loci. |
+| **Total Δ** | Sum of source-relative predicted-impact changes for evaluated mutations. |
+| **Mean Δ per mutation** | Total divided by the number of evaluated mutations. |
+| **Lower / Unchanged / Higher** | Direction under the coarse consequence-impact categories. |
+| **Device coverage** | Availability of predictions and database lookups for the evaluated changes. |
 
-When several records are returned, use **Transcript consequences** in the Evidence panel to inspect each transcript and its raw record. Other Evidence cards offer **Matched records**. Switching records changes only the displayed detail, not the allele or its score; the first record is not necessarily the most severe.
+**DNA can change while the score stays at zero.** For example, a missense-to-missense substitution can retain the same impact category. Use Track Compare for the exact DNA and transcript differences.
 
-## Evidence layers
+ClinVar and COSMIC matches are reported separately; they are not added to the Monitor's impact score. Bypassing a database device removes its evidence contribution, not DNA. Consequence Predictor has no Bypass control.
 
-- **ClinVar** returns exact VCF records with significance, review status, conditions, identifiers, and oncogenicity fields when supplied by the configured release.
-- **COSMIC** returns exact records from the user’s licensed local snapshot.
+## Inspect the evidence
 
-Each card reports one of [five explicit statuses](../reference/evidence-statuses.md). No exact ClinVar or COSMIC match is an absence of matching database evidence—not a benign classification.
+<figure>
+  <a href={useBaseUrl('/img/devices/evidence.png')}><img src={useBaseUrl('/img/devices/evidence.png')} alt="Evidence panel with labelled transcript consequences, impact, gene and resource details" width="420" loading="lazy" /></a>
+  <figcaption>Predictions and database records are shown separately for the exact REF/ALT.</figcaption>
+</figure>
 
-## Provenance and cache
+| Result | How to read it |
+| --- | --- |
+| Transcript consequence | Computed by bcftools csq using the project's Ensembl model. Different transcripts can have different effects. |
+| ClinVar match | Submitted interpretations for the exact allele in the configured release. Check review status and conditions. |
+| COSMIC match | A record in your optional local COSMIC snapshot. |
+| No exact match | The database was queried successfully but has no matching allele. |
+| Unavailable / error | The resource could not be used. This is not a negative biological result. |
 
-Results are cached per device by normalized variant key, device version, and device-resource fingerprint. Found and exact no-match results are durable; tool or resource errors are not cached. Imported VCF annotations are neither displayed nor used. New results have their own timestamp and recorded resource versions.
+Use the record selector to inspect other transcripts or matched records. **Resource details** shows provenance; **Raw matched record** retains the original fields. Changing the displayed record does not change DNA or the score. [All status meanings](../reference/evidence-statuses.md).
 
-:::caution Per-variant interpretation
-Consequence Predictor results are independent per allele. DGW v0.1 does not calculate joint transcript/protein effects for nearby edits on the same genome copy. A device may place several edit blocks on one track, but their evidence cards remain separate. Track Profiler can submit all active mutation blocks to the applied Evidence devices in one coordinated run and aggregate their coverage and source-relative signals; it does not change the scientific scope of the underlying allele requests.
+## Filter predictions
 
-For the exact fields, transcript rule, numerical mapping, and formulas, see [Scoring and Evidence Methods](../technical-details/scoring-methods.md).
+In a Consequence Predictor report, select one or more **Consequence** and **Impact** chips. Filters apply across the saved report, before pagination. Open **Transcripts** for the matching locus. Track Compare has separate filters for different predictions, same predictions, missing evidence and REF restorations.
+
+Reports can become outdated after edits or selection changes; rerun the requested report. Compatible exact-allele results are cached and reused. Imported VCF INFO annotations are ignored.
+
+:::caution[What a score can tell you]
+Scores summarize independently predicted effects. A lower score does not establish restored function, and neither REF nor missing database evidence establishes safety. Variant interactions and disease probability are not modeled.
 :::
 
-## Optimizer scores are not live evidence
-
-The experimental Genome Optimizer has two bounded paths. Conservative mode considers only REF and the exact source ALT at explicitly selected loci. Its **Distance from reference (ALT copies)** objective counts one model unit per selected non-reference allele copy and does not use annotations or Evidence devices. Saturation mode runs live Consequence Predictor for all three non-REF SNV candidates at each selected position. A fixed ClinVar guard excludes exact Pathogenic/Likely pathogenic candidates where that guard applies; a missing database match stays unknown. COSMIC provides context and never reduces the score through absence.
-
-REF is the registered reference allele, not a benign or healthy classification. Likewise, Minimize and Maximize mean lower or higher values of the displayed proxy score only.
-
-The displayed aggregate is a sum of independent allele-copy contributions. It is not a new ClinVar classification, clinical conclusion, or calculation of the combined biological effect of all edits. Every proposed edit remains selectable for individual review, while Track Profiler can coordinate the independent live-evidence evaluations for the complete active edit set.
-
-Generated edit operations persist. Current control settings and displayed results resume from the workstation session. Background optimizer jobs retain their structured request and aggregate result, and terminal device runs have separate immutable records of declared inputs, resource identity, and results. Bulk candidate rows omitted during computation are not reconstructed by restoring a panel.
+For calculations, candidate exclusions and reproducibility details, see [Scoring and evidence methods](../technical-details/scoring-methods.md). For optimizer modes, see [Edit and compare](edit-and-compare.md#optimizer-behavior).

@@ -1,60 +1,63 @@
 # Troubleshooting
 
-## Export reports that the destination exists
+## An example will not open
 
-Choose a new filename outside the `.dgw` project directory. Desktop and MCP exports refuse to replace an existing VCF, FASTA, or associated sidecar. Export finishes before reporting success; do not read its output while the job is still running. A process crash can leave partial files, so use another filename when retrying an interrupted export.
+Install resources for that example's assembly through **Settings → Resources**. An app installation alone does not include genome data. [Resource setup](../usage/resources.md).
 
-## Morph asks for another preview
+## A prediction or database is unavailable
 
-Morph captures both participating track states, including bypass choices. If either changes, generate a fresh preview before applying. Pending previews created by older versions may also need regeneration; previously applied edits remain available.
+Open **Help → About DGW → Tools and resources** to see the paths used by this project. Check that the resource files and their indexes are still present.
 
-## Tauri cannot find GTK or WebKitGTK
-
-On Ubuntu/Debian:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev
-```
-
-Then run `cargo check -p dgw-desktop` again.
-
-## The bundle validator reports a missing path
-
-Expand **Resource bundle** on the onboarding screen and update the JSON. Paths are local and machine-specific. The supplied development profile expects `/media/mrueda/2TBS`. The reference and version-matched VCF tools are required for a project. An assembly-matched consequence GFF3 is required only for Consequence Predictor and Saturation. A missing optional consequence or database resource should leave only the dependent device unavailable; remove or repair its configuration rather than inventing a placeholder file.
-
-For an open project, use **Help → About DGW → Tools and resources**. DGW checks that registered files and indexes still exist and runs the configured bcftools executable to compare its reported version with the project profile. **Ready** means the registered paths passed this immediate check; it does not independently validate the scientific content of a third-party database.
-
-## The interface becomes blank
-
-A render failure should now open DGW's recovery screen instead of leaving a blank window. Copy the diagnostic report, then reload the application. If the same interface failure happens immediately, use **Reset interface settings and reload**. This removes only computer-level display preferences; it does not delete the `.dgw` package or its genome edits. The last interface-only state change may not have reached the project's session record before the failure.
-
-## What does “U · chromosome copy unknown” mean?
-
-The VCF uses an unphased heterozygous genotype such as `0/1`. DGW accepts and preserves the allele but does not place it on chromosome copy A or B inside the genome track. It is evaluated individually and remains unphased when rendered.
+A missing optional database does not prevent editing. COSMIC must be [added separately](../usage/resources.md#add-cosmic). Existing projects retain their original resource profile; installing a different profile does not update them.
 
 ## Import normalization fails
 
-DGW normally left-aligns and minimizes the selected-sample project copy automatically. A failure here usually means the VCF build, contig names, or REF alleles do not match the configured reference, or the configured `bcftools` path cannot run. Check those resources; reannotation is not required. The original VCF is never changed.
+Check the VCF's assembly and reference alleles against the selected resource profile. DGW normalizes automatically but stops on a true REF mismatch. The source file is unchanged. [Input requirements](../usage/input-vcf.md).
 
 ## Import finds no usable alleles
 
-DGW v0.1 imports only strict `FILTER=PASS` records carried as non-reference genotypes by the selected sample. Records marked with a failed filter or `FILTER=.` are counted but excluded. Apply an appropriate, documented calling/QC filter upstream rather than relabelling unfiltered records as PASS merely to make them importable.
+Only strict `FILTER=PASS` records carried as non-reference calls by the selected sample enter the project. `FILTER=.` is excluded. Check the caller's filtering procedure; do not relabel unfiltered records as PASS simply to import them.
 
-## Reference rows are empty
+Symbolic/CNV alleles such as `CN0` or `<DEL>`, MNVs, gVCF blocks and larger indels are unsupported. Supported ALTs in mixed multiallelic rows are still imported.
 
-Confirm that the FASTA is BGZF-compressed and that both `.fai` and `.gzi` belong to the exact file. Contig names must match the VCF.
+## I selected everything, but only see a few variants
 
-## Consequence Predictor fails
+**Select all variants · all chromosomes** includes variants outside the visible region. The count shows the device selection; the tracks show the current viewport. Use **Select visible** or **Select alleles in gene** for a smaller scope.
 
-Confirm that the configured bcftools executable includes `csq`, the reference FASTA indexes belong to the exact FASTA, and the Ensembl GFF3 matches the project assembly. GRCh38 model loading can take several seconds and about 800 MB in the current development environment. Failures are not cached.
+## The DNA changed, but the Monitor says zero
 
-A `.dgw` project pins the resource profile used when it was created. A development project created before the Consequence Predictor migration has no Ensembl consequence descriptor and therefore shows this device as unavailable; opening the package does not silently rewrite its scientific resource identity. Reimport the source VCF with the updated assembly profile for now. An explicit resource-rebinding workflow is planned for projects that must retain their existing edits.
+Different ALTs can have the same coarse consequence-impact value. Check that profiling is complete, then use **Track Compare → DNA changes** and **Consequence changes** to see the exact differences. [Understand results](../usage/evaluate-alleles.md).
 
-## An index is older than its database
+## Optimizer makes no changes
 
-DGW warns but tests the index when queried. Rebuild it before relying on the bundle if data was replaced after indexing.
+Check the selected count, eligible/evaluated positions and exclusions. Saturation keeps the current ALT when alternatives tie or do not improve the chosen score. Missing predictions or the ClinVar guard can exclude candidates. Zero changes can be a valid completed run.
 
-## The VCF contains `CN0`, `<DEL>`, or another structural allele
+## Export says the destination exists
 
-DGW v0.1 does not edit copy-number or structural variants. During inspection it counts wholly unsupported records separately. During project creation it decomposes multiallelic rows, imports supported sequence-resolved SNVs and 1–49 bp indels, and reports skipped ALT alleles with examples. The selected sample's GT determines which exact ALTs enter the project.
+Choose a new filename outside the `.dgw` package. Exports do not overwrite existing files or sidecars. Wait for completion before reading an export; use another destination after an interrupted run.
+
+## The interface becomes blank
+
+Use the recovery screen's diagnostic report and reload the app. If the failure recurs, choose **Reset interface settings and reload**. This resets computer-level display preferences without deleting project edits. The latest interface-only change might not have been saved.
+
+## Installation or launch failed
+
+Check the instructions for [your operating system](../usage/installation.md). Report the DGW version, OS, processor architecture and failing step with the message shown.
+
+<details>
+<summary>Linux launch diagnostics and older test installers</summary>
+
+Try the applications-menu launcher. Startup output is normally in `~/.local/share/org.mrueda.dgw/setup-launch.log`. VM graphics warnings alone do not establish the cause of a startup failure.
+
+For reinstalling, use the installer's **Replace existing installation and shortcut** option. The [installer validation guide](../usage/test-installation.md) includes older-build workarounds.
+
+</details>
+
+<details>
+<summary>Custom resources or builds from source</summary>
+
+Check the [resource bundle contract](../technical-details/resource-bundle.md): FASTA indexes must belong to the exact file, and consequence GFF3 must match the assembly. An older-than-data database index should be rebuilt if the data changed.
+
+For GTK/WebKitGTK compilation errors, follow the [developer prerequisites](../technical-details/developer-guide.md). System development packages are not ordinary app-installation steps.
+
+</details>

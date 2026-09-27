@@ -33,10 +33,22 @@ result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 # Mirrors evaluation.rs consequence_term_impact; every run total is checked below.
 weights = {}
 for terms, weight in [
-    ('transcript_ablation splice_acceptor splice_donor stop_gained frameshift stop_lost start_lost transcript_amplification', 1.),
-    ('inframe_insertion inframe_deletion missense protein_altering', .67),
-    ('splice_region incomplete_terminal_codon start_retained stop_retained synonymous', .33)]:
-    weights.update(dict.fromkeys(terms.split(), weight))
+    ('splice_acceptor splice_donor stop_gained frameshift stop_lost start_lost', 1.),
+    ('inframe_altering inframe_insertion inframe_deletion missense', .67),
+    ('splice_region start_retained stop_retained synonymous', .33),
+    ('3_prime_utr 5_prime_utr coding_sequence feature_elongation feature_truncation intergenic intron NMD_transcript non_coding', .1)]:
+    weights.update(dict.fromkeys(terms.lower().split(), weight))
+
+def consequence_weight(term):
+    # An empty BCSQ is DGW's explicit no-transcript-feature state. A non-empty
+    # term that this pinned bcftools mapping does not recognize is unavailable.
+    if not term:
+        return .1
+    normalized = term.lower().lstrip('*')
+    if normalized not in weights:
+        raise ValueError(f'unrecognized bcftools consequence term: {term}')
+    return weights[normalized]
+
 scores, annotations = {}, {}
 for line in (out/'annotated.vcf').read_text().splitlines():
     if line.startswith('#'):
@@ -47,7 +59,7 @@ for line in (out/'annotated.vcf').read_text().splitlines():
     terms = [t for entry in raw.split(',') for t in entry.split('|')[0].split('&')]
     key = (int(f[1]), f[4])
     assert key not in scores
-    scores[key] = max(weights.get(t.lower(), .1) for t in terms)
+    scores[key] = max(consequence_weight(t) for t in terms)
     annotations[key] = raw
 assert len(scores) == 156
 counts = {(p,a,b):0 for p in positions for a,b in pairs}

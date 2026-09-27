@@ -1,6 +1,8 @@
 # Device guide
 
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 These screenshots show **DGW v0.1**, in light mode, using the synthetic GRCh37 example. They are native application captures with real local calculations, not mock results. Click an image to inspect it at full resolution.
 
@@ -50,11 +52,14 @@ Select positions, choose the mode and direction, review the scoring weights and 
 
 <a href={useBaseUrl('/img/devices/optimizer.png')}><img src={useBaseUrl('/img/devices/optimizer.png')} alt="Genome Optimizer configured for saturation minimization with Impact weight 70 and at most five changed positions" loading="lazy" /></a>
 
-This image shows settings, not an optimization result. Minimize and Maximize refer to the displayed proxy score, not health or disease. Consolidation records the edited state; it is not required to inspect active edits or evaluate them.
+This image shows settings, not an optimization result. Minimize and Maximize refer to the displayed proxy score, not health or disease. Consolidation changes the visual baseline; it is not required to inspect or evaluate active edits.
 
 ## Track Compare
 
 All three views use the Track-view selection and compare **Source → Current**. They examine the applied track state, including compact bulk layers; they do not require consolidation.
+
+<Tabs>
+<TabItem value="dna" label="DNA changes" default>
 
 ### DNA changes
 
@@ -62,11 +67,17 @@ Read the actual source and current alleles. **Differences only** hides matching 
 
 <a href={useBaseUrl('/img/devices/compare.png')}><img src={useBaseUrl('/img/devices/compare.png')} alt="Track Compare DNA changes showing the three remaining differing loci after a 50 percent morph" loading="lazy" /></a>
 
+</TabItem>
+<TabItem value="genome" label="Genome view">
+
 ### Genome view
 
 Bars summarize the percentage of selected loci that differ in each interval, on a fixed 0–100% scale. Colour distinguishes ALT sequence, ALT-copy count and copy/phase changes. Grey marks matching genotypes; empty intervals have no selected loci. Click a bin or drag across a chromosome strip to zoom. At close range, individual alleles replace the summary.
 
 <a href={useBaseUrl('/img/devices/genome.png')}><img src={useBaseUrl('/img/devices/genome.png')} alt="Genome view with three changed selected loci on chromosome 7 and no selected loci on chromosome 17" loading="lazy" /></a>
+
+</TabItem>
+<TabItem value="consequence" label="Consequence changes">
 
 ### Consequence changes
 
@@ -75,6 +86,9 @@ Choose **Compare consequences** to evaluate source/current predictions at change
 <a href={useBaseUrl('/img/devices/compare-consequences.png')}><img src={useBaseUrl('/img/devices/compare-consequences.png')} alt="Consequence comparison: two loci with different predictions, one with matching predictions, no missing evidence or REF restorations" loading="lazy" /></a>
 
 Matching predictions do not prove equal biological function. These are locus-level comparisons, not a second Track Monitor score.
+
+</TabItem>
+</Tabs>
 
 ## Track Monitor
 
@@ -96,6 +110,9 @@ Allele Roll is an editor rather than a Rack device. Open a candidate-track varia
 
 <a href={useBaseUrl('/img/devices/allele-roll.png')}><img src={useBaseUrl('/img/devices/allele-roll.png')} alt="FASTA-aligned Allele Roll with four base rows, variant-position markers and chromosome-copy legend" loading="lazy" /></a>
 
-### Reproduce these views
+<details>
+<summary>Reproduce these screenshots</summary>
 
 Open a fresh GRCh37 Allele Editing example. On **Working track**, select the seven visible chromosome-7 loci, generate Uniform mutations with Amount 100% and Seed 42, then morph 50% toward **Source genome**, using Genomic order. Select the seven visible loci again for the reports. The displayed outcomes depend on the resource versions; this screenshot set uses Ensembl 87 and ClinVar 20250312. It is an interface demonstration, separate from the manuscript's TTN/BRCA2 pilot.
+
+</details>

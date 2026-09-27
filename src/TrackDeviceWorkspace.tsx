@@ -1694,7 +1694,10 @@ function TrackMeterCard({
         <span><i className="is-unchanged" />Unchanged <b>{distribution.unchanged.toLocaleString()}</b></span>
         <span><i className="is-higher" />Higher <b>{distribution.higher.toLocaleString()}</b></span>
       </div>
-      {distribution.unchanged === meter.activeMutations && <p className="muted">The DNA changed, but every evaluated allele remained in the same coarse consequence-impact class as its source allele.</p>}
+      {distribution.unchanged === meter.activeMutations && <div className="dgw-impact-distribution-note" role="note">
+        <span aria-hidden="true">≈</span>
+        <div><b>DNA changed</b><small>All evaluated alleles stayed in the same impact class.</small></div>
+      </div>}
     </section>}
     <div className="dgw-meter-devices">
       {meter.deviceCoverage.map((device) => <div className={device.bypassed ? "is-bypassed" : ""} key={device.id} title={device.bypassed ? "Device bypassed; retained results do not contribute" : (device.unavailable ?? 0) > 0 ? `${(device.unavailable ?? 0).toLocaleString()} mutations could not be evaluated because the resource is unavailable` : (device.errors ?? 0) > 0 ? `${(device.errors ?? 0).toLocaleString()} mutations returned an error` : device.id === CONSEQUENCE_DEVICE_ID ? `${(device.noTranscriptFeature ?? 0).toLocaleString()} current alleles had no overlapping transcript feature` : `${device.exactMatches} exact-match results`}>
