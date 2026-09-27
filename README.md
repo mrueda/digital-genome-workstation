@@ -5,6 +5,10 @@
 <p align="center">Interactive, non-destructive genome variant editing.</p>
 
 <p align="center">
+  <a href="https://github.com/mrueda/digital-genome-workstation/actions/workflows/ci.yml"><img src="https://github.com/mrueda/digital-genome-workstation/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+</p>
+
+<p align="center">
   <a href="https://mrueda.github.io/digital-genome-workstation/">📚 Documentation</a> ·
   <a href="https://github.com/mrueda/digital-genome-workstation/releases">📦 Downloads</a> ·
   <a href="https://mrueda.github.io/digital-genome-workstation/docs/usage/quickstart">🧬 Try an example</a> ·
