@@ -27,7 +27,7 @@ Configure genome resources through the app. Debug builds can discover `config/lo
 
 ## Build installers
 
-Use the manual **Build test installers** workflow, or **Build macOS test installer** for a selected Mac architecture. Artifacts are private while the repository is private and are not automatically published to a release. For native local builds:
+Use the manual **Build installers** workflow, or **Build macOS test installer** for a selected Mac architecture. Artifacts are private while the repository is private. The combined workflow only builds installers and checksums; it does not publish releases or prereleases. For native local builds:
 
 ```bash
 # Linux
