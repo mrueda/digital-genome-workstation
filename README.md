@@ -33,6 +33,6 @@ DGW is research software, not a diagnostic tool. Scores evaluate alleles indepen
 
 ## 👤 Author and license
 
-Created and maintained by [Manuel Rueda](https://github.com/mrueda) as an independent project. See [CITATION.cff](CITATION.cff) and [contributing](CONTRIBUTING.md).
+Created and maintained by [Manuel Rueda](https://github.com/mrueda) as an independent project, developed in his personal time. See [CITATION.cff](CITATION.cff) and [contributing](CONTRIBUTING.md).
 
 Copyright © 2026 Manuel Rueda. Licensed under [Apache 2.0](LICENSE). External tools and biological resources retain their own licenses.
