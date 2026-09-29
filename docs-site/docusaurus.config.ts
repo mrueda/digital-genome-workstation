@@ -82,6 +82,11 @@ const config: Config = {
           position: 'left',
         },
         {
+          href: 'https://www.youtube.com/playlist?list=PLERpT5T_KiqY',
+          label: 'Videos',
+          position: 'right',
+        },
+        {
           href: 'https://github.com/mrueda/digital-genome-workstation',
           label: 'GitHub',
           position: 'right',

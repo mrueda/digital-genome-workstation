@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://mrueda.github.io/digital-genome-workstation/">📚 Documentation</a> ·
   <a href="https://github.com/mrueda/digital-genome-workstation/releases">📦 Downloads</a> ·
+  <a href="https://www.youtube.com/playlist?list=PLERpT5T_KiqY">🎬 Videos</a> ·
   <a href="https://mrueda.github.io/digital-genome-workstation/docs/usage/quickstart">🧬 Try an example</a> ·
   <a href="LICENSE">⚖️ Apache-2.0</a>
 </p>

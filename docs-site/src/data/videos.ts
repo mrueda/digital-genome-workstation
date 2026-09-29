@@ -2,7 +2,7 @@
 export const videoLibrary = {
   channelUrl: '',
   playlistUrl: 'https://www.youtube.com/playlist?list=PLERpT5T_KiqY',
-  playlistPrivate: true,
+  playlistPrivate: false,
   videos: [
     {id: '00', title: 'Meet DGW', description: 'A tour of the workspace, tracks and devices.', url: ''},
     {id: '01', title: 'Edit and compare', description: 'Change an allele and inspect the result.', url: ''},
