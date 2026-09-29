@@ -1,8 +1,8 @@
-// Add public YouTube URLs here when the channel and tutorials are published.
-// Unpublished entries stay hidden. Links do not load a YouTube player or tracker.
+// Entries without URLs stay hidden. Links do not load a YouTube player or tracker.
 export const videoLibrary = {
   channelUrl: '',
-  playlistUrl: '',
+  playlistUrl: 'https://www.youtube.com/playlist?list=PLERpT5T_KiqY',
+  playlistPrivate: true,
   videos: [
     {id: '00', title: 'Meet DGW', description: 'A tour of the workspace, tracks and devices.', url: ''},
     {id: '01', title: 'Edit and compare', description: 'Change an allele and inspect the result.', url: ''},

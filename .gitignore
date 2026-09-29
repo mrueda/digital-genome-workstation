@@ -6,6 +6,8 @@ target/
 playwright-report/
 coverage/
 .paper-work/
+# Local manuscript and supplementary PDFs.
+/pdf/
 test-results/
 __pycache__/
 *.py[cod]

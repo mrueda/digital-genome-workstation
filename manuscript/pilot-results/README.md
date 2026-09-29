@@ -100,16 +100,11 @@ score differences; overlaid counts are actual choices across the ten seeds,
 not selection probabilities. REF-involving comparisons are explicitly outside
 this saturation scope. Predictions and command are in `TTN/substitution-comparison/`;
 all 624 cells are in `TTN/substitution-impact-matrix.csv`. This script refreshes
-these derived outputs, not the original MCP experiment. Earlier figure variants
-below are retained as supporting/exploratory artifacts rather than current main
-Figure 2.
-
-The superseded seed-by-position figure is generated with `python3 manuscript/draw_minimization_matrix.py`:
-ten seeds × all 52 positions, with cyan denoting an actual ALT change and grey
-an unchanged ALT relative to that seed's randomized track. Colour does not
-encode effect magnitude. `TTN/minimization-allele-matrix.csv` preserves all 520
-before/after allele pairs, including REF and coordinates. The earlier seed-1
-variant/consequence table remains available as a supporting artifact.
+these derived outputs, not the original MCP experiment. Superseded figure designs
+and their drawing scripts have been removed. Supporting data remain:
+`TTN/minimization-allele-matrix.csv` preserves all 520 before/after allele pairs,
+including REF and coordinates, and the seed-1 variant/consequence table remains
+available as a supporting artifact.
 
 Each gene directory contains the input manifest, seeds and binary fingerprint,
 raw results, compressed MCP transcript, CSV tables and configuration-diversity

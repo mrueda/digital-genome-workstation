@@ -4,6 +4,7 @@ Usage: python3 scripts/prepare-publication-screenshots.py CAPTURE_DIRECTORY
 See manuscript/figures/README.md for the synthetic example and capture settings.
 """
 from pathlib import Path
+import base64
 import sys
 from PIL import Image, ImageDraw, ImageFont
 
@@ -31,12 +32,12 @@ crop("roll", (452, 1360, 1740, 1980), target / "allele-roll.png")
 crop("workspace", (2548, 314, 3100, 1450), target / "monitor.png")
 crop("workspace", (3100, 128, 3760, 1502), target / "evidence.png")
 figures = root / "manuscript/figures"
-base = crop("workspace", (0, 0, 3760, 1742), figures / "figure-1-workspace-base.png")
-base.save(target / "workspace.png", optimize=True)
+base = crop("workspace", (0, 0, 3760, 1742), target / "workspace.png")
+embedded_base = base64.b64encode((target / "workspace.png").read_bytes()).decode("ascii")
 canvas = Image.new("RGB", (3760, 1822), "white")
 canvas.paste(base, (0, 0))
 draw = ImageDraw.Draw(canvas)
-font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 33)
+font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60)
 legend_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
 labels = [
     ("A", 397, 171, "#39acc0", "Source variants"),
@@ -46,13 +47,13 @@ labels = [
     ("E", 2290, 1137, "#b49adc", "Device Rack"),
     ("F", 1395, 174, "#85bed5", "Genome Transport"),
 ]
-svg = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3760" height="1822" viewBox="0 0 3760 1822">', '<rect width="3760" height="1822" fill="white"/>', '<image width="3760" height="1742" xlink:href="figure-1-workspace-base.png"/>']
+svg = ['<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3760" height="1822" viewBox="0 0 3760 1822">', '<rect width="3760" height="1822" fill="white"/>', f'<image width="3760" height="1742" xlink:href="data:image/png;base64,{embedded_base}"/>']
 for index, (letter, x, y, color, description) in enumerate(labels):
-    draw.ellipse((x-27,y-27,x+27,y+27), fill=color, outline="white", width=4)
+    draw.ellipse((x-46,y-46,x+46,y+46), fill=color, outline="white", width=4)
     draw.text((x,y), letter, font=font, fill="#19282e", anchor="mm")
     lx = 36 + index * 620
     draw.text((lx, 1780), f"{letter}  {description}", font=legend_font, fill="#19282e", anchor="lm")
-    svg.append(f'<circle cx="{x}" cy="{y}" r="27" fill="{color}" stroke="white" stroke-width="4"/><text x="{x}" y="{y+11}" text-anchor="middle" font-family="DejaVu Sans" font-size="33" font-weight="bold" fill="#19282e">{letter}</text>')
+    svg.append(f'<circle cx="{x}" cy="{y}" r="46" fill="{color}" stroke="white" stroke-width="4"/><text x="{x}" y="{y+21}" text-anchor="middle" font-family="DejaVu Sans" font-size="60" font-weight="bold" fill="#19282e">{letter}</text>')
     svg.append(f'<text x="{lx}" y="1791" font-family="DejaVu Sans" font-size="30" fill="#19282e">{letter}  {description}</text>')
 svg.append('</svg>')
 canvas.save(figures / "figure-1-workspace.png", optimize=True)

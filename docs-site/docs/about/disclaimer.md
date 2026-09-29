@@ -6,7 +6,7 @@ Predicted consequences depend on the selected transcript models, tool versions, 
 
 Several changes may appear together on one genome track, but DGW currently evaluates them one allele at a time. Their combined transcript, protein, health, or disease consequence is not known from those independent annotations.
 
-The experimental Genome Optimizer is bounded to selected input-VCF loci. Conservative uses REF and exact alleles from the immutable source. Its **Distance from reference (ALT copies)** objective counts non-reference allele copies and uses no annotations. Saturation may evaluate the three non-REF SNV bases with live `bcftools csq` consequences and fixed ClinVar candidate screening. Neither model covers interactions, phase-dependent compound effects, penetrance, environment, or the rest of the genome.
+The experimental Genome Optimizer is bounded to selected input-VCF loci. Conservative uses REF and exact alleles from the immutable source. Its **Distance from reference (ALT copies)** score counts non-reference allele copies, while maximize checks ClinVar before reintroducing source ALTs. Saturation evaluates the three non-REF SNV bases with live `bcftools csq` consequences and fixed ClinVar candidate screening. Its predicted-consequence score is an additive category summary, not a calibrated measure of damage. Neither model covers interactions, phase-dependent compound effects, penetrance, environment, or the rest of the genome.
 
 **Minimize** and **Maximize** refer only to the selected technical score. No result may be described as perfect, healthy, safe, or biologically optimal. REF itself is not a benign or healthy classification.
 

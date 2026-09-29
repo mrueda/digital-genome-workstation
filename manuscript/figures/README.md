@@ -2,6 +2,19 @@
 
 The current paper is maintained in Google Drive. The PNG files here are the source assets, not screenshots exported back from a document.
 
+Figure 1 is also available as a self-contained SVG: the original screenshot is embedded as PNG, with vector labels and legend. No separate base PNG is required. The finished PNG remains available for document editors that do not accept SVG.
+
+## Current figure files
+
+| Files (SVG and PNG) | Used in |
+| --- | --- |
+| `figure-1-workspace` | Manuscript Figure 1; supplement S1 |
+| `figure-2-substitution-matrix` | Manuscript Figure 2; docs paper examples |
+| `figure-3-morph-positions` | Manuscript Figure 3; docs paper examples |
+| `supp-workflow` | Supplement S2 |
+
+Device screenshots are maintained in `docs-site/static/img/devices/`, not duplicated here. Superseded figures and the old equation image have been removed; the supplement contains native equations.
+
 ## Publication refresh — 26 September 2026
 
 `figure-1-workspace.png` is the shared source for manuscript Figure 1 and supplement S1. It now shows the current Evidence labels, compact Consequence Predictor and File-menu-era workspace. The same fictional example and operations below reproduce the existing Monitor values. Native capture uses a private 3840×2160 Xvfb display, `GDK_SCALE=2` and light mode. The 3760×1800 workspace uses 100% interface scale and is cropped above the status footer, without resampling; A–F labels and a short key are added on a white canvas.

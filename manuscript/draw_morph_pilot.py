@@ -25,7 +25,7 @@ def rect(x, y, w, h, fill, stroke='none', radius=6):
     svg.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{radius}" '
                f'fill="{fill}" stroke="{stroke}"/>')
 
-text(40, 49, 'Different alleles, same predicted-impact score', 32, 'bold')
+text(40, 49, 'Different alleles, same predicted-consequence score', 32, 'bold')
 text(40, 83, 'TTN: morphing optimized seed 1 toward optimized seed 2', 22)
 rect(40, 106, 23, 23, '#e8edf2', '#bdc9d3')
 text(74, 125, 'Origin allele retained', 19)

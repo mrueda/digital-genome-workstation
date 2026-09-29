@@ -42,10 +42,10 @@ Large operations run as background jobs and add a compact mutation layer. Follow
 
 | Mode | Candidates | Meaning of the score |
 | --- | --- | --- |
-| **Saturation scan** | All three non-REF bases at eligible selected SNV positions. | Weighted, independently predicted consequence impact. |
+| **Saturation scan** | All three non-REF bases at eligible selected SNV positions. | Additive predicted-consequence score, weighted by the **Impact** control. |
 | **Conservative** | Reference and original source ALTs. | Distance from reference in ALT-copy units. |
 
-Saturation preserves ties: if no eligible candidate improves the score, **zero changes is a valid result**. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by its guard. Missing predictions can exclude a position; inspect the reported counts. [Full rules and formulas](../technical-details/scoring-methods.md).
+Saturation preserves ties: if no eligible candidate improves the score, **zero changes is a valid result**. Exact ClinVar Pathogenic/Likely pathogenic candidates are excluded by its guard in either direction. Conservative maximize also checks source ALTs before reintroducing them. Missing or unrecognized consequence categories can exclude a position; predictor errors or unavailable required resources stop the run. [Full rules and formulas](../technical-details/scoring-methods.md).
 
 ## Compare the result
 

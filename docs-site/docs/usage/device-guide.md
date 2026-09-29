@@ -11,7 +11,7 @@ These screenshots show **DGW v0.1**, in light mode, using the synthetic GRCh37 e
 | Generate seeded allele changes | [Mutation Generator](#mutation-generator) |
 | Copy a fraction of another track's alleles | [Genome Morph](#genome-morph) |
 | Inspect transcript predictions for selected positions | [Consequence Predictor](#consequence-predictor) |
-| Search for lower or higher predicted-impact scores | [Genome Optimizer](#genome-optimizer) |
+| Search for lower or higher predicted-consequence scores | [Genome Optimizer](#genome-optimizer) |
 | Compare the source and current track | [Track Compare](#track-compare) |
 | Read the aggregate change across active mutations | [Track Monitor](#track-monitor) |
 | Inspect one exact allele | [Evidence](#evidence) |
@@ -29,6 +29,8 @@ Choose the amount, seed and substitution pattern, then **Generate mutations**. T
 <a href={useBaseUrl('/img/devices/generator.png')}><img src={useBaseUrl('/img/devices/generator.png')} alt="Mutation Generator after applying eight reversible blocks at seven selected positions, Uniform pattern and seed 42" loading="lazy" /></a>
 
 Here, seven selected positions produced eight copy-level blocks. A position and an allele copy are different counting units.
+
+Amount is a sampling probability per eligible entry, not an exact count. Transition/transversion patterns classify the proposed ALT relative to **REF**, not the previous ALT. REF and the current ALT are excluded from replacement choices; indels remain unchanged.
 
 ## Genome Morph
 
@@ -72,7 +74,7 @@ Read the actual source and current alleles. **Differences only** hides matching 
 
 ### Genome view
 
-Bars summarize the percentage of selected loci that differ in each interval, on a fixed 0–100% scale. Colour distinguishes ALT sequence, ALT-copy count and copy/phase changes. Grey marks matching genotypes; empty intervals have no selected loci. Click a bin or drag across a chromosome strip to zoom. At close range, individual alleles replace the summary.
+Bars summarize the percentage of selected loci that differ in each interval, on a fixed 0–100% scale. Colour distinguishes ALT-copy count, ALT sequence and copy placement, in that priority order when several types apply. Grey marks matching genotypes; empty intervals have no selected loci. This is a DNA-difference percentage, not a consequence score or statistical significance. Click a bin or drag across a chromosome strip to zoom. At close range, individual alleles replace the summary.
 
 <a href={useBaseUrl('/img/devices/genome.png')}><img src={useBaseUrl('/img/devices/genome.png')} alt="Genome view with three changed selected loci on chromosome 7 and no selected loci on chromosome 17" loading="lazy" /></a>
 
@@ -96,7 +98,7 @@ Track Monitor is a workspace panel, not a Rack device. Track Profiler evaluates 
 
 <a href={useBaseUrl('/img/devices/monitor.png')}><img src={useBaseUrl('/img/devices/monitor.png')} alt="Completed Track Monitor: 12 evaluated mutations, mean impact delta +0.0842 and total delta +1.01" width="360" loading="lazy" /></a>
 
-The total sums source-relative, independent-allele impact changes. The mean divides that total by the number of evaluated mutations. Here the 12 evaluated operations include eight randomizer blocks and four morph changes; this is not the three-locus DNA-difference count. Neither number is a disease probability. See the [formulas](../technical-details/scoring-methods.md).
+With complete prediction coverage, the total sums source-relative, independent-allele consequence-impact changes. The mean divides that total by the number of active mutations. Here the 12 evaluated operations include eight randomizer blocks and four morph changes; this is not the three-locus DNA-difference count. Incomplete coverage leaves the total unavailable, not zero. Neither number is a disease probability. See the [formulas](../technical-details/scoring-methods.md).
 
 ## Evidence
 

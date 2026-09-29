@@ -38,7 +38,7 @@ Operations may not overlap another active allele on the same genome copy, except
 
 Duplicating a track copies its base, head, visible bypass mask, and private baseline exclusions. Subsequent edits branch naturally. Renaming changes track metadata only. Deleting a track marks it archived; reachable audit ancestry remains immutable.
 
-Bypassing a block adds its operation ID to the track's visible bypass mask. During the current application session, applied-device chains and device bypass are held by the workstation; device-generated edit grouping can apply the same bypass operation to every edit ID from that run. Removing a device from the Rack does not remove its already-created genome edits. None of these actions creates a new biological operation or erases one.
+Disabling a block adds its operation ID to the track's visible bypass mask. A compound layer is disabled as one block. This is separate from device-level Bypass, which only excludes ClinVar or COSMIC evidence and never reverses generated edits. Removing a device from the Rack does not remove its already-created edits. Rack settings persist in the workstation session; block state persists on the track. None of these actions creates a new biological operation or erases one.
 
 ## Consolidation
 

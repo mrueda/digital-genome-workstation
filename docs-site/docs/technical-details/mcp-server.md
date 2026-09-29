@@ -93,7 +93,7 @@ Apply checks the captured track state and bypass choices. If the track changed, 
 | `apply_genome_morph_preview` | Apply a completed morph preview as one compact reversible mutation layer on its source track. |
 | `start_genome_optimizer_preview` | Start Saturation or Conservative optimization as a persistent, non-mutating preview. |
 | `apply_genome_optimizer_preview` | Apply a completed optimizer preview as one compact reversible mutation layer. |
-| `start_track_profiler` | Analyze active track mutations with a bounded set of exact-allele Evidence devices. |
+| `start_track_profiler` | Analyze active track mutations with Consequence Predictor and the requested database evidence devices. |
 | `start_track_vcf_export` | Export an explicit track head as a new BGZF/CSI VCF and provenance sidecars. |
 | `export_region_fasta` | Export up to 50 kb as reference, chromosome-copy A, and chromosome-copy B FASTA records. |
 | `search_genes` | Search the project's assembly-matched gene index and count imported variants overlapping each result. |
@@ -111,7 +111,7 @@ Apply checks the captured track state and bypass choices. If the track changed, 
 | VCF export | Explicit track head, all chromosomes. |
 | FASTA export | Explicit track and reference interval, at most 50 kb. |
 
-The selection run limit defaults to 100,000 for Generator and Optimizer and fails explicitly when exceeded. A no-op preview is a valid completed result; applying it changes nothing.
+The MCP selection run limit defaults to 100,000 for Generator and Optimizer and fails explicitly when exceeded. This differs from the desktop Mutation Generator's default limit of 1,000. The 100,000 ceiling is an experimental safety limit, not a performance benchmark. A no-op preview is a valid completed result; applying it changes nothing.
 
 Jobs run away from protocol handling, through one local compute slot in this MCP process. Poll `get_job` for progress and the result. Optional `worker_threads` is bounded to 1–256 and defaults to available processors minus one. Supported engines use the same bounded parallel coordinator as the desktop.
 

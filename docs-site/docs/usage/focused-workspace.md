@@ -58,6 +58,8 @@ Wide regions show density summaries. Zoom in to see individual alleles. **Settin
 
 Choose **Variants** or **Active edits**, then press Play. DGW opens Evidence, waits for the active predictions and lookups, allows the selected reading time, then advances. Pause stays at the current allele; Stop returns to the review start; Loop repeats the review scope. Playback does not edit DNA.
 
+**Read** offers 1, 3, 5, 10 or 20 seconds (default 5). It changes the pause after results arrive, not the calculation speed; a changed value applies to the next interval.
+
 For help on a control, hover or focus it and read **Context Help** in the Evidence panel. Pin keeps an explanation visible.
 
 Next: [Edit and compare](edit-and-compare.md) or [choose a device](device-guide.md).

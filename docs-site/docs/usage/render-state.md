@@ -48,7 +48,7 @@ Evidence and device-run records are project-wide and can include entries outside
 Each FASTA header identifies the reference interval and track. Indels can make the two reconstructed sequences differ in length.
 
 :::note[Unphased positions]
-Unphased heterozygous positions are masked in both copy sequences and reported in a TSV sidecar. DGW does not invent which chromosome carries an unphased ALT. Sequence outside supplied calls is reference context, not evidence of a confidently called sample base.
+Unphased heterozygous positions are masked with **N** in both copy sequences and reported in a TSV sidecar. Unphased indels are masked across the REF span rather than assigned to one copy. DGW does not invent which chromosome carries an unphased ALT. Sequence outside supplied calls is reference context, not evidence of a confidently called sample base.
 :::
 
 ## Consolidation

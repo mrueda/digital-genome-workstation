@@ -2,7 +2,7 @@
 
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
-What happens when you randomize a gene's imported variants, minimize their predicted impact, then morph between the resulting tracks? These experiments use **Mutation Generator, Genome Optimizer and Genome Morph** through DGW's MCP interface—the same core operations used by the desktop app.
+What happens when you randomize a gene's imported variants, minimize an additive predicted-consequence score, then morph between the resulting tracks? These experiments use **Mutation Generator, Genome Optimizer and Genome Morph** through DGW's MCP interface—the same core operations used by the desktop app.
 
 You can read the results below without setting up MCP. To run them, follow [Reproduce the experiments](#reproduce-the-experiments).
 
@@ -12,7 +12,7 @@ The public HG00103 exome supplies the positions and genotypes. The randomized al
 
 ## 1. Randomize, then minimize
 
-**Question:** can different starting alleles reach the same predicted-impact score?
+**Question:** can different starting alleles reach the same predicted-consequence score?
 
 For each gene, ten fresh source-track copies were randomized with seeds **1–10**. Each run then compared the three non-reference bases at every selected position and applied only strictly lower-scoring alternatives. A second optimizer pass checked for further improvements.
 
@@ -21,25 +21,25 @@ For each gene, ten fresh source-track copies were randomized with seeds **1–10
 | BRCA2 | 4 | 7 | 3.33 | 3.33 | 0 |
 | TTN | 52 | 67 | 40.43–42.11 | 34.69 | 11–14 |
 
-These are **ten seeded runs per gene**, not biological replicates. BRCA2 was tested first; TTN was an exploratory follow-up. All ten minimized TTN tracks remained different, despite sharing the same score. No further improving edits were found on the second pass.
+These are **ten seeded runs per gene**, not biological replicates. BRCA2 was tested first; TTN was an exploratory follow-up. All ten minimized TTN tracks remained different, despite sharing the same score. They differed at an average of **20.18 of 52 positions** per pair, compared with 26.07 before minimization. No further improving edits were found on the second pass.
 
 ### Which substitutions changed the score?
 
 <figure>
-  <a href={useBaseUrl('/img/paper/figure-2-substitution-matrix.svg')}><img src={useBaseUrl('/img/paper/figure-2-substitution-matrix.svg')} alt="TTN matrix: 52 genomic positions by 12 directed base substitutions, with predicted-impact differences and counts of choices across ten seeded minimization runs" loading="lazy" /></a>
+  <a href={useBaseUrl('/img/paper/figure-2-substitution-matrix.svg')}><img src={useBaseUrl('/img/paper/figure-2-substitution-matrix.svg')} alt="TTN matrix: 52 genomic positions by 12 directed base substitutions, with predicted-consequence score differences and counts of choices across ten seeded minimization runs" loading="lazy" /></a>
   <figcaption>Paper Figure 2. Click to open the vector figure at full size.</figcaption>
 </figure>
 
 - **Rows:** the 52 imported TTN positions, in GRCh37 coordinates (1-based).
 - **Columns:** directed changes, such as C → G.
-- **Colour:** change in predicted impact per ALT copy. Cyan is lower, orange higher, and neutral equal.
+- **Colour:** change in the predicted-consequence score per ALT copy. Cyan is lower, orange higher, and neutral equal.
 - **Numbers:** how many of the ten runs chose that substitution. An unnumbered scored cell was never chosen; a crossed cell involves REF and is outside this saturation comparison.
 
 At 2:179454394, for example, seed 1 changed ALT C (predicted stop-gained) to G (predicted synonymous). At 2:179554305, A → G changed stop-gained to missense. The latter illustrates why a lower score is not proof of restored function. These are genomic-strand bases; TTN is on the reverse strand.
 
 ### What was minimized?
 
-The pilot summed the strongest predicted impact category for each ALT copy: **HIGH = 1, MODERATE = 0.67, LOW = 0.33, MODIFIER = 0.10**, with impact weight **1**. See [scoring methods](../technical-details/scoring-methods.md) for the formulas.
+The pilot summed the value of the strongest predicted consequence category for each ALT copy: **HIGH = 1, MODERATE = 0.67, LOW = 0.33, MODIFIER = 0.10**, with impact weight **1**. These chosen values encode categories; they are not calibrated measurements of biological damage. The app calls these **impact classes** and the weight control **Impact**. See [scoring methods](../technical-details/scoring-methods.md) for the formulas.
 
 REF was not a candidate in saturation mode. Exact ClinVar Pathogenic/Likely pathogenic candidates were ineligible, and equal-scoring alternatives retained the current ALT. COSMIC did not contribute.
 
@@ -49,7 +49,7 @@ These are **optimizer totals**, not Track Monitor source-relative deltas. The pi
 
 ## 2. Morph between different tracks with the same score
 
-**Question:** can DNA change while the predicted-impact total stays the same?
+**Question:** can DNA change while the predicted-consequence total stays the same?
 
 The minimized TTN tracks from seeds 1 and 2 differed at **17 positions**. Using seed **20260912** and seeded-random ordering, Genome Morph copied increasing fractions of the target into fresh copies of the origin.
 
@@ -59,6 +59,16 @@ The minimized TTN tracks from seeds 1 and 2 differed at **17 positions**. Using 
 </figure>
 
 At **25%**, five positions were copied; at **100%**, all 17 matched the target. Each amount started from a fresh origin copy—these were not successive edits. There was **one run per amount**, not repeated morph trials.
+
+| Morph amount | Positions copied from the target | Predicted-consequence score |
+| --- | ---: | ---: |
+| 0% | 0 | 34.69 |
+| 25% | 5 | 34.69 |
+| 50% | 9 | 34.69 |
+| 75% | 13 | 34.69 |
+| 100% | 17 | 34.69 |
+
+Counts round upward from the requested fraction of 17 differing positions. The fixed ordering seed produces nested subsets; these rows are discrete configurations, not evolutionary generations.
 
 All five states scored **34.69** because the differing alleles were tied at each position under this scoring model. The other 35 positions are omitted from the figure but included in the total. Equal endpoint totals would not, by themselves, guarantee an unchanged score during morphing in another example.
 

@@ -28,7 +28,7 @@ The desktop app has no network server, account, telemetry, or remote patient-dat
 
 One track is one complete diploid scenario for the selected sample within the input data. Homologous chromosome copies A and B are reconstructed inside that track; A/B identifies phased VCF slots, not parental origin. A track must never be used as a synonym for one haplotype.
 
-The track-and-device workspace is the primary implemented interface. The read-only source track is duplicated into independent experimental tracks. Manual and optimizer changes become persistent edit blocks; selecting or bypassing a block changes the effective preview without modifying the source.
+The track-and-device workspace is the primary implemented interface. The read-only source track is duplicated into independent experimental tracks. Manual and optimizer changes become persistent edit blocks. Selecting a block inspects it; disabling it changes the effective track without modifying the source.
 
 ## User model and provenance model
 
@@ -73,12 +73,12 @@ One device may use two host execution strategies without appearing twice in the 
 
 The implemented **Genome Optimizer** remains experimental. It accepts a mode, focused interval, selected variants where required, an objective, a direction, weights, active evidence-device IDs, and a maximum edit count:
 
-- Conservative **Distance from reference (ALT copies)** assigns `1` per selected active alternate-allele copy and uses no evidence input;
+- Conservative **Distance from reference (ALT copies)** assigns `1` per selected active alternate-allele copy; annotations do not set its numerical score;
 - minimize emits `RestoreReference` only for active alleles that exactly occur in the immutable source; and
 - maximize emits `SetAllele` only to reintroduce an exact original-source allele absent from the current track and only when its additive score delta is positive.
 - saturation enumerates the three non-REF bases at each selected canonical SNV, obtains host-evaluated evidence, requires a comparable predicted impact for every candidate, and emits `SetAllele` for the winning ALT.
 
-Conservative does not read predicted consequences, ClinVar, imported INFO, or another Evidence-device output. Saturation uses live `bcftools csq` impact to rank complete three-ALT comparisons. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a score fader. COSMIC and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
+Conservative does not use predicted consequences or imported INFO for its score. Conservative maximize requires ClinVar screening before reintroducing a source ALT; minimize restores REF and needs no alternate-target lookup. Saturation ranks complete three-ALT comparisons using the predicted-consequence score from `bcftools csq`. ClinVar provides a fixed Pathogenic/Likely pathogenic candidate guard rather than a numerical score term. COSMIC and any future unlisted device are evidence-only unless a later model explicitly names their outputs.
 
 Candidates are sorted by score improvement and stable allele/copy tie breakers. Conservative mode truncates copy-level proposals to `maxEdits`; Saturation interprets the same protocol bound as a position-group limit and emits every active copy operation for each accepted position. Unsafe overlaps, ambiguous source replacements, and zero-benefit choices become explicit exclusions. Accepted proposals pass through the normal track edit validator and become ordinary visible edit blocks.
 

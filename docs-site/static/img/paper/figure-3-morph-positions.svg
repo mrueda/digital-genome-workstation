@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="820" viewBox="0 0 1500 820">
 <rect width="1500" height="820" fill="#ffffff"/>
 <g font-family="DejaVu Sans, Arial, sans-serif" fill="#172b3a">
-<text x="40" y="49" font-size="32" font-weight="bold" text-anchor="start" >Different alleles, same predicted-impact score</text>
+<text x="40" y="49" font-size="32" font-weight="bold" text-anchor="start" >Different alleles, same predicted-consequence score</text>
 <text x="40" y="83" font-size="22" font-weight="normal" text-anchor="start" >TTN: morphing optimized seed 1 toward optimized seed 2</text>
 <rect x="40" y="106" width="23" height="23" rx="6" fill="#e8edf2" stroke="#bdc9d3"/>
 <text x="74" y="125" font-size="19" font-weight="normal" text-anchor="start" >Origin allele retained</text>

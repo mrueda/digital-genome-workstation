@@ -23,12 +23,14 @@ The Evidence panel and Monitor use the applied Consequence Predictor automatical
 | Readout | Meaning |
 | --- | --- |
 | **Mutations evaluated** | How many active mutation contributions have results. This need not equal the number of distinct changed loci. |
-| **Total Δ** | Sum of source-relative predicted-impact changes for evaluated mutations. |
-| **Mean Δ per mutation** | Total divided by the number of evaluated mutations. |
+| **Total Δ** | Sum of source-relative consequence-impact changes, available when every active mutation has comparable predictions. |
+| **Mean Δ per mutation** | Complete total divided by the number of active mutations; defined when at least one mutation is active. |
 | **Lower / Unchanged / Higher** | Direction under the coarse consequence-impact categories. |
 | **Device coverage** | Availability of predictions and database lookups for the evaluated changes. |
 
 **DNA can change while the score stays at zero.** For example, a missense-to-missense substitution can retain the same impact category. Use Track Compare for the exact DNA and transcript differences.
+
+The paper calls the additive objective a **predicted-consequence score**. The app's **Impact** labels refer to consequence classes and their chosen numerical values, not measured biological damage. Missing predictions are unavailable, never zero.
 
 ClinVar and COSMIC matches are reported separately; they are not added to the Monitor's impact score. Bypassing a database device removes its evidence contribution, not DNA. Consequence Predictor has no Bypass control.
 
