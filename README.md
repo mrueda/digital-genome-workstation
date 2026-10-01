@@ -6,6 +6,10 @@
 
 <p align="center">
   <a href="https://github.com/mrueda/digital-genome-workstation/actions/workflows/ci.yml"><img src="https://github.com/mrueda/digital-genome-workstation/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="https://github.com/mrueda/digital-genome-workstation/actions/workflows/documentation.yml"><img src="https://github.com/mrueda/digital-genome-workstation/actions/workflows/documentation.yml/badge.svg" alt="Documentation status"></a>
+  <a href="https://github.com/mrueda/digital-genome-workstation/releases/latest"><img src="https://img.shields.io/github/v/release/mrueda/digital-genome-workstation?label=version" alt="Latest release"></a>
+  <a href="https://doi.org/10.5281/zenodo.23084715"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23084715.svg" alt="Zenodo preprint DOI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/mrueda/digital-genome-workstation" alt="Apache 2.0 license"></a>
 </p>
 
 <p align="center">

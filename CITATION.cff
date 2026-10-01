@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use Digital Genome Workstation, please cite the software."
+message: "If you use Digital Genome Workstation, please cite the preprint below."
 title: "Digital Genome Workstation: interactive and non-destructive editing of genome variants"
 type: software
 authors:
@@ -20,3 +20,12 @@ keywords:
   - VCF
   - genome editing
   - bioinformatics
+preferred-citation:
+  type: article
+  title: "Digital Genome Workstation: interactive and non-destructive editing of genome variants"
+  authors:
+    - family-names: Rueda
+      given-names: Manuel
+      orcid: "https://orcid.org/0000-0001-9280-058X"
+  year: 2026
+  doi: "10.5281/zenodo.23084715"
