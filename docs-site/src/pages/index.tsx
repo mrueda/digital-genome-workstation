@@ -16,11 +16,11 @@ export default function Home() {
   const publishedVideos = videoLibrary.videos.filter(video => video.url);
   const showVideos = Boolean(publishedVideos.length || videoLibrary.channelUrl || videoLibrary.playlistUrl);
   return (
-    <Layout title="Digital Genome Workstation" description="Edit genome variants, compare alternatives and keep the source VCF intact.">
+    <Layout title="Interactive genome variant editing" description="Digital Genome Workstation (DGW) is an open-source desktop application for reversible VCF variant editing and comparison of predicted consequences, inspired by digital audio workstations.">
       <main className={styles.page}>
         <div className={styles.intro}>
         <section className={styles.hero}>
-          <p className={styles.kicker}>A workstation for genome editing</p>
+          <p className={styles.kicker}>Digital Genome Workstation (DGW)</p>
           <h1>One genome.<br /><span>Different possibilities.</span></h1>
           <p className={styles.lede}>Open a sample VCF, keep alternative tracks and explore reversible edits with predictions and database evidence.</p>
           <div className={styles.actions}>

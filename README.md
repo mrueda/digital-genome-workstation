@@ -20,7 +20,7 @@
   <a href="LICENSE">⚖️ Apache-2.0</a>
 </p>
 
-DGW is a desktop application inspired by digital audio workstations: keep the original genome, try edits on separate tracks, and compare their predicted consequences. Devices let you randomize alleles, minimize or maximize a defined impact score, and morph between tracks without changing the source VCF.
+Digital Genome Workstation (DGW) is a desktop application inspired by digital audio workstations: keep the original genome, try edits on separate tracks, and compare their predicted consequences. Devices let you randomize alleles, minimize or maximize a defined impact score, and morph between tracks without changing the source VCF.
 
 <p align="center">
   <a href="https://mrueda.github.io/digital-genome-workstation/docs/overview">

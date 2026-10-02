@@ -5,7 +5,7 @@ import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 
 const config: Config = {
-  title: 'DGW Docs',
+  title: 'Digital Genome Workstation',
   tagline: 'Build genome tracks without changing the source VCF',
   favicon: 'img/dgw-mark.svg',
   url: 'https://mrueda.github.io',
