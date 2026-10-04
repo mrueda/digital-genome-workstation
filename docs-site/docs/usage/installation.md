@@ -62,6 +62,19 @@ The test installer is unsigned. Real-machine Windows validation is still pending
 
 Projects and genome resources are stored separately from the application.
 
+<details className="alert alert--info">
+<summary><strong>Where DGW stores internal application data</strong></summary>
+
+DGW keeps internal settings and app-managed files here:
+
+- **Linux:** `~/.local/share/org.mrueda.dgw/` (or `$XDG_DATA_HOME/org.mrueda.dgw/` if configured).
+- **macOS:** `~/Library/Application Support/org.mrueda.dgw/`.
+- **Windows:** `%LOCALAPPDATA%\org.mrueda.dgw\`.
+
+It contains interface and resource preferences, registered resource profiles, setup diagnostics and, unless you choose another location, downloaded resources. Saved `.dgw` projects and resources stored elsewhere are not kept here. Deleting this folder resets DGW and removes resources installed in its default location.
+
+</details>
+
 ## Install genome resources
 
 On first launch, choose **GRCh37** or **GRCh38**, a storage folder, then **Download and install**. The assembly must match your VCF. When setup completes, choose **Continue to examples**.
