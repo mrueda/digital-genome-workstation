@@ -54,12 +54,13 @@ jobs:
           file "$mount_dir/DGW.app/Contents/MacOS/$executable"
           test "$(lipo -archs "$mount_dir/DGW.app/Contents/MacOS/$executable")" = "${{ inputs.architecture == 'intel' && 'x86_64' || 'arm64' }}"
           cd target/release/bundle/dmg
-          shasum -a 256 "dgw-macos-${{ inputs.architecture }}.dmg" > "dgw-macos-${{ inputs.architecture }}.dmg.sha256"
+          shasum -a 256 "dgw-macos-${{ inputs.architecture }}.dmg" > SHA256SUMS
+          shasum -a 256 -c SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: dgw-macos-${{ inputs.architecture }}-test
           path: |
             target/release/bundle/dmg/dgw-macos-*.dmg
-            target/release/bundle/dmg/*.sha256
+            target/release/bundle/dmg/SHA256SUMS
           if-no-files-found: error
           retention-days: 7

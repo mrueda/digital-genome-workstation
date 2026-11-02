@@ -100,3 +100,27 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
           retention-days: 7
+
+  release-assets:
+    needs: installer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dgw-installer-*
+          merge-multiple: true
+          path: release-assets
+      - name: Consolidate and verify final installer checksums
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          cat *.sha256 | LC_ALL=C sort -k2 > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 5
+          sha256sum --strict --check SHA256SUMS
+          rm -- *.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dgw-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7

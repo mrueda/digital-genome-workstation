@@ -64,7 +64,12 @@ jobs:
             if (-not $app.HasExited) { Stop-Process -Id $app.Id }
           }
           $hash = (Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $(Split-Path $download -Leaf)" | Set-Content "$download.sha256" -Encoding ascii
+          $sums = Join-Path (Split-Path $download -Parent) 'SHA256SUMS'
+          "$hash  $(Split-Path $download -Leaf)" | Set-Content $sums -Encoding ascii
+          $recordedHash = ((Get-Content $sums) -split '\s+', 2)[0]
+          if ((Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant() -ne $recordedHash) {
+            throw 'Installer checksum verification failed'
+          }
           # A runner launch is not a clean-machine or standard-user validation.
           Get-AuthenticodeSignature $download | Format-List Status, StatusMessage
       - uses: actions/upload-artifact@v4
@@ -72,6 +77,6 @@ jobs:
           name: dgw-windows-x86_64-test
           path: |
             target/release/bundle/nsis/dgw-windows-x86_64-setup.exe
-            target/release/bundle/nsis/*.sha256
+            target/release/bundle/nsis/SHA256SUMS
           if-no-files-found: error
           retention-days: 7

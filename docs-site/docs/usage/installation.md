@@ -21,6 +21,18 @@ Open [DGW releases](https://github.com/mrueda/digital-genome-workstation/release
 While the application repository is private, sign in with an account that has access. A prerelease may contain only some platforms. Read its release notes; platform test status is recorded in [installer validation](test-installation.md).
 :::
 
+### Optional download verification
+
+Download **SHA256SUMS** from the same release. It lists the SHA-256 checksum for each installer. Run the command for your platform, replacing `FILE` with your downloaded installer:
+
+| Platform | Command |
+| --- | --- |
+| Linux | `sha256sum FILE` |
+| macOS | `shasum -a 256 FILE` |
+| Windows PowerShell | `Get-FileHash FILE -Algorithm SHA256` |
+
+Compare the result with the matching filename in **SHA256SUMS** (hexadecimal letter case does not matter). Checksums detect damaged or changed downloads; they do not replace code signing.
+
 ## Install the app
 
 <Tabs groupId="installation-os">
