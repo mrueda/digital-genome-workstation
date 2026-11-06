@@ -48,7 +48,6 @@ export default function Home() {
                 {videoLibrary.channelUrl && <a href={videoLibrary.channelUrl}>YouTube channel ↗</a>}
               </div>
             </div>
-            {videoLibrary.playlistPrivate && <p>The playlist is currently private. Videos will be available here when published.</p>}
             <div className={styles.videoGrid}>
               {publishedVideos.map(video => <a className={styles.video} href={video.url} key={video.id}>
                 <span className={styles.play} aria-hidden="true">▷</span>

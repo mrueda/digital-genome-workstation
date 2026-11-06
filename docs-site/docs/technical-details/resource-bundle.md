@@ -63,7 +63,7 @@ The installed project descriptor uses relative paths within that bundle. Existin
 
 The installer builds one choice per assembly using the data archive and the tools for the current operating system and processor. Archive identities and checksums come from the bundled `config/resource-artifacts.json`; the app does not trust a downloaded index to replace those checksums.
 
-`config/resource-catalog.json` points to the public resource release. Anonymous access and the Linux ARM64 tools download checksum were verified on 2026-09-11. The application repository remains private. The bundled configuration is:
+`config/resource-catalog.json` points to the public resource release. Both the application and resource releases are publicly accessible without a GitHub account. The bundled configuration is:
 
 ```json
 {

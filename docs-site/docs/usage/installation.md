@@ -17,9 +17,7 @@ Open [DGW releases](https://github.com/mrueda/digital-genome-workstation/release
 | Mac, Intel | `dgw-macos-intel.dmg` |
 | Windows, Intel/AMD 64-bit | Windows `…-setup.exe` |
 
-:::note[Test releases]
-While the application repository is private, sign in with an account that has access. A prerelease may contain only some platforms. Read its release notes; platform test status is recorded in [installer validation](test-installation.md).
-:::
+Downloads are public; no GitHub account is required. Platform validation details are recorded in [installer validation](test-installation.md).
 
 ### Optional download verification
 
@@ -57,7 +55,7 @@ To reinstall, close DGW, choose the existing installation's parent folder, and e
 
 Use the Applications folder inside your home directory if you cannot write to the shared one. To update, quit DGW and replace the app through Finder.
 
-Current test builds are ad-hoc signed and not notarized. After a blocked launch, macOS may offer **Open Anyway** in **System Settings → Privacy & Security**, with authentication required. Approve only the app you intentionally downloaded. Report a “damaged” warning rather than disabling Gatekeeper. [Apple's guidance](https://support.apple.com/en-us/102445).
+The macOS release is ad-hoc signed and not notarized. After a blocked launch, macOS may offer **Open Anyway** in **System Settings → Privacy & Security**, with authentication required. Approve only the app you intentionally downloaded. Report a “damaged” warning rather than disabling Gatekeeper. [Apple's guidance](https://support.apple.com/en-us/102445).
 
 </TabItem>
 <TabItem value="windows" label="Windows">
@@ -67,7 +65,7 @@ Current test builds are ad-hoc signed and not notarized. After a blocked launch,
 3. Open **Digital Genome Workstation** from Start.
 4. Continue with genome setup.
 
-The test installer is unsigned. Real-machine Windows validation is still pending; report unexpected administrator requests or security blocks. Do not disable Windows security protections.
+The Windows installer is unsigned. Real-machine Windows validation is still pending; report unexpected administrator requests or security blocks. Do not disable Windows security protections.
 
 </TabItem>
 </Tabs>
@@ -97,6 +95,6 @@ DGW chooses the matching tools for your computer and verifies the downloads. For
 
 Use **Help → Check for updates**. DGW checks the latest public stable version and links to GitHub releases; you download and install the new version yourself.
 
-With a private repository or only prereleases, open releases in your browser instead. Replacing a test build with another build of the same version is not detected. Genome resource versions remain recorded separately in projects.
+The update check compares version numbers; another build of the same version is not reported as an update. Genome resource versions remain recorded separately in projects.
 
 Next: [Try an example](quickstart.md). Having trouble? [Troubleshooting](../reference/troubleshooting.md).

@@ -1,6 +1,6 @@
 # Testing a desktop installation
 
-Installers are experimental. Linux ARM64 installation and launch have been checked on an isolated display. The ad-hoc-signed Apple Silicon build has been installed and opened successfully on a real Mac. The Windows x86_64 workflow has installed and launched DGW on a Windows runner; a real Windows 10/11 test is still required.
+Use this checklist to validate an installer from the [public releases](https://github.com/mrueda/digital-genome-workstation/releases). Linux ARM64 installation and launch have been checked on an isolated display. The ad-hoc-signed Apple Silicon build has been installed and opened successfully on a real Mac. The Windows x86_64 workflow has installed and launched DGW on a Windows runner; a real Windows 10/11 test is still required.
 
 ## Graphical installation
 
