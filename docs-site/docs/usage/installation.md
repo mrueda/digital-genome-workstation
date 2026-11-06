@@ -17,7 +17,7 @@ Open [DGW releases](https://github.com/mrueda/digital-genome-workstation/release
 | Mac, Intel | `dgw-macos-intel.dmg` |
 | Windows, Intel/AMD 64-bit | Windows `…-setup.exe` |
 
-Downloads are public; no GitHub account is required. Platform validation details are recorded in [installer validation](test-installation.md).
+Downloads are public; no GitHub account is required.
 
 ### Optional download verification
 
