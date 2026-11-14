@@ -1,3 +1,4 @@
+mod agents;
 mod resource_archive;
 mod resources;
 mod updates;
@@ -2327,6 +2328,17 @@ fn suggested_development_bundles(app: tauri::AppHandle) -> Result<Vec<ResourceBu
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if std::env::args().nth(1).as_deref() == Some("--mcp-connect") {
+        let result = tokio::runtime::Runtime::new()
+            .map_err(|_| "Cannot start MCP connector".to_owned())
+            .and_then(|runtime| {
+                let result = runtime.block_on(dgw_mcp::desktop::connect_from_env());
+                runtime.shutdown_background(); // Do not wait for a client holding stdin open.
+                result
+            });
+        if let Err(error) = result { eprintln!("{error}"); std::process::exit(2); }
+        return;
+    }
     #[cfg(target_os = "linux")]
     if let Some(source) = user_setup::source() {
         user_setup::run(source);
@@ -2341,6 +2353,7 @@ pub fn run() {
             }
             Ok(())
         })
+        .manage(agents::AgentAccess::default())
         .manage(resources::ResourceInstaller(Mutex::new(())))
         .manage(AppState {
             evaluation: Arc::new(EvaluationService::new()),
@@ -2350,6 +2363,11 @@ pub fn run() {
             comparison_index: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
+            agents::agent_project,
+            agents::agent_context,
+            agents::agent_status,
+            agents::enable_agent_access,
+            agents::disable_agent_access,
             updates::check_app_updates,
             updates::open_app_releases,
             updates::open_app_documentation,

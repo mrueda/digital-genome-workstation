@@ -6,9 +6,10 @@ import {
   type UserSettings
 } from "./userSettings";
 import { api } from "./api";
+import { AgentAccessPanel } from "./AgentAccessPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { UpdateDialog } from "./UpdateDialog";
-import { SlidersHorizontal, PanelsTopLeft, Cpu, Database } from "lucide-react";
+import { SlidersHorizontal, PanelsTopLeft, Cpu, Database, PlugZap } from "lucide-react";
 import type { BackgroundJob, ProjectResourceHealth, ResourceBundle, ResourceHealthStatus } from "./types";
 
 function closeMenu(event: React.MouseEvent<HTMLElement>) {
@@ -565,17 +566,19 @@ export function ProjectTemplateDialog({
 }
 
 export function SettingsDialog({
+  projectPath,
   open,
   settings,
   onChange,
   onClose
 }: {
   open: boolean;
+  projectPath?: string;
   settings: UserSettings;
   onChange: (settings: UserSettings) => void;
   onClose: () => void;
 }) {
-  const [section, setSection] = useState<"general" | "workspace" | "compute" | "resources">("general");
+  const [section, setSection] = useState<"general" | "workspace" | "compute" | "resources" | "agents">("general");
   useEffect(() => {
     if (!open) return;
     function closeOnEscape(event: KeyboardEvent) {
@@ -599,11 +602,13 @@ export function SettingsDialog({
           ["general", "General", SlidersHorizontal],
           ["workspace", "Workspace", PanelsTopLeft],
           ["compute", "Processing", Cpu],
-          ["resources", "Resources", Database]
+          ["resources", "Resources", Database],
+          ["agents", "Agent access", PlugZap]
         ] as const).map(([id, label, Icon]) => <button key={id} type="button" aria-pressed={section === id} onClick={() => setSection(id)}><Icon aria-hidden="true" />{label}</button>)}
       </nav>
       <div className="preferences-content">
       {section === "resources" && <ResourcesPanel />}
+      {section === "agents" && <AgentAccessPanel projectPath={projectPath} />}
       {section === "general" && <>
       <div className="settings-section">
         <div><h3>Interface scale</h3><p>Resize text and controls together.</p></div>

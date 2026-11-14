@@ -54,7 +54,15 @@ export interface ResourceInventory {
   installed: Array<{ bundle: ResourceBundle; descriptor: string; ready: boolean; message: string }>;
 }
 
+export interface AgentStatus { enabled: boolean; allowEdits: boolean; expiresAt?: string }
+export interface AgentConnection { command: string; args: string[]; address: string; token: string; status: AgentStatus }
+
 export const api = {
+  agentProject: (projectPath?: string) => invoke<void>("agent_project", { projectPath }),
+  agentContext: (projectPath: string, context: unknown) => invoke<void>("agent_context", { projectPath, context }),
+  agentStatus: () => invoke<AgentStatus>("agent_status"),
+  enableAgentAccess: (allowEdits: boolean) => invoke<AgentConnection>("enable_agent_access", { allowEdits }),
+  disableAgentAccess: () => invoke<void>("disable_agent_access"),
   checkAppUpdates: () => invoke<{ currentVersion: string; latestVersion?: string; status: "available" | "current" | "unavailable"; message: string }>("check_app_updates"),
   openAppReleases: () => invoke<void>("open_app_releases"),
   openAppDocumentation: () => invoke<void>("open_app_documentation"),

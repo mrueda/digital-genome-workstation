@@ -27,7 +27,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: cargo test -p dgw-desktop --lib
+      - run: cargo test -p dgw-desktop --lib --test connector_mode
+      - run: cargo test -p dgw-mcp
       - run: npm run tauri build -- --bundles dmg
       - name: Inspect app bundle and name the test download
         shell: bash

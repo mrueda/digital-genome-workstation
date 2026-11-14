@@ -3,11 +3,13 @@ import { FolderOpen, FileInput, Database, Dna, FlaskConical, ChevronDown, Refres
 import { DeviceSelectionScope } from "./DeviceSelectionScope";
 import { confirm as confirmDialog, message as messageDialog, open, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { refreshedAlleleFocus } from "./alleleFocus";
 import { savedAllele } from "./alleleComparison";
 import { WholeTrackComparison } from "./WholeTrackComparison";
+import { agentSelection } from "./agentAccess";
 import { comparisonKeysFromIds } from "./comparisonSelection";
 import { GenomeDifferenceMap } from "./GenomeDifferenceMap";
 import { TrackPredictionComparison, type ConsequenceViewState } from "./TrackPredictionComparison";
@@ -1373,6 +1375,7 @@ function AlleleEditorPane({
 }
 
 function Workstation({
+  agentReady,
   projectPath,
   snapshot,
   setSnapshot,
@@ -1389,6 +1392,7 @@ function Workstation({
   onSessionSaverChange,
   onSaveStateChange
 }: {
+  agentReady: boolean;
   projectPath: string;
   snapshot: ProjectSnapshot;
   setSnapshot: (snapshot: ProjectSnapshot) => void;
@@ -1484,13 +1488,41 @@ function Workstation({
   const transportGeneration = useRef(0);
   const transportLoopRef = useRef(false);
   const transportStartRef = useRef<{ context: FocusContext; selected?: EffectiveVariant; selectedEditId?: string } | undefined>(undefined);
+  const [agentRevision, setAgentRevision] = useState(0);
+  const agentRefreshRef = useRef<() => Promise<void>>(async () => {});
   const activeTrack = focus?.activeTrack ?? snapshot.activeTrack;
   const consequenceViews = useRef(new Map<string, ConsequenceViewState>());
   const comparisonSelection: VariantSelection = symbolicSelection?.selection.trackId === activeTrack.id
     ? symbolicSelection.selection
     : { kind: "explicit", trackId: activeTrack.id, variants: comparisonKeysFromIds(selectedAlleleIds) };
-  const consequenceViewKey = `${projectPath}:${activeTrack.id}:${JSON.stringify(comparisonSelection)}`;
+  const consequenceViewKey = `${projectPath}:${activeTrack.id}:${JSON.stringify(comparisonSelection)}:${agentRevision}`;
   const comparisonSelectedCount = symbolicSelection?.selection.trackId === activeTrack.id ? symbolicSelection.total : comparisonSelection.kind === "explicit" ? comparisonSelection.variants.length : 0;
+  const agentContextJson = JSON.stringify({
+    trackId: activeTrack.id, trackName: activeTrack.name, headStateId: activeTrack.headStateId,
+    selection: agentSelection(comparisonSelection), selectedCount: comparisonSelectedCount, region: context
+  });
+  useEffect(() => {
+    if (!agentReady) return;
+    void api.agentContext(projectPath, JSON.parse(agentContextJson)).catch(() => undefined);
+  }, [agentReady, projectPath, agentContextJson]);
+
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    let pending = false;
+    let running = false;
+    async function update() {
+      pending = true;
+      if (running) return;
+      running = true;
+      try { while (pending && !disposed) { pending = false; await agentRefreshRef.current(); } }
+      finally { running = false; }
+    }
+    void listen<{ projectId: string }>("dgw-agent-change", event => { if (!disposed && event.payload.projectId === snapshot.manifest.projectId) void update(); })
+      .then(unlisten => { if (disposed) unlisten(); else stop = unlisten; }).catch(() => undefined);
+    return () => { disposed = true; stop?.(); };
+  }, [projectPath]);
+
   const focusedSourceVariants = trackDeck.find((lane) => lane.track.readOnly)?.variants;
   const navigationVariantTotal = variantContigs.reduce((total, contig) => total + contig.total, 0);
   const contextMidpoint = context.start + Math.floor((context.end - context.start) / 2);
@@ -2072,7 +2104,7 @@ function Workstation({
       })
       .catch(() => undefined);
     return () => { disposed = true; };
-  }, [projectPath]);
+  }, [projectPath, agentRevision]);
 
   useEffect(() => {
     if (trackDeck.length === 0) return;
@@ -2401,6 +2433,30 @@ function Workstation({
       if (!background && generation === focusRefreshGeneration.current) setBusy(false);
     }
   }
+
+  agentRefreshRef.current = async () => {
+    try {
+      const next = await api.openProject(projectPath);
+      const previousTrack = activeTrack.id;
+      const previousLanes = trackDeck;
+      setSnapshot(next);
+      invalidateSelectedAlleleEvaluation();
+      setEvaluation(undefined);
+      setDeviceEvaluations({});
+      setSelectedEditId(undefined);
+      consequenceViews.current.clear();
+      if (next.activeTrack.id !== previousTrack) resetAlleleSelection([]);
+      const updated = await refresh(context, { background: true, reloadTracks: true });
+      for (const lane of updated?.lanes ?? []) {
+        const previous = previousLanes.find(item => item.track.id === lane.track.id);
+        if (!previous) continue;
+        const oldIds = new Set(previous.edits.map(edit => edit.id));
+        const editIds = lane.edits.filter(edit => !oldIds.has(edit.id)).map(edit => edit.id);
+        if (editIds.length) recordAction({ kind: "editBatch", trackId: lane.track.id, editIds, label: "Agent edit" });
+      }
+      setAgentRevision(value => value + 1);
+    } catch (error) { setNotice(`Agent update: ${messageOf(error)}`); }
+  };
 
   async function loadVariantNavigationBins(contig: string, start?: number, end?: number) {
     const scope = variantNavigationScope(contig, start, end);
@@ -3930,7 +3986,11 @@ function Workstation({
         const workerThreads = settings.workerThreads === "auto"
           ? Math.max(1, (navigator.hardwareConcurrency || 2) - 1)
           : settings.workerThreads;
-        let job = await api.startTrackEvidenceProfileJob(
+        const pendingJobs = await api.listBackgroundJobs(projectPath, 200);
+        const existingJob = pendingJobs.find(item => item.operation === "trackEvidenceProfile"
+          && item.trackId === trackId && (item.status === "queued" || item.status === "running")
+          && (item.request as { profileInputFingerprint?: string }).profileInputFingerprint === profileInputFingerprint) as BackgroundJob<TrackEvidenceProfileResult> | undefined;
+        let job = existingJob ?? await api.startTrackEvidenceProfileJob(
           projectPath,
           trackId,
           activeDeviceIds,
@@ -4962,6 +5022,16 @@ export default function App() {
   const [projectNeedsSaveAs, setProjectNeedsSaveAs] = useState(false);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(() => parseRecentProjects(localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY)));
   const sessionSaverRef = useRef<(() => Promise<void>) | undefined>(undefined);
+  const [agentProjectReady, setAgentProjectReady] = useState("");
+  useEffect(() => {
+    let disposed = false;
+    setAgentProjectReady("");
+    void api.agentProject(projectPath || undefined).then(() => {
+      if (!disposed) setAgentProjectReady(projectPath);
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, [projectPath]);
+
 
   useEffect(() => {
     function suppressWebviewContextMenu(event: MouseEvent) {
@@ -5266,6 +5336,7 @@ export default function App() {
       {snapshot
         ? <Workstation
           key={`${snapshot.manifest.projectId}:${projectPath}`}
+          agentReady={agentProjectReady === projectPath}
           projectPath={projectPath}
           snapshot={snapshot}
           setSnapshot={setSnapshot}
@@ -5336,6 +5407,6 @@ export default function App() {
       }}
       onClose={() => setJobsOpen(false)}
     />
-    <SettingsDialog open={settingsOpen} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />
+    <SettingsDialog projectPath={agentProjectReady || undefined} open={settingsOpen} settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />
   </div>;
 }

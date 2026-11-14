@@ -2,7 +2,39 @@
 
 **MCP (Model Context Protocol) lets an agent operate DGW through structured commands.** The agent can inspect a saved project, generate edits, evaluate a track and export the result.
 
-DGW's MCP interface is a separate executable, `dgw-mcp`. It calls the same `dgw-core` Rust functions as the desktop app. You do not need the desktop window open, and the agent does not reproduce DGW's algorithms.
+DGW has two MCP modes. **Desktop access (v0.1.1)** connects an agent to the project open in the app. **Standalone access** uses `dgw-mcp` to work with saved projects without opening the desktop. Both use the existing MCP tools and `dgw-core`; the agent does not reproduce DGW's algorithms.
+
+## Connect to the desktop
+
+1. Open a project in DGW, then open **Settings → Agent access**.
+2. Leave access read-only, or select **Allow edits, analysis and exports**.
+3. Confirm sharing and choose **Enable access**.
+4. In Codex Desktop's MCP configuration, choose **STDIO** and copy the command, arguments and environment values shown by DGW. Alternatively, use **Copy Codex configuration**.
+
+The connector is part of the installed application. No Python, Rust or separate download is required. Keep DGW open. On macOS, move DGW to Applications before configuring the connection.
+
+| Setting | Value |
+| --- | --- |
+| Command | The installed DGW executable shown in Settings |
+| Arguments | `--mcp-connect` |
+| Environment | `DGW_MCP_ADDRESS` and `DGW_MCP_TOKEN`, copied from Settings |
+| Working directory | Leave empty |
+
+The local address is an internal connection address, **not an HTTP or remote MCP URL**. Credentials expire after eight hours. Turning access off, switching projects or restarting DGW revokes them; enable access again and update the client settings. Already accepted jobs may finish after access is revoked.
+
+:::note[What is shared]
+Access covers the open project, not just its selected variants. `desktop_context` reports the active track, its current head, the selection and focused region. Selection changes appear on the next call; an empty selection never means “select all”. A connected cloud agent may send returned project data to its model provider. Keep tokens out of prompts and screenshots.
+:::
+
+Try: **“Describe the open DGW project and current selection. Do not change anything.”** With editing enabled, agent changes refresh the desktop tracks, and completed profiles are available to Track Monitor. Jobs appear in the existing Jobs panel. Explicit tool parameters and stale-track checks still apply.
+
+Read-only connections expose inspection tools and manual-edit validation. Editing access exposes the original 22 tools plus `desktop_context`. The source track remains protected. Screen interaction is independent of MCP access: disabling MCP does not disable an agent's permission to use the screen.
+
+Codex Desktop is the first target client. ChatGPT Work MCP compatibility has not been established; screen interaction remains a separate option.
+
+## Standalone access and reproducibility
+
+The standalone `dgw-mcp` executable, its 22 tools, saved seeds and explicit parameters remain available for scripts and the manuscript experiments. Desktop connection support does not change the scoring algorithms or require rerunning those experiments. Keep the software and resource versions recorded with each experiment.
 
 <div className="dgw-flow" role="group" aria-label="An MCP client launches dgw-mcp over standard input and output; dgw-mcp calls dgw-core to operate a saved project">
   <div><strong>Agent / MCP client</strong><span>Requests an operation</span></div>
@@ -12,7 +44,7 @@ DGW's MCP interface is a separate executable, `dgw-mcp`. It calls the same `dgw-
   <div><strong>dgw-core</strong><span>Project, resources and calculations</span></div>
 </div>
 
-## Set up
+### Build the standalone server
 
 First create and save a `.dgw` project in the desktop app. Its registered resource paths must be accessible to the account running the MCP server.
 
@@ -23,7 +55,7 @@ cargo build --release -p dgw-mcp
 ./target/release/dgw-mcp --version
 ```
 
-Add a server entry to your MCP client's configuration. The client launches the executable and communicates over standard input/output; DGW does not open an HTTP port.
+Add a server entry to your MCP client's configuration. The client launches the executable and communicates over standard input/output; the standalone server does not open a network port.
 
 ```json
 {
@@ -115,7 +147,7 @@ The MCP selection run limit defaults to 100,000 for Generator and Optimizer and 
 
 Jobs run away from protocol handling, through one local compute slot in this MCP process. Poll `get_job` for progress and the result. Optional `worker_threads` is bounded to 1–256 and defaults to available processors minus one. Supported engines use the same bounded parallel coordinator as the desktop.
 
-Track Profiler saves the profile used by Track Monitor; applying an MCP mutation alone does not perform that profiling step. Reopen the project in the desktop to inspect saved tracks and results. Avoid simultaneous edits to the same track from two interfaces; state checks reject stale requests.
+Track Profiler saves the profile used by Track Monitor; applying an MCP mutation alone does not perform that profiling step. In standalone mode, reopen the project in the desktop to inspect saved tracks and results. In desktop-connected mode, the open workspace refreshes after agent operations and job completion. Avoid simultaneous edits to the same track from two interfaces; state checks reject stale requests.
 
 <details>
 <summary>Evidence, scoring and export details</summary>
@@ -132,6 +164,6 @@ VCF export is a background job; FASTA export is synchronous and bounded to 50 kb
 
 MCP cannot create projects, consolidate or archive tracks, or delete project data. Use the desktop for those actions. It does not expose Track Compare's views or the selection-based Consequence Predictor report.
 
-The server runs with its operating-system account's file permissions. It is a local command interface, not a network service or sandbox. If you use a cloud-hosted agent, the project information returned to that client may be sent to its model provider.
+The standalone server runs with its operating-system account's file permissions. It is a local command interface, not a sandbox. Desktop mode accepts authenticated loopback connections and restricts tools to the shared project. Editing access also permits exports to new destinations outside that project. If you use a cloud-hosted agent, the project information returned to that client may be sent to its model provider.
 
 Opening a project performs the same compatible schema maintenance as the desktop. Changes pass through core validation and persistence; the MCP adapter does not independently edit SQLite. See [Architecture](architecture.md) and [Project format](project-format.md).

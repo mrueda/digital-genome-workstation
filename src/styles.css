@@ -1014,3 +1014,17 @@ label > input, label > select { margin-top: 6px; }
 .genome-map-alleles > button.allele-change-placement { border-color: #ae87e4; }
 .genome-map-alleles > button[aria-pressed="true"] { outline: 2px solid #28bccc; }
 .genome-map-alleles > button > span { display: grid; grid-template-columns: 55px 1fr; gap: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+
+.agent-access { display: grid; gap: 14px; max-width: 720px; }
+.agent-access p { margin: 0; line-height: 1.5; font-size: .92rem; }
+.agent-access-heading { display: flex; align-items: center; gap: 12px; }
+.agent-access-heading h3 { margin: 0 0 4px; }
+.agent-access-badge { margin-left: auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 16px; font-size: .8rem; }
+.agent-access-badge.enabled { color: var(--cyan); }
+.agent-access .button { justify-self: start; display: inline-flex; gap: 8px; align-items: center; }
+.agent-connection { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.agent-connection-field { display: grid; gap: 4px; font-size: .82rem; }
+.agent-connection-field > div { display: flex; gap: 6px; min-width: 0; }
+.agent-connection-field input { flex: 1; min-width: 0; font-family: monospace; }
+.agent-connection-field button { flex-shrink: 0; padding: 6px; }
+.agent-access-note { opacity: .75; }

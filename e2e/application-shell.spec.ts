@@ -1460,3 +1460,42 @@ test("predicts the track selection with paged current-only results", async ({ pa
   await expect(results.getByRole("group", { name: "Impact filter" }).getByRole("button", { name: "All", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(results).toContainText("strongest transcript impact");
 });
+
+test("agent access requires consent, masks credentials and revokes access", async ({ page }, testInfo) => {
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "User settings" });
+  await dialog.getByRole("button", { name: "Agent access", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Enable access", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await dialog.getByRole("button", { name: "Agent access", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Enable access", exact: true })).toBeDisabled();
+  await dialog.getByRole("checkbox", { name: /I agree/ }).check();
+  await dialog.getByRole("button", { name: "Enable access", exact: true }).click();
+  await expect(dialog.getByText("Read-only access", { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel("DGW_MCP_TOKEN", { exact: true })).toHaveAttribute("type", "password");
+  await dialog.getByRole("button", { name: "Reveal token" }).click();
+  await expect(dialog.getByLabel("DGW_MCP_TOKEN", { exact: true })).toHaveValue("synthetic-test-token");
+  await dialog.getByRole("button", { name: "Hide token" }).click();
+  await page.screenshot({ path: testInfo.outputPath("agent-access.png") });
+  await dialog.getByRole("button", { name: "Turn off", exact: true }).click();
+  await expect(dialog.getByLabel("DGW_MCP_TOKEN", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Enable access", exact: true })).toBeDisabled();
+});
+
+test("agent context follows selection and agent track updates appear without reopening", async ({ page }) => {
+  await page.getByRole("button", { name: "Open GRCh37 example project" }).click();
+  await page.getByRole("button", { name: "Select all variants · all chromosomes", exact: true }).click();
+  const context = () => page.evaluate(async () => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string) => Promise<{ selection: { kind: string }; selectedCount: number }> } }).__TAURI_INTERNALS__;
+    return internals.invoke("test_agent_context");
+  });
+  await expect.poll(async () => (await context())?.selection.kind).toBe("whole_track");
+  await page.evaluate(async () => {
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (name: string) => Promise<unknown> } }).__TAURI_INTERNALS__;
+    await internals.invoke("test_agent_rename");
+  });
+  await expect(page.locator('.dgw-track-name input[value="Agent alternative"]')).toBeVisible();
+  await expect.poll(async () => (await context())?.selectedCount).toBe(0);
+});

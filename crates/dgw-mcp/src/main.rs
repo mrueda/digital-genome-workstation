@@ -6,6 +6,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     if let Some(argument) = args.next() {
         match argument.as_str() {
+            "--mcp-connect" => {
+                let code = match dgw_mcp::desktop::connect_from_env().await {
+                    Ok(()) => 0,
+                    Err(error) => { eprintln!("{error}"); 2 }
+                };
+                // Tokio stdin may still be waiting on a pipe after revocation.
+                std::process::exit(code);
+            }
             "--version" | "-V" => {
                 println!("dgw-mcp {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());

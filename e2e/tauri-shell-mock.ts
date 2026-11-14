@@ -244,7 +244,30 @@ export async function installTauriShellMock(page: Page) {
     let failComparison = false;
     let predictionJob: JsonObject | undefined;
     let stalePrediction = false;
+    let agentEnabled = false;
+    let agentEdits = false;
+    let agentProject: unknown;
+    let agentContext: unknown;
+    let agentHandler: number | undefined;
     async function command(commandName: string, args: JsonObject = {}) {
+      if (commandName === "plugin:event|listen") { if (args.event === "dgw-agent-change") agentHandler = Number(args.handler); return 1; }
+      if (commandName === "plugin:event|unlisten") return null;
+      if (commandName === "agent_project") { if (agentProject !== args.projectPath) agentEnabled = false; agentProject = args.projectPath; return null; }
+      if (commandName === "agent_context") { agentContext = args.context; return null; }
+      if (commandName === "test_agent_context") return agentContext;
+      if (commandName === "agent_status") return { enabled: agentEnabled, allowEdits: agentEdits };
+      if (commandName === "enable_agent_access") {
+        if (!agentProject) throw Error("Open a project first");
+        agentEnabled = true; agentEdits = Boolean(args.allowEdits);
+        return { command: "/synthetic/DGW", args: ["--mcp-connect"], address: "127.0.0.1:12345", token: "synthetic-test-token", status: { enabled: true, allowEdits: agentEdits, expiresAt: "2099-01-01T18:00:00Z" } };
+      }
+      if (commandName === "disable_agent_access") { agentEnabled = false; return null; }
+      if (commandName === "test_agent_rename") {
+        activeTrackId = activeTrackId === restoredTrack.id ? alternativeTrack.id : restoredTrack.id;
+        activeTrack().name = "Agent alternative";
+        if (agentHandler !== undefined) internals.runCallback(agentHandler, { event: "dgw-agent-change", id: 1, payload: { projectId: snapshot().manifest.projectId } });
+        return null;
+      }
       if (commandName === "plugin:window|set_title") return null;
       if (commandName === "test_stale_prediction") { stalePrediction = true; return null; }
       if (commandName === "user_setup_info") return { platform: "linux", version: "0.1.0", suggestedParent: "/synthetic/user/apps" };
@@ -493,6 +516,7 @@ export async function installTauriShellMock(page: Page) {
       convertFileSrc(path: string) { return path; },
       invoke: async (name: string, args?: JsonObject) => structuredClone(await command(name, args))
     };
+    Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", { configurable: true, value: { unregisterListener() {} } });
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: internals });
   });
 }

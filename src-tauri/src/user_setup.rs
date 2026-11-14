@@ -460,7 +460,7 @@ mod tests {
         let apps = tmp.path().join("menu");
         let target = install(&source, &parent, &apps, |_| {}).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"test payload");
-        assert!(apps.join("org.mrueda.dgw-0.1.0.desktop").is_file());
+        assert!(apps.join(format!("org.mrueda.dgw-{}.desktop", env!("CARGO_PKG_VERSION"))).is_file());
         assert!(install(&source, &parent, &apps, |_| {}).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"test payload");
     }
@@ -495,16 +495,16 @@ mod tests {
         let other = tmp.path().join("another install");
         install_with_replace(&source, &other, &menu, true, |_| {}).unwrap();
         assert!(
-            fs::read_to_string(menu.join("org.mrueda.dgw-0.1.0.desktop"))
+            fs::read_to_string(menu.join(format!("org.mrueda.dgw-{}.desktop", env!("CARGO_PKG_VERSION"))))
                 .unwrap()
                 .contains("another install")
         );
         let unknown = tmp.path().join("unknown");
-        fs::create_dir_all(unknown.join("DGW-0.1.0")).unwrap();
-        fs::write(unknown.join("DGW-0.1.0/important"), b"keep").unwrap();
+        fs::create_dir_all(unknown.join(format!("DGW-{}", env!("CARGO_PKG_VERSION")))).unwrap();
+        fs::write(unknown.join(format!("DGW-{}/important", env!("CARGO_PKG_VERSION"))), b"keep").unwrap();
         assert!(install_with_replace(&source, &unknown, &menu, true, |_| {}).is_err());
         assert_eq!(
-            fs::read(unknown.join("DGW-0.1.0/important")).unwrap(),
+            fs::read(unknown.join(format!("DGW-{}/important", env!("CARGO_PKG_VERSION")))).unwrap(),
             b"keep"
         );
     }

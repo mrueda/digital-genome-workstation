@@ -1,3 +1,5 @@
+pub mod desktop;
+
 use dgw_core::{
     plan_track_morph, AlleleEditPreview, BackgroundJob, BackgroundJobStatus, EditKind,
     EffectiveVariant, EvaluationService, FocusContext, FocusFastaExport, GeneSearchHit,
@@ -514,6 +516,8 @@ pub struct DgwMcpServer {
     job_lock: Arc<Mutex<()>>,
     evaluation: Arc<EvaluationService>,
     compute_pool: Arc<LocalComputePool>,
+    desktop_project: Option<PathBuf>,
+    on_change: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Default for DgwMcpServer {
@@ -530,10 +534,35 @@ impl DgwMcpServer {
             job_lock: Arc::new(Mutex::new(())),
             evaluation: Arc::new(EvaluationService::new()),
             compute_pool: Arc::new(LocalComputePool::new()),
+            desktop_project: None,
+            on_change: None,
+        }
+    }
+
+    /// Desktop mode shares the app's evaluation service and bounded job queue.
+    pub fn for_desktop(
+        project: PathBuf,
+        evaluation: Arc<EvaluationService>,
+        compute_pool: Arc<LocalComputePool>,
+        job_lock: Arc<Mutex<()>>,
+        on_change: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+            active_project: Arc::new(RwLock::new(Some(project.clone()))),
+            desktop_project: Some(project), evaluation, compute_pool, job_lock,
+            on_change: Some(on_change),
         }
     }
 
     fn resolve_project_path(&self, explicit: Option<String>) -> Result<PathBuf, String> {
+        if let Some(shared) = &self.desktop_project {
+            if let Some(path) = explicit.filter(|p| !p.trim().is_empty()) {
+                let requested = std::fs::canonicalize(path).map_err(|_| "Project is not shared with this connection".to_owned())?;
+                if &requested != shared { return Err("Project is not shared with this connection".into()); }
+            }
+            return Ok(shared.clone());
+        }
         if let Some(path) = explicit.filter(|value| !value.trim().is_empty()) {
             return Ok(PathBuf::from(path));
         }
@@ -591,7 +620,9 @@ impl DgwMcpServer {
         &self,
         Parameters(request): Parameters<OpenProjectRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let path = PathBuf::from(request.project_path);
+        let path = match self.resolve_project_path(Some(request.project_path)) {
+            Ok(path) => path, Err(error) => return Ok(tool_error(error)),
+        };
         let display_path = path.display().to_string();
         let outcome = tokio::task::spawn_blocking(move || {
             let project = Project::open(&path).map_err(|error| error.to_string())?;
@@ -865,11 +896,13 @@ impl DgwMcpServer {
         };
         let job_id = job.id.clone();
         let job_lock = Arc::clone(&self.job_lock);
+        let on_change = self.on_change.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = job_lock
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_mutation_generator_job(&worker_path, &job_id);
+            if let Some(notify) = on_change { notify(); }
         });
         structured(StartedBackgroundJobResult {
             project_path: display_path,
@@ -1039,11 +1072,13 @@ impl DgwMcpServer {
         };
         let job_id = job.id.clone();
         let job_lock = Arc::clone(&self.job_lock);
+        let on_change = self.on_change.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = job_lock
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_genome_morph_job(&worker_path, &job_id);
+            if let Some(notify) = on_change { notify(); }
         });
         structured(StartedBackgroundJobResult {
             project_path: display_path,
@@ -1221,11 +1256,13 @@ impl DgwMcpServer {
         let job_lock = Arc::clone(&self.job_lock);
         let evaluation = Arc::clone(&self.evaluation);
         let compute_pool = Arc::clone(&self.compute_pool);
+        let on_change = self.on_change.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = job_lock
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_optimizer_job(&worker_path, &job_id, &evaluation, &compute_pool);
+            if let Some(notify) = on_change { notify(); }
         });
         structured(StartedBackgroundJobResult {
             project_path: display_path,
@@ -1432,11 +1469,13 @@ impl DgwMcpServer {
         let job_lock = Arc::clone(&self.job_lock);
         let evaluation = Arc::clone(&self.evaluation);
         let compute_pool = Arc::clone(&self.compute_pool);
+        let on_change = self.on_change.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = job_lock
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_track_profiler_job(&worker_path, &job_id, &evaluation, &compute_pool);
+            if let Some(notify) = on_change { notify(); }
         });
         structured(StartedBackgroundJobResult {
             project_path: display_path,
@@ -1511,11 +1550,13 @@ impl DgwMcpServer {
         };
         let job_id = job.id.clone();
         let job_lock = Arc::clone(&self.job_lock);
+        let on_change = self.on_change.clone();
         tokio::task::spawn_blocking(move || {
             let _guard = job_lock
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let _ = execute_track_vcf_export_job(&worker_path, &job_id);
+            if let Some(notify) = on_change { notify(); }
         });
         structured(StartedBackgroundJobResult {
             project_path: display_path,
@@ -2214,6 +2255,10 @@ fn update_background_job(
     stage: &str,
     message: impl Into<String>,
 ) -> Result<(), String> {
+    // Desktop cancellation is persisted; do not overwrite it with late worker progress/results.
+    if project.background_job(&job.id).is_ok_and(|saved| saved.status == BackgroundJobStatus::Cancelled) {
+        return Err("Job cancelled".into());
+    }
     job.status = status;
     job.progress = progress.min(100);
     job.stage = stage.into();
