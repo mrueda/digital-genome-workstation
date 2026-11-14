@@ -1,10 +1,8 @@
 # Frequently Asked Questions
 
-## How does DGW differ from AlphaGenome Atlas?
+## What can I do with DGW?
 
-[AlphaGenome Atlas](https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/) provides precomputed variant-effect predictions. DGW lets you edit a sample's variants, keep alternative tracks, compare results and export them. Its current consequence predictions come from bcftools csq.
-
-The tools could complement each other: a future DGW device could use Atlas results. **AlphaGenome integration is not currently implemented.**
+Load a sample's VCF, create alternative genome tracks, edit alleles and compare their predicted consequences and database evidence. Save the project to revisit your edits, or export a track as VCF or a region as FASTA. Start with the [example walkthrough](../usage/quickstart.md).
 
 ## Why is DGW inspired by digital audio workstations?
 
@@ -38,3 +36,13 @@ moving a note in time is not the same as moving a variant to another coordinate.
 See [Scoring & Evidence Methods](../technical-details/scoring-methods.md)
 for the calculations and [Origin & Development](../about/origin-and-development.md)
 for the design background.
+
+## How does DGW differ from AlphaGenome Atlas?
+
+[AlphaGenome Atlas](https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/) provides precomputed variant-effect predictions. DGW lets you edit a sample's variants, keep alternative tracks, compare results and export them. Its current consequence predictions come from bcftools csq.
+
+The tools could complement each other: a future DGW device could use Atlas results. **AlphaGenome integration is not currently implemented.**
+
+## Can an agent use the app?
+
+Yes. From v0.1.1, **Settings → Agent access** connects a local MCP client to the open project, with read-only access by default and optional editing. The app includes the connector. See [Connect an agent to DGW](../usage/agent-access.md).

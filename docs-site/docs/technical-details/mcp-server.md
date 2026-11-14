@@ -2,39 +2,17 @@
 
 **MCP (Model Context Protocol) lets an agent operate DGW through structured commands.** The agent can inspect a saved project, generate edits, evaluate a track and export the result.
 
-DGW has two MCP modes. **Desktop access (v0.1.1)** connects an agent to the project open in the app. **Standalone access** uses `dgw-mcp` to work with saved projects without opening the desktop. Both use the existing MCP tools and `dgw-core`; the agent does not reproduce DGW's algorithms.
+DGW has two MCP modes. **Desktop access (v0.1.1)** connects an agent to the project open in the app. **Standalone access** uses `dgw-mcp` to work with saved projects without opening the desktop. Both call the same tools and `dgw-core` functions.
 
 ## Connect to the desktop
 
-1. Open a project in DGW, then open **Settings → Agent access**.
-2. Leave access read-only, or select **Allow edits, analysis and exports**.
-3. Confirm sharing and choose **Enable access**.
-4. In Codex Desktop's MCP configuration, choose **STDIO** and copy the command, arguments and environment values shown by DGW. Alternatively, use **Copy Codex configuration**.
+Follow the [desktop agent-access guide](../usage/agent-access.md) for setup, permissions and an example. The installed app provides the stdio connector; no separate server build is needed.
 
-The connector is part of the installed application. No Python, Rust or separate download is required. Keep DGW open. On macOS, move DGW to Applications before configuring the connection.
-
-| Setting | Value |
-| --- | --- |
-| Command | The installed DGW executable shown in Settings |
-| Arguments | `--mcp-connect` |
-| Environment | `DGW_MCP_ADDRESS` and `DGW_MCP_TOKEN`, copied from Settings |
-| Working directory | Leave empty |
-
-The local address is an internal connection address, **not an HTTP or remote MCP URL**. Credentials expire after eight hours. Turning access off, switching projects or restarting DGW revokes them; enable access again and update the client settings. Already accepted jobs may finish after access is revoked.
-
-:::note[What is shared]
-Access covers the open project, not just its selected variants. `desktop_context` reports the active track, its current head, the selection and focused region. Selection changes appear on the next call; an empty selection never means “select all”. A connected cloud agent may send returned project data to its model provider. Keep tokens out of prompts and screenshots.
-:::
-
-Try: **“Describe the open DGW project and current selection. Do not change anything.”** With editing enabled, agent changes refresh the desktop tracks, and completed profiles are available to Track Monitor. Jobs appear in the existing Jobs panel. Explicit tool parameters and stale-track checks still apply.
-
-Read-only connections expose inspection tools and manual-edit validation. Editing access exposes the original 22 tools plus `desktop_context`. The source track remains protected. Screen interaction is independent of MCP access: disabling MCP does not disable an agent's permission to use the screen.
-
-Codex Desktop is the first target client. ChatGPT Work MCP compatibility has not been established; screen interaction remains a separate option.
+Desktop mode adds `desktop_context` to the original 22 tools. It returns the shared project, active track, current head, selection and focused region. Call it again after user actions. Read-only access allows inspection and manual-edit validation. Enabling edits makes all tools available. Requests are restricted to the open project, and desktop operations share its evaluation service and compute queue.
 
 ## Standalone access and reproducibility
 
-The standalone `dgw-mcp` executable, its 22 tools, saved seeds and explicit parameters remain available for scripts and the manuscript experiments. Desktop connection support does not change the scoring algorithms or require rerunning those experiments. Keep the software and resource versions recorded with each experiment.
+The standalone `dgw-mcp` executable, its 22 tools, saved seeds and explicit parameters remain available for scripts and the manuscript experiments. The desktop connection leaves those calculations unchanged. Keep the software and resource versions recorded with each experiment.
 
 <div className="dgw-flow" role="group" aria-label="An MCP client launches dgw-mcp over standard input and output; dgw-mcp calls dgw-core to operate a saved project">
   <div><strong>Agent / MCP client</strong><span>Requests an operation</span></div>
@@ -145,7 +123,7 @@ Apply checks the captured track state and bypass choices. If the track changed, 
 
 The MCP selection run limit defaults to 100,000 for Generator and Optimizer and fails explicitly when exceeded. This differs from the desktop Mutation Generator's default limit of 1,000. The 100,000 ceiling is an experimental safety limit, not a performance benchmark. A no-op preview is a valid completed result; applying it changes nothing.
 
-Jobs run away from protocol handling, through one local compute slot in this MCP process. Poll `get_job` for progress and the result. Optional `worker_threads` is bounded to 1–256 and defaults to available processors minus one. Supported engines use the same bounded parallel coordinator as the desktop.
+Jobs run away from protocol handling. Standalone mode uses one local compute slot; desktop access shares the app's job queue. Poll `get_job` for progress and the result. Optional `worker_threads` is bounded to 1–256 and defaults to available processors minus one. Supported engines use the same bounded parallel coordinator as the desktop.
 
 Track Profiler saves the profile used by Track Monitor; applying an MCP mutation alone does not perform that profiling step. In standalone mode, reopen the project in the desktop to inspect saved tracks and results. In desktop-connected mode, the open workspace refreshes after agent operations and job completion. Avoid simultaneous edits to the same track from two interfaces; state checks reject stale requests.
 

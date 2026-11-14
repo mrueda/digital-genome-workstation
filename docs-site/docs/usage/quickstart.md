@@ -2,6 +2,8 @@
 
 Start with a prepared example: compare an existing edit, make your own, then save the project. You do not need to configure an optimizer for this first pass.
 
+Prefer a demonstration? [Watch the DGW tutorials](https://www.youtube.com/playlist?list=PLERpT5T_KiqY).
+
 ## 1. Install the app and its resources
 
 Follow [Install DGW](installation.md), then launch the installed application. On first launch, choose **GRCh37** or **GRCh38**, select a storage folder and click **Download and install**. When resources are ready, choose **Continue to examples**.

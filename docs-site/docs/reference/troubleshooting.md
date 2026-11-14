@@ -45,11 +45,11 @@ Use the recovery screen's diagnostic report and reload the app. If the failure r
 Check the instructions for [your operating system](../usage/installation.md). Report the DGW version, OS, processor architecture and failing step with the message shown.
 
 <details>
-<summary>Linux launch diagnostics and older test installers</summary>
+<summary>Linux launch diagnostics</summary>
 
 Try the applications-menu launcher. Startup output is normally in `~/.local/share/org.mrueda.dgw/setup-launch.log`. VM graphics warnings alone do not establish the cause of a startup failure.
 
-For reinstalling, use the installer's **Replace existing installation and shortcut** option. The [installer validation guide](../usage/test-installation.md) includes older-build workarounds.
+For reinstalling, use the installer's **Replace existing installation and shortcut** option.
 
 </details>
 
@@ -61,3 +61,13 @@ Check the [resource bundle contract](../technical-details/resource-bundle.md): F
 For GTK/WebKitGTK compilation errors, follow the [developer prerequisites](../technical-details/developer-guide.md). System development packages are not ordinary app-installation steps.
 
 </details>
+
+## The agent cannot connect
+
+Keep DGW open and check **Settings → Agent access**. Turning access off, changing projects, restarting DGW or reaching the eight-hour expiry invalidates the credentials. Enable access again and update the MCP client's settings. Use **STDIO**, not a remote URL; copy the executable path from DGW. [Connection guide](../usage/agent-access.md).
+
+If inspection works but edits fail, reconnect with **Allow edits, analysis and exports** enabled. An old preview may also be rejected after its target track changes; ask the agent to read the current track and make a fresh preview.
+
+## Report a problem
+
+[Open a GitHub issue](https://github.com/mrueda/digital-genome-workstation/issues) with your DGW version, operating system and processor architecture, steps to reproduce, and the exact error message. Include a screenshot if useful. Use a bundled example or synthetic data; do not attach personal genomic data. Check logs and screenshots for identifying information before sharing.

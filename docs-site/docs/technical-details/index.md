@@ -10,6 +10,8 @@ import Link from '@docusaurus/Link';
   <Link className="dgw-guide-card" to="/docs/technical-details/scoring-methods"><strong>Inspect the methods</strong><span>Formulas, evidence rules and score limitations.</span></Link>
 </div>
 
+For a connection to the installed app, start with [desktop Agent access](../usage/agent-access.md). The MCP reference below also covers standalone scripts and tool parameters.
+
 ## One core, two interfaces
 
 <div className="dgw-flow" role="group" aria-label="The desktop and MCP interfaces call dgw-core, which owns projects and evaluation">

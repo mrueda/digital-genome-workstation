@@ -13,7 +13,7 @@ const sidebars: SidebarsConfig = {
       {type: 'doc', id: 'usage/evaluate-alleles', label: 'Understand results'},
       {type: 'doc', id: 'usage/render-state', label: 'Save and export'},
     ]},
-    {type: 'category', label: 'Advanced use', items: ['usage/paper-examples']},
+    {type: 'category', label: 'Advanced use', items: ['usage/agent-access', 'usage/paper-examples']},
     {type: 'category', label: 'Help', items: [
       'reference/troubleshooting', 'reference/faq', 'reference/evidence-statuses',
     ]},

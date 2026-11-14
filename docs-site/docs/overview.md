@@ -33,6 +33,7 @@ The layout is inspired by music production software: tracks hold alternatives, d
 | Generate or search for alternative ALTs | [Device guide](usage/device-guide.md) |
 | Understand a prediction or Monitor score | [Understand results](usage/evaluate-alleles.md) |
 | Keep the experiment or use its output elsewhere | [Save and export](usage/render-state.md) |
+| Connect an agent to the open app | [Agent access (MCP)](usage/agent-access.md) |
 | Automate DGW or modify its code | [Developers and advanced use](technical-details/index.md) |
 
 :::note[Input and interpretation]

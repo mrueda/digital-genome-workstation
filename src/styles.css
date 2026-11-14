@@ -162,8 +162,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .preferences-nav button[aria-pressed="true"] { color: var(--text); background: var(--theme-surface); border-color: var(--line); box-shadow: inset 3px 0 var(--cyan); }
 .preferences-content { min-width: 0; overflow-y: auto; scrollbar-gutter: stable; }
 .preferences-content .settings-section { grid-template-columns: 1fr; gap: 16px; padding: 24px; }
-.preferences-content .settings-section h3 { font-size: 15px; }
-.preferences-content .settings-section p, .preferences-content .settings-check small { font-size: 12px; line-height: 1.55; }
+.preferences-content .settings-section h3, .agent-access-heading h3 { font-size: 15px; }
+.preferences-content .settings-section p, .preferences-content .settings-check small, .agent-access p { font-size: 12px; line-height: 1.55; }
 .preferences-content .settings-check b { font-size: 13px; }
 .preferences-content .settings-scale-options, .preferences-content .settings-theme-options { width: fit-content; max-width: 100%; justify-content: flex-start; gap: 3px; }
 .preferences-content .settings-scale-options button, .preferences-content .settings-theme-options button { font-size: 12px; min-height: 34px; padding: 7px 12px; }
@@ -960,7 +960,7 @@ label > input, label > select { margin-top: 6px; }
 .resources-panel h4 { margin: 0 0 7px; font-size: 13px; }
 .resources-panel p { margin: 6px 0; color: var(--muted); line-height: 1.55; }
 .resources-panel small { color: var(--muted); font-size: 12px; line-height: 1.5; }
-.resources-panel .button { justify-self: start; width: auto; max-width: 100%; min-height: 34px; padding: 7px 12px; font-size: 12px; }
+.resources-panel .button, .agent-access .button { justify-self: start; width: auto; max-width: 100%; min-height: 34px; padding: 7px 12px; font-size: 12px; }
 .resources-panel .resource-genome-choice { margin: 0; padding: 10px 12px 12px; gap: 10px; background: var(--theme-canvas); }
 .resources-panel legend { padding: 0 5px; font-size: 12px; color: var(--muted); }
 .resources-panel .resource-genome-choice label { flex: 1; padding: 9px 12px; font-size: 13px; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
@@ -1015,16 +1015,18 @@ label > input, label > select { margin-top: 6px; }
 .genome-map-alleles > button[aria-pressed="true"] { outline: 2px solid #28bccc; }
 .genome-map-alleles > button > span { display: grid; grid-template-columns: 55px 1fr; gap: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
 
-.agent-access { display: grid; gap: 14px; max-width: 720px; }
-.agent-access p { margin: 0; line-height: 1.5; font-size: .92rem; }
+.agent-access { display: grid; gap: 16px; padding: 24px; min-width: 0; font-size: 13px; }
+.agent-access p { margin: 0; color: var(--muted); }
+.agent-access .settings-check { margin: 0; gap: 12px; }
+.agent-access .settings-check > span { min-width: 0; line-height: 1.55; }
 .agent-access-heading { display: flex; align-items: center; gap: 12px; }
-.agent-access-heading h3 { margin: 0 0 4px; }
-.agent-access-badge { margin-left: auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 16px; font-size: .8rem; }
+.agent-access-heading h3 { margin: 0 0 5px; }
+.agent-access-heading > svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--muted); }
+.agent-access-badge { margin-left: auto; padding: 4px 10px; border: 1px solid var(--line); border-radius: 16px; font-size: 12px; }
 .agent-access-badge.enabled { color: var(--cyan); }
 .agent-access .button { justify-self: start; display: inline-flex; gap: 8px; align-items: center; }
 .agent-connection { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.agent-connection-field { display: grid; gap: 4px; font-size: .82rem; }
+.agent-connection-field { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
 .agent-connection-field > div { display: flex; gap: 6px; min-width: 0; }
-.agent-connection-field input { flex: 1; min-width: 0; font-family: monospace; }
-.agent-connection-field button { flex-shrink: 0; padding: 6px; }
-.agent-access-note { opacity: .75; }
+.agent-connection-field input { flex: 1; min-width: 0; font: 12px/1.5 "DM Mono", monospace; }
+.agent-connection-field button { display: grid; place-items: center; flex-shrink: 0; min-width: 34px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--theme-surface-raised); color: var(--text); cursor: pointer; }
